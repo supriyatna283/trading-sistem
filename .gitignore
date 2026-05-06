@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+*.log
+*.txt
+!requirements.txt
+
+# Environments
+.env
+.env.local
+
+# Next.js
+.next/
+node_modules/
+out/
+
+# IDEs
+.vscode/
+.idea/
