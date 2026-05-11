@@ -1,3 +1,12 @@
+---
+title: Trading Intelligence V5
+emoji: 📈
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 7860
+---
+
 # Trading Intelligence Platform
 
 Professional Web-Based Trading Decision Support System.
