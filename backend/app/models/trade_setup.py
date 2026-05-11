@@ -29,6 +29,19 @@ class TradeSetup(Base):
     created_at = Column(DateTime, server_default=func.now())
 
     def to_dict(self):
+        # Scale 24-point confluence score to 100-point signal score for frontend
+        signal_score = round((self.confluence_score / 24) * 100)
+        
+        # Determine grade based on scaled score
+        if signal_score >= 75:
+            signal_grade = "A+"
+        elif signal_score >= 50:
+            signal_grade = "VALID"
+        elif signal_score >= 35:
+            signal_grade = "WEAK"
+        else:
+            signal_grade = "NO_TRADE"
+
         return {
             "id": self.id,
             "symbol": self.symbol,
@@ -42,6 +55,8 @@ class TradeSetup(Base):
             "risk_reward": float(self.risk_reward),
             "setup_type": self.setup_type,
             "confluence_score": self.confluence_score,
+            "signal_score": signal_score,
+            "signal_grade": signal_grade,
             "status": self.status,
             "timeframe": self.timeframe,
             "explanation": self.explanation,

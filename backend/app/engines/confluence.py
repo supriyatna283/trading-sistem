@@ -58,9 +58,10 @@ NY_SESSION = (13, 21)      # 13:00 - 21:00 UTC
 class ConfluenceEngine:
     """V4 — Scores trade setups with market intelligence + multi-timeframe confluence."""
 
-    def __init__(self):
+    def __init__(self, min_confluence_score: int = 14):
         self.structure_analyzer = MarketStructureAnalyzer()
         self.smc_engine = SmartMoneyConceptsEngine()
+        self.min_confluence_score = min_confluence_score
 
     def score(
         self,
@@ -578,12 +579,12 @@ class ConfluenceEngine:
         self, score: int, entry_bias: str, htf_biases: Dict[str, str]
     ) -> str:
         """Map score to recommendation — V4 thresholds adjusted for 24-point scale."""
-        if score >= 12:
+        if score >= 18: # ~66%
             if entry_bias == "BULLISH":
                 return "STRONG_BUY"
             elif entry_bias == "BEARISH":
                 return "STRONG_SELL"
-        if score >= 8:
+        if score >= 14: # ~50%
             if entry_bias == "BULLISH":
                 return "BUY"
             elif entry_bias == "BEARISH":

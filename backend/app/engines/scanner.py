@@ -41,7 +41,7 @@ class MarketScanner:
         self.structure = MarketStructureAnalyzer()
         self.smc = SmartMoneyConceptsEngine()
         self.confluence = ConfluenceEngine()
-        self.setup_gen = SetupGenerator(min_confluence_score=12, min_rr=1.8)
+        self.setup_gen = SetupGenerator(min_confluence_score=14, min_rr=1.8)
         self.mtf_engine = MTFConfirmationEngine()
         self.sentiment_engine = SentimentEngine()
         self.news_engine = NewsCalendarEngine()
@@ -240,6 +240,47 @@ class MarketScanner:
             if rsi_1h <= 25 or rsi_1h >= 75:
                 strong_rsi_signal = True
 
+        # --- Final Scoring & Grade (V7 alignment) ---
+        # Scale 24-point score to 100-point scale for frontend progress bar
+        signal_score = round((conf.total_score / conf.max_score) * 100) if conf.max_score > 0 else 0
+        
+        # Calculate breakdown for frontend layers (STR, PA, SMC, VOL, TIM, RR)
+        det = conf.details
+        score_breakdown = {
+            "STR": round((det.get("htf_bias", {}).get("score", 0) + det.get("structure", {}).get("score", 0) + det.get("mtf_confirmation", {}).get("score", 0)) / 4 * 20),
+            "PA":  round((det.get("rsi", {}).get("score", 0) + det.get("ema", {}).get("score", 0) + det.get("macd", {}).get("score", 0) + det.get("bollinger_bands", {}).get("score", 0) + det.get("stoch_rsi", {}).get("score", 0)) / 7 * 20),
+            "SMC": round((det.get("liquidity", {}).get("score", 0) + det.get("order_block", {}).get("score", 0) + det.get("fvg", {}).get("score", 0) + det.get("premium_discount", {}).get("score", 0)) / 6 * 20),
+            "VOL": round(det.get("volume", {}).get("score", 0) / 1 * 20),
+            "TIM": round((det.get("session", {}).get("score", 0) + det.get("news", {}).get("score", 0) + det.get("sentiment", {}).get("score", 0)) / 3 * 10),
+            "RR":  round((det.get("btc_dominance", {}).get("score", 0) + det.get("orderbook", {}).get("score", 0) + det.get("liquidation", {}).get("score", 0) + det.get("market_cap", {}).get("score", 0) + det.get("support_resistance", {}).get("score", 0)) / 6 * 10),
+        }
+
+        # Determine signal grade
+        if signal_score >= 75:
+            signal_grade = "A+"
+        elif signal_score >= 50:
+            signal_grade = "VALID"
+        elif signal_score >= 35:
+            signal_grade = "WEAK"
+        else:
+            signal_grade = "NO_TRADE"
+
+        # Check for hard rejection (e.g. against major trend or extreme RSI)
+        rejection_reasons = []
+        hard_rejected = False
+        
+        if signal_score < 25:
+            hard_rejected = True
+            rejection_reasons.append("Low confluence")
+        
+        if rsi_1h is not None:
+            if structure.bias == "BULLISH" and rsi_1h > 75:
+                hard_rejected = True
+                rejection_reasons.append("Overbought RSI")
+            if structure.bias == "BEARISH" and rsi_1h < 25:
+                hard_rejected = True
+                rejection_reasons.append("Oversold RSI")
+
         return {
             "symbol": symbol,
             "trend": structure.bias,
@@ -249,6 +290,11 @@ class MarketScanner:
             "setup_status": setup_status,
             "confluence_score": conf.total_score,
             "max_score": conf.max_score,
+            "signal_score": signal_score, # For frontend progress bar (0-100)
+            "signal_grade": signal_grade, # For frontend badge
+            "score_breakdown": score_breakdown, # For LayerBreakdown component
+            "hard_rejected": hard_rejected,
+            "rejection_reasons": rejection_reasons,
             "mtf_confirmation": mtf_result.get("confirmation_level", "NONE"),
             "setup": setup.model_dump() if setup else None,
             "rsi_1h": rsi_1h,

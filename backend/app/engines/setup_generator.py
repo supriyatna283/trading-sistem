@@ -20,7 +20,7 @@ from app.schemas.market_data import SmartMoneyAnalysis, MarketBias
 class SetupGenerator:
     """V5 — Generates actionable trading setups with hardened quality gates."""
 
-    def __init__(self, min_confluence_score: int = 12, min_rr: float = 1.8):
+    def __init__(self, min_confluence_score: int = 14, min_rr: float = 1.8):
         self.min_score = min_confluence_score
         self.min_rr = min_rr
 
