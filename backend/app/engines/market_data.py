@@ -80,68 +80,88 @@ class MarketDataEngine:
         self._symbols_cache = {"data": None, "ts": 0}
 
     async def fetch_symbols(self) -> List[Dict]:
-        """Fetch all USDT trading pairs from Binance Spot and Futures exchangeInfo with caching."""
+        """Fetch all USDT trading pairs from OKX with caching."""
         now = time.time()
         if self._symbols_cache["data"] and (now - self._symbols_cache["ts"]) < 300:
             return self._symbols_cache["data"]
 
-        spot_url = f"{self.BINANCE_BASE}/exchangeInfo"
-        futures_url = f"{self.BINANCE_FUTURES_BASE}/exchangeInfo"
-        
         symbols_dict = {}
+
+        # Primary: OKX SWAP instruments (perpetual futures)
         try:
-            # 1. Fetch Spot
+            url = f"{self.OKX_BASE}/public/instruments"
+            params = {"instType": "SWAP"}
+            resp = await self.client.get(url, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+
+            if data.get("code") == "0" and data.get("data"):
+                for inst in data["data"]:
+                    inst_id = inst.get("instId", "")
+                    # Only USDT-margined pairs
+                    if inst_id.endswith("-USDT-SWAP") and inst.get("state") == "live":
+                        # Convert OKX format (BTC-USDT-SWAP) to standard (BTCUSDT)
+                        base = inst_id.split("-")[0]
+                        symbol = f"{base}USDT"
+                        symbols_dict[symbol] = {
+                            "symbol": symbol,
+                            "baseAsset": base,
+                            "quoteAsset": "USDT",
+                            "name": f"{base} / USDT",
+                            "category": "crypto",
+                            "exchange": "okx",
+                        }
+                logger.info(f"📊 OKX: Loaded {len(symbols_dict)} USDT-SWAP instruments")
+        except Exception as e:
+            logger.error(f"Failed to fetch OKX instruments: {e}")
+
+        # Fallback: OKX SPOT instruments
+        if not symbols_dict:
             try:
-                resp = await self.client.get(spot_url)
+                url = f"{self.OKX_BASE}/public/instruments"
+                params = {"instType": "SPOT"}
+                resp = await self.client.get(url, params=params)
                 resp.raise_for_status()
                 data = resp.json()
-                for s in data.get("symbols", []):
-                    if s["symbol"].endswith("USDT") and s["status"] == "TRADING" and s["quoteAsset"] == "USDT":
-                        symbols_dict[s["symbol"]] = {
-                            "symbol": s["symbol"],
-                            "baseAsset": s["baseAsset"],
-                            "quoteAsset": s["quoteAsset"],
-                            "name": f"{s['baseAsset']} / {s['quoteAsset']}",
-                            "category": "crypto"
-                        }
-            except Exception as e:
-                logger.error(f"Failed to fetch Spot symbols: {e}")
 
-            # 2. Fetch Futures and append missing
-            try:
-                f_resp = await self.client.get(futures_url)
-                f_resp.raise_for_status()
-                f_data = f_resp.json()
-                for s in f_data.get("symbols", []):
-                    if s["symbol"].endswith("USDT") and s["status"] == "TRADING" and s.get("quoteAsset", "") == "USDT":
-                        if s["symbol"] not in symbols_dict:
-                            # Not in spot, add it
-                            baseAsset = s.get("baseAsset", s["symbol"].replace("USDT", ""))
-                            symbols_dict[s["symbol"]] = {
-                                "symbol": s["symbol"],
-                                "baseAsset": baseAsset,
+                if data.get("code") == "0" and data.get("data"):
+                    for inst in data["data"]:
+                        inst_id = inst.get("instId", "")
+                        if inst_id.endswith("-USDT") and inst.get("state") == "live":
+                            base = inst_id.split("-")[0]
+                            symbol = f"{base}USDT"
+                            symbols_dict[symbol] = {
+                                "symbol": symbol,
+                                "baseAsset": base,
                                 "quoteAsset": "USDT",
-                                "name": f"{baseAsset} / USDT",
-                                "category": "crypto"
+                                "name": f"{base} / USDT",
+                                "category": "crypto",
+                                "exchange": "okx",
                             }
+                    logger.info(f"📊 OKX SPOT fallback: Loaded {len(symbols_dict)} instruments")
             except Exception as e:
-                logger.error(f"Failed to fetch Futures symbols: {e}")
+                logger.error(f"Failed to fetch OKX SPOT instruments: {e}")
 
-            symbols = list(symbols_dict.values())
-            symbols.sort(key=lambda x: x["symbol"])
-            
-            if symbols:
-                self._symbols_cache = {"data": symbols, "ts": now}
-                return symbols
-                
-        except Exception as e:
-            logger.error(f"Failed to fetch symbols overall: {e}")
-            
+        symbols = list(symbols_dict.values())
+        symbols.sort(key=lambda x: x["symbol"])
+
+        if symbols:
+            self._symbols_cache = {"data": symbols, "ts": now}
+            return symbols
+
+        # Ultimate fallback: top pairs
+        logger.warning("All OKX fetches failed, using static fallback list")
         return [
-            {"symbol": "BTCUSDT", "name": "Bitcoin / USDT", "category": "crypto"},
-            {"symbol": "ETHUSDT", "name": "Ethereum / USDT", "category": "crypto"},
-            {"symbol": "SOLUSDT", "name": "Solana / USDT", "category": "crypto"},
-            {"symbol": "BNBUSDT", "name": "BNB / USDT", "category": "crypto"},
+            {"symbol": "BTCUSDT", "name": "Bitcoin / USDT", "category": "crypto", "exchange": "okx"},
+            {"symbol": "ETHUSDT", "name": "Ethereum / USDT", "category": "crypto", "exchange": "okx"},
+            {"symbol": "SOLUSDT", "name": "Solana / USDT", "category": "crypto", "exchange": "okx"},
+            {"symbol": "BNBUSDT", "name": "BNB / USDT", "category": "crypto", "exchange": "okx"},
+            {"symbol": "XRPUSDT", "name": "XRP / USDT", "category": "crypto", "exchange": "okx"},
+            {"symbol": "DOGEUSDT", "name": "DOGE / USDT", "category": "crypto", "exchange": "okx"},
+            {"symbol": "ADAUSDT", "name": "ADA / USDT", "category": "crypto", "exchange": "okx"},
+            {"symbol": "AVAXUSDT", "name": "AVAX / USDT", "category": "crypto", "exchange": "okx"},
+            {"symbol": "DOTUSDT", "name": "DOT / USDT", "category": "crypto", "exchange": "okx"},
+            {"symbol": "LINKUSDT", "name": "LINK / USDT", "category": "crypto", "exchange": "okx"},
         ]
 
     # ---------------------------------------------------------
