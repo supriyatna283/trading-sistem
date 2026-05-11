@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     # Telegram
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_CHAT_ID: str = ""
+    TELEGRAM_RELAY_URL: str = "https://frontend-trade-tan.vercel.app/api/telegram" # Default relay for HF bypass
 
     # Email
     SMTP_HOST: str = "smtp.gmail.com"
@@ -50,6 +51,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+        extra = "ignore"
 
 
 @lru_cache()

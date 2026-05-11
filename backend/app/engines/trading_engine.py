@@ -3,9 +3,14 @@ Trading Engine — Binance Futures Order Execution
 ===================================================
 Handles order placement, SL/TP, position sizing, and safety checks.
 Supports dry-run mode for testing without real orders.
+V2: Persistent daily loss tracker (file-based, survives restarts).
 """
 
+import json
 import logging
+import os
+from datetime import date
+from pathlib import Path
 from typing import Optional, Dict
 from binance.client import Client
 from binance.exceptions import BinanceAPIException
@@ -20,7 +25,58 @@ logger = logging.getLogger(__name__)
 
 # In-memory config (could be persisted to DB later)
 _auto_trade_config = AutoTradeConfig()
-_daily_loss_tracker: Dict[str, float] = {}  # date -> loss amount
+
+# ─── Persistent Daily Loss Tracker ───
+_LOSS_TRACKER_DIR = Path(os.environ.get(
+    "LOSS_TRACKER_DIR",
+    str(Path(__file__).resolve().parent.parent / "data")
+))
+
+
+class _PersistentDailyLossTracker:
+    """File-backed daily loss tracker that survives backend restarts."""
+
+    def __init__(self, directory: Path):
+        self._dir = directory
+        self._dir.mkdir(parents=True, exist_ok=True)
+        self._file = self._dir / "daily_loss_tracker.json"
+        self._cache: Dict[str, float] = self._load()
+
+    def _load(self) -> Dict[str, float]:
+        if self._file.exists():
+            try:
+                with open(self._file, "r") as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, IOError):
+                logger.warning("⚠️ Corrupted daily loss file, resetting.")
+        return {}
+
+    def _save(self):
+        try:
+            with open(self._file, "w") as f:
+                json.dump(self._cache, f, indent=2)
+        except IOError as e:
+            logger.error(f"❌ Failed to persist daily loss: {e}")
+
+    def get(self, date_key: str) -> float:
+        return self._cache.get(date_key, 0.0)
+
+    def add(self, date_key: str, loss_amount: float):
+        self._cache[date_key] = self._cache.get(date_key, 0.0) + loss_amount
+        self._save()
+
+    def cleanup_old(self, keep_days: int = 7):
+        """Remove entries older than keep_days to prevent file bloat."""
+        from datetime import datetime, timedelta
+        cutoff = (datetime.now() - timedelta(days=keep_days)).strftime("%Y-%m-%d")
+        old_keys = [k for k in self._cache if k < cutoff]
+        for k in old_keys:
+            del self._cache[k]
+        if old_keys:
+            self._save()
+
+
+_daily_loss_tracker = _PersistentDailyLossTracker(_LOSS_TRACKER_DIR)
 
 
 class TradingEngine:
@@ -136,10 +192,10 @@ class TradingEngine:
                 message=f"Max positions ({cfg.max_positions}) reached.",
             )
 
-        # Safety: check daily loss
-        from datetime import date
+        # Safety: check daily loss (persistent — survives restarts)
         today = str(date.today())
-        daily_loss = _daily_loss_tracker.get(today, 0)
+        _daily_loss_tracker.cleanup_old()  # Housekeeping
+        daily_loss = _daily_loss_tracker.get(today)
         balance = self.get_account_balance()
         max_daily_loss_amount = balance.get("total_balance", 0) * (cfg.max_daily_loss / 100)
         if daily_loss >= max_daily_loss_amount:

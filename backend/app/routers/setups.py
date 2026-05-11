@@ -17,7 +17,7 @@ from app.schemas.trade_setup import SetupStatusUpdate
 
 router = APIRouter(prefix="/api/v1/setups", tags=["Trading Setups"])
 
-setup_gen = SetupGenerator(min_confluence_score=5, min_rr=1.5)
+setup_gen = SetupGenerator(min_confluence_score=12, min_rr=1.8)
 confluence_engine = ConfluenceEngine()
 smc_engine = SmartMoneyConceptsEngine()
 structure_analyzer = MarketStructureAnalyzer()
@@ -58,8 +58,8 @@ async def generate_setup(
     3. Run MTF Confirmation analysis
     4. Analyze Market Structure (HH/HL/LH/LL, BOS, CHOCH)
     5. Detect Smart Money Concepts (unmitigated OB, unfilled FVG, Liquidity)
-    6. Score Multi-TF Confluence (18-point system with macro filters)
-    7. Generate setup ONLY if score >= 5/18 and R:R >= 1.5
+    6. Score Multi-TF Confluence (24-point system with macro filters)
+    7. Generate setup ONLY if score >= 12/24 and R:R >= 1.8 (V5 hardened gates)
     """
     import asyncio
     candles_by_tf = {}
@@ -150,6 +150,16 @@ async def generate_setup(
         db.add(db_setup)
         db.commit()
         db.refresh(db_setup)
+
+        # 🔔 Send Telegram notification for generated setup
+        try:
+            from app.services.telegram_bot import send_telegram_signal
+            import asyncio
+            asyncio.create_task(send_telegram_signal(setup, timeframe))
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"⚠️ Telegram send failed: {e}")
+
         return {
             "setup": db_setup.to_dict(),
             "confluence": confluence.model_dump(),
@@ -159,7 +169,7 @@ async def generate_setup(
     return {
         "setup": None,
         "confluence": confluence.model_dump(),
-        "message": f"No setup generated for {symbol} — Score: {confluence.total_score}/{confluence.max_score} (min required: 5/18).",
+        "message": f"No setup generated for {symbol} — Score: {confluence.total_score}/{confluence.max_score} (min required: 12/24).",
     }
 
 
@@ -252,3 +262,76 @@ async def expire_stale_setups(
         "expired_count": expired_count,
         "message": f"Expired {expired_count} stale setups older than {max_age_hours}h.",
     }
+
+
+@router.delete("/clear/all")
+async def clear_all_setups(db: Session = Depends(get_db)):
+    """Delete ALL setups from the database."""
+    count = db.query(TradeSetup).delete()
+    db.commit()
+    return {"message": f"Successfully deleted all {count} setups.", "count": count}
+
+
+@router.delete("/clear/by-status")
+async def clear_setups_by_status(
+    status: str = Query(...),
+    db: Session = Depends(get_db),
+):
+    """Delete setups with a specific status."""
+    count = db.query(TradeSetup).filter(TradeSetup.status == status).delete()
+    db.commit()
+    return {"message": f"Successfully deleted {count} setups with status {status}.", "count": count}
+
+
+@router.delete("/clear/old")
+async def clear_old_setups_hard(
+    older_than_hours: int = Query(48),
+    db: Session = Depends(get_db),
+):
+    """Hard delete setups older than X hours."""
+    cutoff = datetime.utcnow() - timedelta(hours=older_than_hours)
+    count = db.query(TradeSetup).filter(TradeSetup.created_at < cutoff).delete()
+    db.commit()
+    return {"message": f"Successfully deleted {count} setups older than {older_than_hours}h.", "count": count}
+
+
+@router.delete("/{setup_id}")
+async def delete_setup(setup_id: int, db: Session = Depends(get_db)):
+    """Delete a specific setup by ID."""
+    setup = db.query(TradeSetup).filter(TradeSetup.id == setup_id).first()
+    if not setup:
+        return {"error": "Setup not found"}
+    db.delete(setup)
+    db.commit()
+    return {"message": f"Successfully deleted setup {setup_id}"}
+
+
+@router.get("/test-telegram")
+async def test_telegram_signal(db: Session = Depends(get_db)):
+    """Send a test signal to Telegram using the latest ACTIVE setup or a dummy one."""
+    from app.services.telegram_bot import send_telegram_signal
+    
+    setup = db.query(TradeSetup).filter(TradeSetup.status == "ACTIVE").first()
+    if not setup:
+        # Create a dummy setup for testing
+        from app.schemas.trade_setup import TradeSetupSchema
+        dummy = TradeSetupSchema(
+            symbol="BTCUSDT",
+            direction="BUY",
+            entry_low=40000,
+            entry_high=40500,
+            stop_loss=39000,
+            take_profit_1=42000,
+            take_profit_2=43000,
+            take_profit_3=44000,
+            risk_reward=2.5,
+            setup_type="TEST_SIGNAL",
+            confluence_score=8,
+            timeframe="1h",
+            explanation="This is a test signal to verify Telegram integration."
+        )
+        success = await send_telegram_signal(dummy, "1h")
+    else:
+        success = await send_telegram_signal(setup, setup.timeframe)
+    
+    return {"success": success, "message": "Test signal sent" if success else "Failed to send test signal"}

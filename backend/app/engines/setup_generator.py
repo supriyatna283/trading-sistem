@@ -1,23 +1,26 @@
 """
-Trading Setup Generator (V4 - Market Intelligence Enriched)
+Trading Setup Generator (V5 - Hardened Quality Gates)
 ==============================================================
 Generates trade ideas based on SMC, Confluence, and Market Intelligence.
-- Minimum confluence score: 5/24 (standard logic)
-- Minimum R:R ratio: 1.5
-- Uses S/R levels to refine entry/SL/TP.
+- Minimum confluence score: 12/24 (50% confluence required)
+- Minimum R:R ratio: 1.8
+- Mandatory core gates: HTF alignment + structure + SMC (OB/Liq)
+- OB proximity validation before entry generation
+- Structure-based SL placement with ATR fallback
 - Enriches signal explanation with market intel details.
 """
 
 import pandas as pd
+import numpy as np
 from typing import Optional, List, Dict
 from app.schemas.trade_setup import TradeSetupSchema, ConfluenceResult
 from app.schemas.market_data import SmartMoneyAnalysis, MarketBias
 
 
 class SetupGenerator:
-    """V3 — Generates actionable trading setups."""
+    """V5 — Generates actionable trading setups with hardened quality gates."""
 
-    def __init__(self, min_confluence_score: int = 5, min_rr: float = 1.5):
+    def __init__(self, min_confluence_score: int = 12, min_rr: float = 1.8):
         self.min_score = min_confluence_score
         self.min_rr = min_rr
 
@@ -58,6 +61,20 @@ class SetupGenerator:
                 return None
             if direction == "SELL" and dominant_bias != "BEARISH":
                 return None
+
+        # ---- Quality Gate 4 (NEW): Mandatory Core Confluence ----
+        # At least ONE of these SMC conditions MUST be true:
+        has_smc_edge = (
+            confluence.details.get("liquidity", {}).get("swept", False)
+            or confluence.details.get("order_block", {}).get("in_zone", False)
+        )
+        # Structure must be confirmed (BOS or CHOCH on entry TF)
+        has_structure = confluence.details.get("structure", {}).get("confirmed", False)
+
+        if not has_smc_edge:
+            return None  # No SMC edge = no institutional footprint = skip
+        if not has_structure:
+            return None  # No structure confirmation = unvalidated direction
 
         last_price = float(df.iloc[-1]["close"])
         entry_low, entry_high, sl, tp1, tp2, tp3 = self._calculate_levels(
@@ -106,51 +123,111 @@ class SetupGenerator:
         self, direction: str, last_price: float,
         smc: SmartMoneyAnalysis, df: pd.DataFrame
     ):
-        """Calculate precise entry, SL, and TP levels using OB zones + ATR."""
+        """
+        Calculate precise entry, SL, and TP levels using OB zones + structure.
+        V5: OB proximity check + structure-based SL placement.
+        """
         recent = df.tail(20)
         atr = self._estimate_atr(recent)
 
         if direction == "BUY":
-            # Entry at the nearest valid (unmitigated) bullish OB
+            # Entry at the nearest REACHABLE unmitigated bullish OB
             bullish_obs = [ob for ob in smc.order_blocks
                           if ob.type == "BULLISH" and not ob.mitigated]
-            if bullish_obs:
-                ob = bullish_obs[-1]
+            # Filter OBs by proximity: must be within 3 ATR of current price
+            reachable_obs = [
+                ob for ob in bullish_obs
+                if abs(last_price - ob.low) <= atr * 3
+            ]
+            if reachable_obs:
+                ob = reachable_obs[-1]
                 entry_low = ob.low
                 entry_high = ob.high
             else:
                 entry_low = last_price - atr * 0.3
                 entry_high = last_price
 
-            # SL: 1 ATR below OB low
-            sl = entry_low - atr * 1.0
+            # SL: Use swing low (structure-based) if available, else ATR fallback
+            swing_low = self._find_nearest_swing_low(df, entry_low)
+            if swing_low is not None and swing_low < entry_low:
+                # SL just below the nearest swing low (1-2 ticks buffer)
+                sl = swing_low - atr * 0.15
+            else:
+                # ATR fallback: 1 ATR below entry
+                sl = entry_low - atr * 1.0
 
             # TP: Use ATR multiples for R:R-based targets
             risk = entry_low - sl
-            tp1 = entry_high + risk * 1.6    # Target 1.5+ comfortably
-            tp2 = entry_high + risk * 3.0
-            tp3 = entry_high + risk * 5.0
+            tp1 = entry_high + risk * 2.0    # TP1 at 2R
+            tp2 = entry_high + risk * 3.0    # TP2 at 3R
+            tp3 = entry_high + risk * 4.5    # TP3 at 4.5R (more realistic than 5R)
 
         else:  # SELL
             bearish_obs = [ob for ob in smc.order_blocks
                           if ob.type == "BEARISH" and not ob.mitigated]
-            if bearish_obs:
-                ob = bearish_obs[-1]
+            reachable_obs = [
+                ob for ob in bearish_obs
+                if abs(ob.high - last_price) <= atr * 3
+            ]
+            if reachable_obs:
+                ob = reachable_obs[-1]
                 entry_low = ob.low
                 entry_high = ob.high
             else:
                 entry_low = last_price
                 entry_high = last_price + atr * 0.3
 
-            # SL: 1 ATR above OB high
-            sl = entry_high + atr * 1.0
+            # SL: Use swing high (structure-based) if available, else ATR fallback
+            swing_high = self._find_nearest_swing_high(df, entry_high)
+            if swing_high is not None and swing_high > entry_high:
+                sl = swing_high + atr * 0.15
+            else:
+                sl = entry_high + atr * 1.0
 
             risk = sl - entry_high
-            tp1 = entry_low - risk * 1.6
+            tp1 = entry_low - risk * 2.0
             tp2 = entry_low - risk * 3.0
-            tp3 = entry_low - risk * 5.0
+            tp3 = entry_low - risk * 4.5
 
         return entry_low, entry_high, sl, tp1, tp2, tp3
+
+    @staticmethod
+    def _find_nearest_swing_low(df: pd.DataFrame, reference_price: float, lookback: int = 20) -> Optional[float]:
+        """
+        Find the nearest swing low below the reference price.
+        Uses a 3-bar pivot low detection within the lookback window.
+        """
+        if df.empty or len(df) < 5:
+            return None
+        lows = df["low"].astype(float).values[-lookback:]
+        swing_lows = []
+        for i in range(2, len(lows) - 2):
+            if lows[i] < lows[i-1] and lows[i] < lows[i-2] and lows[i] < lows[i+1] and lows[i] < lows[i+2]:
+                if lows[i] < reference_price:
+                    swing_lows.append(lows[i])
+        if not swing_lows:
+            return None
+        # Return the nearest (highest) swing low below reference
+        return max(swing_lows)
+
+    @staticmethod
+    def _find_nearest_swing_high(df: pd.DataFrame, reference_price: float, lookback: int = 20) -> Optional[float]:
+        """
+        Find the nearest swing high above the reference price.
+        Uses a 3-bar pivot high detection within the lookback window.
+        """
+        if df.empty or len(df) < 5:
+            return None
+        highs = df["high"].astype(float).values[-lookback:]
+        swing_highs = []
+        for i in range(2, len(highs) - 2):
+            if highs[i] > highs[i-1] and highs[i] > highs[i-2] and highs[i] > highs[i+1] and highs[i] > highs[i+2]:
+                if highs[i] > reference_price:
+                    swing_highs.append(highs[i])
+        if not swing_highs:
+            return None
+        # Return the nearest (lowest) swing high above reference
+        return min(swing_highs)
 
     def _build_explanation(self, confluence: ConfluenceResult, direction: str, rr: float, market_intel_data: Optional[Dict] = None) -> str:
         """Build a professional explanation string."""

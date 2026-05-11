@@ -345,19 +345,27 @@ class SmartMoneyConceptsEngine:
     # Liquidity Sweep Detection
     # ------------------------------------------------------------------
     def check_liquidity_sweep(
-        self, df: pd.DataFrame, levels: List[LiquidityLevel]
+        self, df: pd.DataFrame, levels: List[LiquidityLevel],
+        lookback: int = 3,
     ) -> List[LiquidityLevel]:
-        """Check if the latest candles swept any liquidity level."""
+        """
+        Check if recent candles swept any liquidity level.
+        V2: checks a window of `lookback` candles (default 3) instead of
+        only the last candle, to catch sweeps that happen across 2-3 bars.
+        """
         if df.empty or not levels:
             return []
 
+        window = df.iloc[-lookback:]
+        recent_high = float(window["high"].astype(float).max())
+        recent_low = float(window["low"].astype(float).min())
+
         swept = []
-        last = df.iloc[-1]
         for lv in levels:
-            if lv.type == "EQUAL_HIGH" and float(last["high"]) > lv.price:
+            if lv.type == "EQUAL_HIGH" and recent_high > lv.price:
                 lv.swept = True
                 swept.append(lv)
-            elif lv.type == "EQUAL_LOW" and float(last["low"]) < lv.price:
+            elif lv.type == "EQUAL_LOW" and recent_low < lv.price:
                 lv.swept = True
                 swept.append(lv)
         return swept

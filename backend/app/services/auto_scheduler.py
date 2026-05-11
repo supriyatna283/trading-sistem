@@ -66,7 +66,7 @@ async def _run_once(db_factory) -> int:
     confluence_engine = ConfluenceEngine()
     smc_engine = SmartMoneyConceptsEngine()
     structure_analyzer = MarketStructureAnalyzer()
-    setup_gen = SetupGenerator(min_confluence_score=5, min_rr=1.5)
+    setup_gen = SetupGenerator(min_confluence_score=12, min_rr=1.8)
 
     generated = 0
     semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
@@ -137,17 +137,16 @@ async def _run_once(db_factory) -> int:
                     db.add(new_setup)
                     db.commit()
                     generated += 1
-                    logger.info(f"✅ Auto-generated {setup_schema.direction} setup for {symbol} [{timeframe}] | Score: {setup_schema.confluence_score}/10")
+                    logger.info(f"✅ Auto-generated {setup_schema.direction} setup for {symbol} [{timeframe}] | Score: {setup_schema.confluence_score}/24")
                     
-                    # 🔔 Send Telegram Alert for High-Probability Setups
-                    if setup_schema.confluence_score >= 7.0:
-                        from app.services.telegram_bot import send_telegram_signal
-                        asyncio.create_task(send_telegram_signal(setup_schema, timeframe))
+                    # 🔔 Send Telegram Alert for all valid setups (V5: already filtered by 12/24 min)
+                    from app.services.telegram_bot import send_telegram_signal
+                    asyncio.create_task(send_telegram_signal(setup_schema, timeframe))
 
                     # ⚡ Auto-Trade Execution (if enabled)
                     try:
                         from app.engines.trading_engine import trading_engine
-                        if trading_engine.config.enabled and setup_schema.confluence_score >= 7.0:
+                        if trading_engine.config.enabled:
                             from app.schemas.trading import OrderRequest
                             order_req = OrderRequest(
                                 symbol=symbol,

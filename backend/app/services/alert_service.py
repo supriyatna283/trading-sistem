@@ -61,7 +61,7 @@ class AlertService:
             f"Take Profit: {setup.get('take_profit_1', 'N/A')}\n"
             f"R:R: 1:{setup.get('risk_reward', 'N/A')}\n"
             f"Setup: {setup.get('setup_type', 'N/A')}\n"
-            f"Score: {setup.get('confluence_score', 0)}/8"
+            f"Score: {setup.get('confluence_score', 0)}/24"
         )
 
     async def _send_telegram(self, message: str) -> bool:

@@ -166,7 +166,14 @@ class BinanceWebsocketClient:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.exception(f"⚠️ Binance WebSocket Connection Error ({url}): {e}")
+                # Specific check for HTTP 451 (Geographic restriction)
+                error_msg = str(e)
+                if "451" in error_msg:
+                    logger.error(f"🚫 Binance WebSocket BLOCKED (451) on this server. Stopping Binance WS client.")
+                    self._running = False
+                    break
+                    
+                logger.error(f"⚠️ Binance WebSocket Connection Error ({url}): {error_msg}")
                 if is_spot:
                     self.ws_spot = None
                 else:

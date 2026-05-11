@@ -56,6 +56,7 @@ class MarketDataEngine:
 
     BINANCE_BASE = "https://api.binance.com/api/v3"
     BINANCE_FUTURES_BASE = "https://fapi.binance.com/fapi/v1"
+    OKX_BASE = "https://www.okx.com/api/v5"
 
     def __init__(self, redis_client=None):
         self.redis = redis_client
@@ -139,7 +140,63 @@ class MarketDataEngine:
         return [
             {"symbol": "BTCUSDT", "name": "Bitcoin / USDT", "category": "crypto"},
             {"symbol": "ETHUSDT", "name": "Ethereum / USDT", "category": "crypto"},
+            {"symbol": "SOLUSDT", "name": "Solana / USDT", "category": "crypto"},
+            {"symbol": "BNBUSDT", "name": "BNB / USDT", "category": "crypto"},
         ]
+
+    # ---------------------------------------------------------
+    # OKX (Primary for HF)
+    # ---------------------------------------------------------
+    async def fetch_okx_candles(
+        self, symbol: str, interval: str = "1h", limit: int = 200
+    ) -> pd.DataFrame:
+        """Fetch OHLCV from OKX REST API."""
+        okx_interval_map = {
+            "1m": "1m", "5m": "5m", "15m": "15m",
+            "1h": "1H", "4h": "4H", "1d": "1D",
+        }
+        
+        # OKX format is instId=BTC-USDT
+        okx_symbol = symbol.replace("USDT", "-USDT")
+        bar = okx_interval_map.get(interval, "1H")
+        
+        url = f"{self.OKX_BASE}/market/candles"
+        params = {
+            "instId": okx_symbol,
+            "bar": bar,
+            "limit": limit
+        }
+        
+        try:
+            resp = await self.client.get(url, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+            
+            if data.get("code") != "0" or not data.get("data"):
+                logger.warning(f"OKX returned no data for {symbol}: {data}")
+                return self._empty_df()
+            
+            # OKX returns: [ts, o, h, l, c, vol, volCcy, volCcyQuote, confirm]
+            rows = []
+            for r in data["data"]:
+                rows.append({
+                    "open_time": int(r[0]),
+                    "open": float(r[1]),
+                    "high": float(r[2]),
+                    "low": float(r[3]),
+                    "close": float(r[4]),
+                    "volume": float(r[5]),
+                })
+            
+            df = pd.DataFrame(rows)
+            df = self._normalize(df, symbol, interval)
+            # OKX returns newest first, so sort chronologically
+            df = df.sort_values("open_time").reset_index(drop=True)
+            await self._cache(symbol, interval, df)
+            return df
+        except Exception as e:
+            logger.error(f"OKX fetch error for {symbol} ({interval}): {e}")
+            return self._empty_df()
 
     async def close(self):
         await self.client.aclose()
@@ -326,12 +383,16 @@ class MarketDataEngine:
         if cached is not None and len(cached) >= limit:
             return cached.tail(limit).reset_index(drop=True)
 
-        # 2. Try Binance (Primary)
-        df = await self.fetch_binance_candles(symbol, timeframe, limit)
-
-        # 3. Final fallback to sample data (so the app never shows empty)
+        # 2. Try OKX (Primary for HF)
+        df = await self.fetch_okx_candles(symbol, timeframe, limit)
+        
+        # 3. Try Binance (Secondary Fallback)
         if df.empty:
-            logger.warning(f"Binance API failed for {symbol}, using sample data")
+            df = await self.fetch_binance_candles(symbol, timeframe, limit)
+
+        # 4. Final fallback to sample data
+        if df.empty:
+            logger.warning(f"All data sources failed for {symbol}, using sample data")
             base = BASE_PRICES.get(symbol.upper(), 100)
             df = self.generate_sample_data(
                 symbol=symbol.upper(), timeframe=timeframe, 

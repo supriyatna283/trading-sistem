@@ -15,7 +15,7 @@ from app.engines.market_structure import MarketStructureAnalyzer
 from app.engines.smart_money import SmartMoneyConceptsEngine
 from app.schemas.market_data import MarketBias, SmartMoneyAnalysis
 from app.schemas.trade_setup import ConfluenceResult
-from app.utils.indicators import calculate_rsi, calculate_ema, calculate_macd
+from app.utils.indicators import calculate_rsi, calculate_ema, calculate_macd, calculate_bollinger_bands, calculate_stoch_rsi
 
 
 TIMEFRAMES = ["1d", "4h", "1h", "15m", "5m"]
@@ -37,6 +37,9 @@ SCORE_WEIGHTS = {
     "rsi_aligned": 1,            # RSI supports direction
     "ema_aligned": 2,            # Price on the right side of 200 EMA
     "macd_aligned": 1,           # MACD histogram supports momentum
+    # --- Intraday Indicators (3 pts) ---
+    "bb_position": 1,            # Price position relative to Bollinger Bands
+    "stoch_rsi_aligned": 2,      # Stoch RSI momentum crossover confirmation
     # --- Market Intelligence (6 pts) ---
     "btc_dominance_aligned": 1,  # BTC.D trend favors the trade
     "orderbook_depth_aligned": 1,# Order book buy/sell ratio confirms direction
@@ -252,6 +255,32 @@ class ConfluenceEngine:
             "score": SCORE_WEIGHTS["macd_aligned"] if macd_ok else 0,
         }
 
+        # 16. Bollinger Bands Position (Intraday)
+        bb_upper, bb_mid, bb_lower, bb_bw = calculate_bollinger_bands(entry_df)
+        bb_ok = self._check_bb_position(entry_df, bb_upper, bb_lower, bb_mid, structure.bias)
+        if bb_ok:
+            total_score += SCORE_WEIGHTS["bb_position"]
+        details["bollinger_bands"] = {
+            "aligned": bb_ok,
+            "upper": bb_upper,
+            "middle": bb_mid,
+            "lower": bb_lower,
+            "bandwidth_pct": bb_bw,
+            "score": SCORE_WEIGHTS["bb_position"] if bb_ok else 0,
+        }
+
+        # 17. Stochastic RSI (Intraday Momentum Timing)
+        stoch_k, stoch_d = calculate_stoch_rsi(entry_df)
+        stoch_ok = self._check_stoch_rsi_aligned(stoch_k, stoch_d, structure.bias)
+        if stoch_ok:
+            total_score += SCORE_WEIGHTS["stoch_rsi_aligned"]
+        details["stoch_rsi"] = {
+            "aligned": stoch_ok,
+            "k": stoch_k,
+            "d": stoch_d,
+            "score": SCORE_WEIGHTS["stoch_rsi_aligned"] if stoch_ok else 0,
+        }
+
         # ============================================================
         # MARKET INTELLIGENCE CRITERIA (V4)
         # ============================================================
@@ -464,17 +493,18 @@ class ConfluenceEngine:
 
     def _check_rsi_aligned(self, rsi_value: Optional[float], bias: str) -> bool:
         """
-        Check if RSI supports the trade.
-        For BUY: RSI should be < 70 (not overbought, room to grow). Ideally < 50 is better, but < 70 is safe.
-        For SELL: RSI should be > 30 (not oversold, room to fall).
+        Check if RSI supports the trade with meaningful thresholds.
+        For BUY: RSI between 30-65 (momentum present, not overbought).
+        For SELL: RSI between 35-70 (momentum present, not oversold).
+        Extreme RSI zones (< 30 or > 70) indicate overextension — risky entries.
         """
         if rsi_value is None:
             return False  # Can't reliably confirm without RSI
 
         if bias == "BULLISH":
-            return rsi_value < 70.0
+            return 30.0 < rsi_value < 65.0
         elif bias == "BEARISH":
-            return rsi_value > 30.0
+            return 35.0 < rsi_value < 70.0
         return False
 
     def _check_ema_aligned(self, df: pd.DataFrame, ema_value: Optional[float], bias: str) -> bool:
@@ -493,11 +523,55 @@ class ConfluenceEngine:
         """Check if MACD histogram momentum aligns with the trade direction."""
         if hist is None:
             return False
-            
+
         if bias == "BULLISH":
-            return hist > 0 or hist > -0.0001 # Even if negative, must not be heavily negative to support reversal
+            return hist > 0  # Histogram must be positive (bullish momentum)
         elif bias == "BEARISH":
-            return hist < 0 or hist < 0.0001
+            return hist < 0  # Histogram must be negative (bearish momentum)
+        return False
+
+    def _check_bb_position(self, df: pd.DataFrame, upper: Optional[float],
+                            lower: Optional[float], middle: Optional[float], bias: str) -> bool:
+        """
+        Bollinger Bands position check for intraday trading:
+        - BUY: Price near or below lower band (oversold, mean reversion potential)
+        - SELL: Price near or above upper band (overbought, reversal potential)
+        - Also considers BB squeeze (bandwidth < 5%) as breakout setup
+        """
+        if upper is None or lower is None or middle is None or df.empty:
+            return False
+        
+        last_close = float(df.iloc[-1]["close"])
+        band_range = upper - lower
+        if band_range == 0:
+            return False
+        
+        # Position within bands: 0 = at lower, 100 = at upper
+        position_pct = (last_close - lower) / band_range * 100
+        
+        if bias == "BULLISH":
+            # Price in lower 30% of bands = favorable buy zone
+            return position_pct <= 30
+        elif bias == "BEARISH":
+            # Price in upper 30% of bands = favorable sell zone
+            return position_pct >= 70
+        return False
+
+    def _check_stoch_rsi_aligned(self, k: Optional[float], d: Optional[float], bias: str) -> bool:
+        """
+        Stochastic RSI alignment for intraday momentum entries:
+        - BUY: %K < 40 (coming from oversold) AND %K > %D (bullish crossover signal)
+        - SELL: %K > 60 (coming from overbought) AND %K < %D (bearish crossover signal)
+        """
+        if k is None or d is None:
+            return False
+        
+        if bias == "BULLISH":
+            # Oversold zone with bullish momentum crossover
+            return k < 40 and k >= d
+        elif bias == "BEARISH":
+            # Overbought zone with bearish momentum crossover
+            return k > 60 and k <= d
         return False
 
     def _get_recommendation(

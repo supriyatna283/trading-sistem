@@ -41,7 +41,7 @@ class MarketScanner:
         self.structure = MarketStructureAnalyzer()
         self.smc = SmartMoneyConceptsEngine()
         self.confluence = ConfluenceEngine()
-        self.setup_gen = SetupGenerator(min_confluence_score=5, min_rr=1.5)
+        self.setup_gen = SetupGenerator(min_confluence_score=12, min_rr=1.8)
         self.mtf_engine = MTFConfirmationEngine()
         self.sentiment_engine = SentimentEngine()
         self.news_engine = NewsCalendarEngine()
@@ -218,7 +218,7 @@ class MarketScanner:
         )
         if setup:
             setup_status = f"{setup.direction} setup"
-        elif conf.total_score >= 8:
+        elif conf.total_score >= 10:
             setup_status = "Setup forming"
         else:
             setup_status = "No setup"
