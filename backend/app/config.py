@@ -40,6 +40,22 @@ class Settings(BaseSettings):
 
     @property
     def DATABASE_URL(self) -> str:
+        import os
+        # Priority 1: Full DATABASE_URL from environment
+        env_url = os.environ.get("DATABASE_URL")
+        if env_url:
+            return env_url
+            
+        # Priority 2: SQLite fallback for HF Spaces if no remote DB host is provided
+        if os.environ.get("SPACE_ID") and (self.DB_HOST == "localhost" or self.DB_HOST == "127.0.0.1"):
+            # Ensure the data directory exists for the sqlite file
+            data_dir = "app/data"
+            if not os.path.exists(data_dir):
+                try: os.makedirs(data_dir)
+                except: pass
+            return "sqlite:///./app/data/trading_platform.db"
+
+        # Priority 3: Construct MySQL URL from components
         url = (
             f"mysql+pymysql://{self.DB_USER}:{self.DB_PASSWORD}"
             f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
