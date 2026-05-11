@@ -43,9 +43,10 @@ async def send_telegram_signal(setup_schema, timeframe: str) -> bool:
     """
     token = settings.TELEGRAM_BOT_TOKEN
     chat_id = settings.TELEGRAM_CHAT_ID
+    proxy_url = settings.TELEGRAM_PROXY_URL
 
-    if not token or not chat_id:
-        logger.warning("⚠️ TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not configured. Skipping alert.")
+    if not proxy_url and (not token or not chat_id):
+        logger.warning("⚠️ No TELEGRAM_PROXY_URL or TELEGRAM_BOT_TOKEN/CHAT_ID configured. Skipping alert.")
         return False
 
     # Safe getters with defaults
@@ -109,8 +110,9 @@ async def send_telegram_risk_alert(alert_type: str, message_text: str) -> bool:
     """Send a risk management alert to Telegram (circuit breaker, daily loss, etc)."""
     token = settings.TELEGRAM_BOT_TOKEN
     chat_id = settings.TELEGRAM_CHAT_ID
+    proxy_url = settings.TELEGRAM_PROXY_URL
 
-    if not token or not chat_id:
+    if not proxy_url and (not token or not chat_id):
         return False
 
     now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
