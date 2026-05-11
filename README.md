@@ -1,3 +1,12 @@
+---
+title: Trading Intelligence API
+emoji: 📊
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+pinned: false
+---
+
 # Trading Intelligence Platform
 
 Professional Web-Based Trading Decision Support System.
