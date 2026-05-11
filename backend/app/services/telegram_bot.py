@@ -127,39 +127,48 @@ async def send_telegram_risk_alert(alert_type: str, message_text: str) -> bool:
 
 
 async def _send_message(message: str, context_label: str, context_detail: str) -> bool:
-    """Internal: send a message to Telegram via direct API or relay."""
+    """Internal: send a message to Telegram via Vercel proxy or direct API."""
     token = settings.TELEGRAM_BOT_TOKEN
     chat_id = settings.TELEGRAM_CHAT_ID
 
-    # Use Relay if configured (to bypass HF restrictions)
-    url = settings.TELEGRAM_RELAY_URL if settings.TELEGRAM_RELAY_URL else f"https://api.telegram.org/bot{token}/sendMessage"
-    use_relay = bool(settings.TELEGRAM_RELAY_URL)
+    # Priority 1: Vercel Proxy (bypasses HuggingFace outbound block)
+    use_proxy = bool(settings.TELEGRAM_PROXY_URL)
 
-    if use_relay:
+    if use_proxy:
+        url = settings.TELEGRAM_PROXY_URL
+        headers = {
+            "Content-Type": "application/json",
+            "x-proxy-secret": settings.TELEGRAM_PROXY_SECRET,
+        }
         payload = {
-            "token": token,
-            "chat_id": chat_id,
             "text": message,
             "parse_mode": "HTML",
-            "disable_web_page_preview": True,
         }
+        label = "Proxy"
     else:
+        # Priority 2: Direct Telegram API (works locally or non-HF environments)
+        if not token:
+            logger.warning("⚠️ No TELEGRAM_PROXY_URL or TELEGRAM_BOT_TOKEN configured. Skipping alert.")
+            return False
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        headers = {"Content-Type": "application/json"}
         payload = {
             "chat_id": chat_id,
             "text": message,
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
         }
+        label = "Direct"
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.post(url, json=payload)
+            response = await client.post(url, json=payload, headers=headers)
             if response.status_code != 200:
                 logger.error(
-                    f"❌ Telegram {'Relay' if use_relay else 'API'} Error [{response.status_code}]: {response.text}"
+                    f"❌ Telegram {label} Error [{response.status_code}]: {response.text}"
                 )
                 return False
-            logger.info(f"📤 Telegram sent via {'Relay' if use_relay else 'Direct'}: {context_label} [{context_detail}]")
+            logger.info(f"📤 Telegram sent via {label}: {context_label} [{context_detail}]")
             return True
     except httpx.TimeoutException:
         logger.error(f"❌ Telegram timeout for {context_label}")
@@ -170,3 +179,4 @@ async def _send_message(message: str, context_label: str, context_detail: str) -
     except Exception as e:
         logger.error(f"❌ Telegram failed: {type(e).__name__}: {e}", exc_info=True)
         return False
+

@@ -25,7 +25,9 @@ class Settings(BaseSettings):
     # Telegram
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_CHAT_ID: str = ""
-    TELEGRAM_RELAY_URL: str = "https://frontend-trade-tan.vercel.app/api/telegram" # Default relay for HF bypass
+    # Vercel proxy URL to bypass HuggingFace outbound block
+    TELEGRAM_PROXY_URL: str = ""
+    TELEGRAM_PROXY_SECRET: str = "trading-v6-secret"
 
     # Email
     SMTP_HOST: str = "smtp.gmail.com"
