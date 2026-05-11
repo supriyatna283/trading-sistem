@@ -6,21 +6,13 @@ from app.config import get_settings
 
 settings = get_settings()
 
-db_url = settings.DATABASE_URL
-engine_args = {
-    "pool_pre_ping": True,
-}
-
-if db_url.startswith("mysql"):
-    engine_args.update({
-        "pool_size": 20,
-        "max_overflow": 10,
-        "pool_recycle": 3600,
-    })
-elif db_url.startswith("sqlite"):
-    engine_args["connect_args"] = {"check_same_thread": False}
-
-engine = create_engine(db_url, **engine_args)
+engine = create_engine(
+    settings.DATABASE_URL,
+    pool_size=20,
+    max_overflow=10,
+    pool_pre_ping=True,
+    pool_recycle=3600,
+)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
