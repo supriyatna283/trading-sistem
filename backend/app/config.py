@@ -42,13 +42,23 @@ class Settings(BaseSettings):
 
     @property
     def DATABASE_URL(self) -> str:
+        """Build MySQL/TiDB connection URL with automatic SSL for TiDB Cloud."""
         url = (
             f"mysql+pymysql://{self.DB_USER}:{self.DB_PASSWORD}"
             f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
         )
+        # TiDB Cloud requires SSL
         if "tidbcloud.com" in self.DB_HOST:
             url += "?ssl_verify_cert=true&ssl_verify_identity=true"
         return url
+
+    @property
+    def REDIS_URL(self) -> str:
+        """Build Redis connection URL."""
+        scheme = "rediss" if self.REDIS_SSL else "redis"
+        if self.REDIS_PASSWORD:
+            return f"{scheme}://:{self.REDIS_PASSWORD}@{self.REDIS_HOST}:{self.REDIS_PORT}/0"
+        return f"{scheme}://{self.REDIS_HOST}:{self.REDIS_PORT}/0"
 
     class Config:
         env_file = ".env"

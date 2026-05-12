@@ -267,9 +267,13 @@ async def expire_stale_setups(
 @router.delete("/clear/all")
 async def clear_all_setups(db: Session = Depends(get_db)):
     """Delete ALL setups from the database."""
-    count = db.query(TradeSetup).delete()
-    db.commit()
-    return {"message": f"Successfully deleted all {count} setups.", "count": count}
+    try:
+        count = db.query(TradeSetup).delete()
+        db.commit()
+        return {"message": f"Successfully deleted all {count} setups.", "count": count}
+    except Exception as e:
+        db.rollback()
+        return {"error": f"DB error: {str(e)}", "count": 0}
 
 
 @router.delete("/clear/by-status")
@@ -289,21 +293,29 @@ async def clear_old_setups_hard(
     db: Session = Depends(get_db),
 ):
     """Hard delete setups older than X hours."""
-    cutoff = datetime.utcnow() - timedelta(hours=older_than_hours)
-    count = db.query(TradeSetup).filter(TradeSetup.created_at < cutoff).delete()
-    db.commit()
-    return {"message": f"Successfully deleted {count} setups older than {older_than_hours}h.", "count": count}
+    try:
+        cutoff = datetime.utcnow() - timedelta(hours=older_than_hours)
+        count = db.query(TradeSetup).filter(TradeSetup.created_at < cutoff).delete()
+        db.commit()
+        return {"message": f"Successfully deleted {count} setups older than {older_than_hours}h.", "count": count}
+    except Exception as e:
+        db.rollback()
+        return {"error": f"DB error: {str(e)}", "count": 0}
 
 
 @router.delete("/{setup_id}")
 async def delete_setup(setup_id: int, db: Session = Depends(get_db)):
     """Delete a specific setup by ID."""
-    setup = db.query(TradeSetup).filter(TradeSetup.id == setup_id).first()
-    if not setup:
-        return {"error": "Setup not found"}
-    db.delete(setup)
-    db.commit()
-    return {"message": f"Successfully deleted setup {setup_id}"}
+    try:
+        setup = db.query(TradeSetup).filter(TradeSetup.id == setup_id).first()
+        if not setup:
+            return {"error": "Setup not found"}
+        db.delete(setup)
+        db.commit()
+        return {"message": f"Successfully deleted setup {setup_id}"}
+    except Exception as e:
+        db.rollback()
+        return {"error": f"DB error: {str(e)}"}
 
 
 @router.get("/test-telegram")
