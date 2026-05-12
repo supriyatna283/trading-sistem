@@ -268,12 +268,13 @@ async def expire_stale_setups(
 async def clear_all_setups(db: Session = Depends(get_db)):
     """Delete ALL setups from the database."""
     try:
-        count = db.query(TradeSetup).delete()
+        count = db.query(TradeSetup).delete(synchronize_session=False)
         db.commit()
         return {"message": f"Successfully deleted all {count} setups.", "count": count}
     except Exception as e:
         db.rollback()
-        return {"error": f"DB error: {str(e)}", "count": 0}
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 
 @router.delete("/clear/by-status")
@@ -282,9 +283,14 @@ async def clear_setups_by_status(
     db: Session = Depends(get_db),
 ):
     """Delete setups with a specific status."""
-    count = db.query(TradeSetup).filter(TradeSetup.status == status).delete()
-    db.commit()
-    return {"message": f"Successfully deleted {count} setups with status {status}.", "count": count}
+    try:
+        count = db.query(TradeSetup).filter(TradeSetup.status == status).delete(synchronize_session=False)
+        db.commit()
+        return {"message": f"Successfully deleted {count} setups with status {status}.", "count": count}
+    except Exception as e:
+        db.rollback()
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 
 @router.delete("/clear/old")
@@ -295,12 +301,13 @@ async def clear_old_setups_hard(
     """Hard delete setups older than X hours."""
     try:
         cutoff = datetime.utcnow() - timedelta(hours=older_than_hours)
-        count = db.query(TradeSetup).filter(TradeSetup.created_at < cutoff).delete()
+        count = db.query(TradeSetup).filter(TradeSetup.created_at < cutoff).delete(synchronize_session=False)
         db.commit()
         return {"message": f"Successfully deleted {count} setups older than {older_than_hours}h.", "count": count}
     except Exception as e:
         db.rollback()
-        return {"error": f"DB error: {str(e)}", "count": 0}
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 
 @router.delete("/{setup_id}")
