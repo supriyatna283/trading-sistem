@@ -15,30 +15,10 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────
 # Configuration
 # ──────────────────────────────────────────────
-WATCHLIST: List[str] = [
-    # ── Mega Caps ──────────────────────────────
-    "BTCUSDT", "ETHUSDT",
-    # ── Large Caps ─────────────────────────────
-    "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT",
-    "AVAXUSDT", "DOTUSDT", "LINKUSDT", "DOGEUSDT",
-    # ── Mid Caps ───────────────────────────────
-    "LTCUSDT", "UNIUSDT", "AAVEUSDT", "ATOMUSDT",
-    "NEARUSDT", "FTMUSDT", "MATICUSDT", "OPUSDT",
-    "ARBUSDT", "APTUSDT", "SUIUSDT", "SEIUSDT",
-    # ── DeFi ───────────────────────────────────
-    "MKRUSDT", "CRVUSDT", "LDOUSDT", "SNXUSDT",
-    "COMPUSDT", "1INCHUSDT",
-    # ── AI / Data ──────────────────────────────
-    "FETUSDT", "RENDERUSDT", "WLDUSDT", "TAOUSDT",
-    # ── Gaming / Metaverse ─────────────────────
-    "SANDUSDT", "MANAUSDT", "AXSUSDT", "IMXUSDT",
-    # ── Layer 1 Alts ───────────────────────────
-    "KASUSDT", "INJUSDT", "TIAUSDT", "STXUSDT",
-]
-
 TIMEFRAMES = ["1h", "4h"]          # Generate for each TF
 INTERVAL_MINUTES = 30              # Re-generate every 30 minutes
-CONCURRENCY_LIMIT = 5              # Raised to 5 for 40-pair list
+CONCURRENCY_LIMIT = 5              # Max concurrent symbol scans
+MAX_SYMBOLS = 100                  # Max pairs to scan per cycle (top by OKX listing order)
 
 # Scheduler state (accessible from API)
 scheduler_state = {
@@ -47,10 +27,44 @@ scheduler_state = {
     "next_run": None,
     "last_generated": 0,
     "total_runs": 0,
+    "symbols_scanned": 0,
     "errors": [],
 }
 
 _stop_event: asyncio.Event | None = None
+
+
+async def _fetch_okx_symbols() -> List[str]:
+    """Fetch all live USDT-SWAP symbols from OKX dynamically."""
+    import httpx
+    symbols = []
+    try:
+        async with httpx.AsyncClient(timeout=10.0, verify=False) as client:
+            resp = await client.get(
+                "https://www.okx.com/api/v5/public/instruments",
+                params={"instType": "SWAP"}
+            )
+            data = resp.json()
+            if data.get("code") == "0" and data.get("data"):
+                for inst in data["data"]:
+                    inst_id = inst.get("instId", "")
+                    if inst_id.endswith("-USDT-SWAP") and inst.get("state") == "live":
+                        base = inst_id.split("-")[0]
+                        symbols.append(f"{base}USDT")
+        logger.info(f"📡 OKX: Fetched {len(symbols)} live USDT-SWAP pairs")
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to fetch OKX symbols: {e}. Using fallback list.")
+        # Fallback to essential pairs
+        symbols = [
+            "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
+            "ADAUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT", "DOGEUSDT",
+            "LTCUSDT", "UNIUSDT", "AAVEUSDT", "ATOMUSDT", "NEARUSDT",
+            "MATICUSDT", "OPUSDT", "ARBUSDT", "APTUSDT", "SUIUSDT",
+            "MKRUSDT", "CRVUSDT", "LDOUSDT", "FETUSDT", "RENDERUSDT",
+            "KASUSDT", "INJUSDT", "TIAUSDT", "SEIUSDT", "TAOUSDT",
+        ]
+    # Limit to MAX_SYMBOLS to avoid excessive load
+    return symbols[:MAX_SYMBOLS]
 
 
 async def _run_once(db_factory) -> int:
@@ -62,11 +76,16 @@ async def _run_once(db_factory) -> int:
     from app.engines.setup_generator import SetupGenerator
     from app.models.trade_setup import TradeSetup
 
+    # Dynamically fetch all OKX pairs for this cycle
+    watchlist = await _fetch_okx_symbols()
+    scheduler_state["symbols_scanned"] = len(watchlist)
+    logger.info(f"🔍 Scanning {len(watchlist)} OKX pairs × {len(TIMEFRAMES)} timeframes...")
+
     data_engine = MarketDataEngine()
     confluence_engine = ConfluenceEngine()
     smc_engine = SmartMoneyConceptsEngine()
     structure_analyzer = MarketStructureAnalyzer()
-    setup_gen = SetupGenerator(min_confluence_score=12, min_rr=1.8)
+    setup_gen = SetupGenerator(min_confluence_score=14, min_rr=1.8)
 
     generated = 0
     semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
@@ -87,14 +106,13 @@ async def _run_once(db_factory) -> int:
                 if not candles_by_tf:
                     return
 
-                # Fix ambiguous DataFrame truth value error
                 entry_df = candles_by_tf.get(timeframe)
                 if entry_df is None or entry_df.empty:
                     if candles_by_tf:
                         entry_df = next(iter(candles_by_tf.values()))
                     else:
                         return
-                
+
                 if entry_df is None or entry_df.empty:
                     return
 
@@ -137,9 +155,9 @@ async def _run_once(db_factory) -> int:
                     db.add(new_setup)
                     db.commit()
                     generated += 1
-                    logger.info(f"✅ Auto-generated {setup_schema.direction} setup for {symbol} [{timeframe}] | Score: {setup_schema.confluence_score}/24")
-                    
-                    # 🔔 Send Telegram Alert for all valid setups (V5: already filtered by 12/24 min)
+                    logger.info(f"✅ Setup: {setup_schema.direction} {symbol} [{timeframe}] | Score: {setup_schema.confluence_score}/24")
+
+                    # 🔔 Send Telegram Alert
                     from app.services.telegram_bot import send_telegram_signal
                     asyncio.create_task(send_telegram_signal(setup_schema, timeframe))
 
@@ -158,15 +176,12 @@ async def _run_once(db_factory) -> int:
                             )
                             result = trading_engine.execute_order(order_req)
                             if result.success:
-                                logger.info(f"⚡ Auto-executed {result.side} {result.quantity} {result.symbol} | {'DRY-RUN' if result.dry_run else 'LIVE'}")
-                            else:
-                                logger.warning(f"⚠️ Auto-execute skipped: {result.message}")
+                                logger.info(f"⚡ Auto-executed {result.side} {result.quantity} {result.symbol}")
                     except Exception as e:
                         logger.warning(f"⚠️ Auto-trade error for {symbol}: {e}")
-                        
+
                 finally:
                     db.close()
-
 
             except Exception as e:
                 logger.warning(f"⚠️ Scheduler skipped {symbol}/{timeframe}: {e}")
@@ -174,7 +189,7 @@ async def _run_once(db_factory) -> int:
     # Run all symbols × timeframes
     tasks = [
         process_symbol(sym, tf)
-        for sym in WATCHLIST
+        for sym in watchlist
         for tf in TIMEFRAMES
     ]
     await asyncio.gather(*tasks)
