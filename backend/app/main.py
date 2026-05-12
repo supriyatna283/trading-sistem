@@ -13,6 +13,7 @@ import logging
 
 from app.config import get_settings
 from app.database import init_db, get_db
+from app.migrate_db import migrate
 from app.routers import (
     market_data,
     analysis,
@@ -56,6 +57,7 @@ async def lifespan(app: FastAPI):
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
         init_db()
+        migrate()
         logger.info("✅ Database tables created/verified")
     except Exception as e:
         logger.error(f"❌ Database connection failed: {e}")
