@@ -266,8 +266,12 @@ async def expire_stale_setups(
 
 @router.delete("/clear/all")
 async def clear_all_setups(db: Session = Depends(get_db)):
-    """Delete ALL setups from the database."""
+    """Delete ALL setups from the database, disconnecting journals first."""
     try:
+        from app.models.journal_entry import JournalEntry
+        # 1. Disconnect journals first to avoid FK constraint errors
+        db.query(JournalEntry).filter(JournalEntry.setup_id != None).update({"setup_id": None}, synchronize_session=False)
+        # 2. Now safe to delete all setups
         count = db.query(TradeSetup).delete(synchronize_session=False)
         db.commit()
         return {"message": f"Successfully deleted all {count} setups.", "count": count}
@@ -312,8 +316,12 @@ async def clear_old_setups_hard(
 
 @router.delete("/{setup_id}")
 async def delete_setup(setup_id: int, db: Session = Depends(get_db)):
-    """Delete a specific setup by ID."""
+    """Delete a specific setup by ID, disconnecting journal if exists."""
     try:
+        from app.models.journal_entry import JournalEntry
+        # 1. Disconnect journal first
+        db.query(JournalEntry).filter(JournalEntry.setup_id == setup_id).update({"setup_id": None}, synchronize_session=False)
+        # 2. Delete setup
         setup = db.query(TradeSetup).filter(TradeSetup.id == setup_id).first()
         if not setup:
             return {"error": "Setup not found"}
@@ -322,7 +330,8 @@ async def delete_setup(setup_id: int, db: Session = Depends(get_db)):
         return {"message": f"Successfully deleted setup {setup_id}"}
     except Exception as e:
         db.rollback()
-        return {"error": f"DB error: {str(e)}"}
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 
 @router.get("/test-telegram")
