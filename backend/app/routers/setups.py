@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
+import json
 from app.database import get_db
 from app.models.trade_setup import TradeSetup
 from app.engines.market_data import MarketDataEngine
@@ -25,6 +26,14 @@ data_engine = MarketDataEngine()
 mtf_engine = MTFConfirmationEngine()
 sentiment_engine = SentimentEngine()
 news_engine = NewsCalendarEngine()
+
+
+def _sanitize_details(details: dict) -> dict:
+    """Convert confluence details to a JSON-safe dict."""
+    try:
+        return json.loads(json.dumps(details, default=lambda o: str(o) if not isinstance(o, (int, float, bool, str, list, dict, type(None))) else o))
+    except Exception:
+        return {}
 
 
 @router.get("")
@@ -143,6 +152,7 @@ async def generate_setup(
             risk_reward=setup.risk_reward,
             setup_type=setup.setup_type,
             confluence_score=setup.confluence_score,
+            confluence_details=_sanitize_details(confluence.details),
             status=setup.status,
             timeframe=setup.timeframe,
             explanation=setup.explanation,
@@ -169,7 +179,7 @@ async def generate_setup(
     return {
         "setup": None,
         "confluence": confluence.model_dump(),
-        "message": f"No setup generated for {symbol} — Score: {confluence.total_score}/{confluence.max_score} (min required: 12/24).",
+        "message": f"No setup generated for {symbol} — Score: {confluence.total_score}/{confluence.max_score} (min required: 14/30).",
     }
 
 

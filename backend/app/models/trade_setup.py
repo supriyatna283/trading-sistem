@@ -1,6 +1,6 @@
 """Trade setup model."""
 
-from sqlalchemy import Column, Integer, String, DateTime, Numeric, Text, Enum
+from sqlalchemy import Column, Integer, String, DateTime, Numeric, Text, Enum, JSON
 from sqlalchemy.sql import func
 from app.database import Base
 
@@ -20,6 +20,7 @@ class TradeSetup(Base):
     risk_reward = Column(Numeric(5, 2), nullable=False)
     setup_type = Column(String(100), nullable=False)
     confluence_score = Column(Integer, default=0)
+    confluence_details = Column(JSON, nullable=True)  # Stores VWAP, VP, Divergence, etc.
     status = Column(
         Enum("ACTIVE", "TRIGGERED", "INVALIDATED", "CLOSED", name="setup_status_enum"),
         default="ACTIVE",
@@ -31,7 +32,7 @@ class TradeSetup(Base):
     def to_dict(self):
         # Scale 30-point confluence score to 100-point signal score for frontend
         signal_score = round((self.confluence_score / 30) * 100)
-        
+
         # Determine grade based on scaled score
         if signal_score >= 75:
             signal_grade = "A+"
@@ -55,6 +56,7 @@ class TradeSetup(Base):
             "risk_reward": float(self.risk_reward),
             "setup_type": self.setup_type,
             "confluence_score": self.confluence_score,
+            "confluence_details": self.confluence_details or {},
             "signal_score": signal_score,
             "signal_grade": signal_grade,
             "status": self.status,

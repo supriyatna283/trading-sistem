@@ -7,10 +7,19 @@ Runs immediately at startup, then repeats every INTERVAL_MINUTES.
 
 import asyncio
 import logging
+import json
 from datetime import datetime, timezone
 from typing import List
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_details(details: dict) -> dict:
+    """Convert confluence details to a JSON-safe dict (removes non-serializable objects)."""
+    try:
+        return json.loads(json.dumps(details, default=lambda o: str(o) if not isinstance(o, (int, float, bool, str, list, dict, type(None))) else o))
+    except Exception:
+        return {}
 
 # ──────────────────────────────────────────────
 # Configuration
@@ -148,6 +157,7 @@ async def _run_once(db_factory) -> int:
                         risk_reward=setup_schema.risk_reward,
                         setup_type=setup_schema.setup_type,
                         confluence_score=setup_schema.confluence_score,
+                        confluence_details=_sanitize_details(confluence.details),
                         status="ACTIVE",
                         timeframe=timeframe,
                         explanation=setup_schema.explanation,
@@ -155,7 +165,7 @@ async def _run_once(db_factory) -> int:
                     db.add(new_setup)
                     db.commit()
                     generated += 1
-                    logger.info(f"✅ Setup: {setup_schema.direction} {symbol} [{timeframe}] | Score: {setup_schema.confluence_score}/24")
+                    logger.info(f"✅ Setup: {setup_schema.direction} {symbol} [{timeframe}] | Score: {setup_schema.confluence_score}/30")
 
                     # 🔔 Send Telegram Alert
                     from app.services.telegram_bot import send_telegram_signal
