@@ -29,8 +29,8 @@ class TradeSetup(Base):
     created_at = Column(DateTime, server_default=func.now())
 
     def to_dict(self):
-        # Scale 24-point confluence score to 100-point signal score for frontend
-        signal_score = round((self.confluence_score / 24) * 100)
+        # Scale 30-point confluence score to 100-point signal score for frontend
+        signal_score = round((self.confluence_score / 30) * 100)
         
         # Determine grade based on scaled score
         if signal_score >= 75:

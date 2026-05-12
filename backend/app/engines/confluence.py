@@ -15,7 +15,11 @@ from app.engines.market_structure import MarketStructureAnalyzer
 from app.engines.smart_money import SmartMoneyConceptsEngine
 from app.schemas.market_data import MarketBias, SmartMoneyAnalysis
 from app.schemas.trade_setup import ConfluenceResult
-from app.utils.indicators import calculate_rsi, calculate_ema, calculate_macd, calculate_bollinger_bands, calculate_stoch_rsi
+from app.utils.indicators import (
+    calculate_rsi, calculate_ema, calculate_macd,
+    calculate_bollinger_bands, calculate_stoch_rsi,
+    calculate_vwap, calculate_volume_profile, detect_divergence,
+)
 
 
 TIMEFRAMES = ["1d", "4h", "1h", "15m", "5m"]
@@ -46,9 +50,14 @@ SCORE_WEIGHTS = {
     "liquidation_magnet": 1,     # Price near liquidation cluster (high-probability zone)
     "market_cap_quality": 1,     # Higher mcap = safer signal quality
     "support_resistance_aligned": 2, # Entry near key S/R level
+    # --- TIER 1 — New Institutional Indicators (6 pts) ---
+    "vwap_aligned": 2,           # Price on correct side of VWAP
+    "volume_profile_poc": 2,     # Price near POC / inside Value Area
+    "rsi_divergence": 1,         # RSI divergence confirms reversal direction
+    "macd_divergence": 1,        # MACD divergence reinforces RSI divergence
 }
 
-MAX_SCORE = sum(SCORE_WEIGHTS.values())  # 24
+MAX_SCORE = sum(SCORE_WEIGHTS.values())  # 30 (24 base + 6 Tier 1)
 
 # Session windows (UTC hours)
 LONDON_SESSION = (8, 16)   # 08:00 - 16:00 UTC
@@ -348,7 +357,72 @@ class ConfluenceEngine:
             "score": SCORE_WEIGHTS["support_resistance_aligned"] if sr_ok else 0,
         }
 
-        # Determine recommendation — V4 thresholds (adjusted for 24-point scale)
+        # ============================================================
+        # TIER 1 — INSTITUTIONAL INDICATORS
+        # ============================================================
+
+        # T1. VWAP Alignment — price on correct side of VWAP
+        vwap_data = calculate_vwap(entry_df)
+        vwap_ok = False
+        if vwap_data["position"] is not None:
+            if structure.bias == "BULLISH" and vwap_data["position"] == "above":
+                vwap_ok = True
+            elif structure.bias == "BEARISH" and vwap_data["position"] == "below":
+                vwap_ok = True
+        if vwap_ok:
+            total_score += SCORE_WEIGHTS["vwap_aligned"]
+        details["vwap"] = {
+            "aligned": vwap_ok,
+            "value": vwap_data.get("vwap"),
+            "position": vwap_data.get("position"),
+            "distance_pct": vwap_data.get("distance_pct"),
+            "score": SCORE_WEIGHTS["vwap_aligned"] if vwap_ok else 0,
+        }
+
+        # T2. Volume Profile — POC proximity / inside Value Area
+        vp_data = calculate_volume_profile(entry_df)
+        vp_ok = False
+        if vp_data["poc"] is not None:
+            # Score if in value area OR very close to POC (<1%)
+            poc_close = (vp_data.get("poc_distance_pct") or 999) < 1.0
+            vp_ok = vp_data["in_value_area"] or poc_close
+        if vp_ok:
+            total_score += SCORE_WEIGHTS["volume_profile_poc"]
+        details["volume_profile"] = {
+            "aligned": vp_ok,
+            "poc": vp_data.get("poc"),
+            "vah": vp_data.get("vah"),
+            "val": vp_data.get("val"),
+            "poc_distance_pct": vp_data.get("poc_distance_pct"),
+            "in_value_area": vp_data.get("in_value_area"),
+            "score": SCORE_WEIGHTS["volume_profile_poc"] if vp_ok else 0,
+        }
+
+        # T3 & T4. Divergence Detection (RSI + MACD)
+        div_data = detect_divergence(entry_df)
+        div_type = div_data.get("type", "none")
+        rsi_div_ok = div_data["rsi_divergence"] and (
+            (structure.bias == "BULLISH" and div_type == "bullish") or
+            (structure.bias == "BEARISH" and div_type == "bearish")
+        )
+        macd_div_ok = div_data["macd_divergence"] and rsi_div_ok
+        if rsi_div_ok:
+            total_score += SCORE_WEIGHTS["rsi_divergence"]
+        if macd_div_ok:
+            total_score += SCORE_WEIGHTS["macd_divergence"]
+        details["divergence"] = {
+            "rsi_divergence": rsi_div_ok,
+            "macd_divergence": macd_div_ok,
+            "type": div_type,
+            "strength": div_data.get("strength", 0),
+            "score": (
+                SCORE_WEIGHTS["rsi_divergence"] if rsi_div_ok else 0
+            ) + (
+                SCORE_WEIGHTS["macd_divergence"] if macd_div_ok else 0
+            ),
+        }
+
+        # Determine recommendation
         recommendation = self._get_recommendation(total_score, structure.bias, htf_biases)
 
         return ConfluenceResult(
