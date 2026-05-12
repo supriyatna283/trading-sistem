@@ -68,20 +68,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"❌ Scheduler failed to start: {e}")
 
-    # 3. Start WebSocket Proxy (Binance)
-    try:
-        from app.services.binance_ws_client import binance_proxy
-        
-        await binance_proxy.start()
-        logger.info("✅ Binance WebSocket Proxy started")
-    except Exception as e:
-        logger.error(f"❌ Binance WebSocket Proxy failed to start: {e}")
+    # 3. Start WebSocket Proxy — Skip Binance (blocked 451 on HuggingFace), use OKX
+    logger.info("⏭️ Binance WebSocket skipped (blocked on cloud). Using OKX data source.")
 
-    # 4. Start Smart Tape WebSocket Manager
+    # 4. Start Smart Tape WebSocket Manager (OKX trades stream)
     try:
         from app.services.tape_ws_manager import smart_tape_manager
         await smart_tape_manager.start()
-        logger.info("✅ Smart Tape WebSocket Manager started")
+        logger.info("✅ Smart Tape WebSocket Manager started (OKX)")
     except Exception as e:
         logger.error(f"❌ Smart Tape failed to start: {e}")
 
