@@ -56,6 +56,8 @@ interface Props {
   structureMarkers?: StructureMarker[];
   autoFetchSMC?: boolean;
   timeframeInterval?: string;
+  /** MTF grid: slimmer header, hide indicator/tools bar */
+  compactToolbar?: boolean;
 }
 
 // Indicator visibility state
@@ -251,6 +253,7 @@ export default function TradingViewChart({
   structureMarkers = [],
   autoFetchSMC = false,
   timeframeInterval = "1h",
+  compactToolbar = false,
 }: Props) {
   // Main chart container
   const mainContainerRef = useRef<HTMLDivElement>(null);
@@ -299,6 +302,8 @@ export default function TradingViewChart({
   const [smcStructure, setSmcStructure] = useState<StructureMarker[]>([]);
   const [wsStatus, setWsStatus] = useState<"connecting" | "live" | "disconnected">("connecting");
   const [chartStyle, setChartStyle] = useState<ChartStyle>("candlestick");
+  const chartStyleRef = useRef<ChartStyle>("candlestick");
+  chartStyleRef.current = chartStyle;
   const [showIndicatorPanel, setShowIndicatorPanel] = useState(false);
   const [indicators, setIndicators] = useState<IndicatorState>({
     ema20: true, ema50: false, ema200: true, volume: true,
@@ -462,7 +467,7 @@ export default function TradingViewChart({
       LL: { position: "belowBar", color: "#ef4444", shape: "arrowDown" },
     };
 
-    if (effectiveMarkers.length > 0 && seriesRef.current) {
+    if (effectiveMarkers.length > 0) {
       const markers: SeriesMarker<Time>[] = effectiveMarkers
         .filter(m => m.time > 0)
         .map(m => {
@@ -470,9 +475,19 @@ export default function TradingViewChart({
           return { time: (m.time / 1000) as Time, position: cfg.position, color: cfg.color, shape: cfg.shape, text: m.label, size: m.label === "BOS" || m.label === "CHOCH" ? 2 : 1 };
         })
         .sort((a, b) => (a.time as number) - (b.time as number));
-      seriesRef.current.setMarkers(markers);
+      seriesRef.current?.setMarkers([]);
+      lineSeriesRef.current?.setMarkers([]);
+      areaSeriesRef.current?.setMarkers([]);
+      const style = chartStyleRef.current;
+      const markerTarget =
+        style === "line" ? lineSeriesRef.current : style === "area" ? areaSeriesRef.current : seriesRef.current;
+      markerTarget?.setMarkers(markers);
+    } else {
+      seriesRef.current?.setMarkers([]);
+      lineSeriesRef.current?.setMarkers([]);
+      areaSeriesRef.current?.setMarkers([]);
     }
-  }, [setup, effectiveOBs, effectiveFVGs, effectiveMarkers, srLevels, indicators.supportResistance]);
+  }, [setup, effectiveOBs, effectiveFVGs, effectiveMarkers, srLevels, indicators.supportResistance, chartStyle]);
 
   useEffect(() => { drawAnnotations(indicators.smcZones); }, [drawAnnotations, indicators.smcZones]);
 
@@ -544,8 +559,16 @@ export default function TradingViewChart({
           lineSeriesRef.current?.update({ time: tick.time, value: tick.close });
           areaSeriesRef.current?.update({ time: tick.time, value: tick.close });
           volumeSeriesRef.current?.update({
-            time: tick.time, value: volValue,
-            color: tick.close >= tick.open ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)",
+            time: tick.time,
+            value: volValue,
+            color:
+              chartStyleRef.current !== "candlestick"
+                ? tick.close >= tick.open
+                  ? "rgba(34,197,94,0.1)"
+                  : "rgba(239,68,68,0.1)"
+                : tick.close >= tick.open
+                  ? "rgba(34,197,94,0.3)"
+                  : "rgba(239,68,68,0.3)",
           });
         } catch (e) { console.warn("WS message parse error:", e); }
       };
@@ -615,20 +638,33 @@ export default function TradingViewChart({
     const chart = createChart(mainContainerRef.current, chartOptions as any);
 
     const candleSeries = chart.addCandlestickSeries({
-      upColor: "#22c55e", downColor: "#ef4444",
-      borderUpColor: "#22c55e", borderDownColor: "#ef4444",
-      wickUpColor: "#22c55e", wickDownColor: "#ef4444",
+      upColor: "rgba(34, 197, 94, 0.35)",
+      downColor: "#ef4444",
+      borderUpColor: "#22c55e",
+      borderDownColor: "#ef4444",
+      wickUpColor: "#4ade80",
+      wickDownColor: "#f87171",
       visible: chartStyle === "candlestick",
     });
 
-    const lineSeries = chart.addLineSeries({ 
-      color: "#3b82f6", lineWidth: 2, 
-      visible: chartStyle === "line" 
+    const lineSeries = chart.addLineSeries({
+      color: "#60a5fa",
+      lineWidth: 2,
+      lastValueVisible: true,
+      priceLineVisible: true,
+      crosshairMarkerVisible: true,
+      visible: chartStyle === "line",
     });
-    
-    const areaSeries = chart.addAreaSeries({ 
-      lineColor: "#3b82f6", topColor: "rgba(59,130,246,0.4)", bottomColor: "rgba(59,130,246,0.0)", 
-      visible: chartStyle === "area" 
+
+    const areaSeries = chart.addAreaSeries({
+      lineColor: "#60a5fa",
+      lineWidth: 2,
+      topColor: "rgba(96,165,250,0.28)",
+      bottomColor: "rgba(96,165,250,0.02)",
+      lastValueVisible: true,
+      priceLineVisible: false,
+      crosshairMarkerVisible: true,
+      visible: chartStyle === "area",
     });
 
     // Volume
@@ -766,22 +802,76 @@ export default function TradingViewChart({
 
     // OHLCV Tooltip
     chart.subscribeCrosshairMove((param) => {
-      if (!param.time || !param.seriesData) { setTooltip(null); return; }
-      const candle = param.seriesData.get(candleSeries) as CandlestickData<Time> | undefined;
-      const vol = param.seriesData.get(volumeSeries) as HistogramData<Time> | undefined;
-      if (candle && typeof candle.open !== "undefined") {
-        const ts = typeof param.time === "number"
-          ? new Date(param.time * 1000).toLocaleString("id-ID", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })
-          : String(param.time);
-        const changeAbs = candle.close - candle.open;
-        const changePct = candle.open > 0 ? (changeAbs / candle.open) * 100 : 0;
-        setTooltip({
-          open: candle.open, high: candle.high, low: candle.low, close: candle.close,
-          volume: vol?.value ?? 0, time: ts,
-          direction: candle.close >= candle.open ? "up" : "down",
-          changeAbs, changePct,
-        });
+      if (!param.time || !param.seriesData) {
+        setTooltip(null);
+        return;
       }
+      const style = chartStyleRef.current;
+      const time = param.time;
+      const tKey = typeof time === "number" ? time : 0;
+
+      let open: number;
+      let high: number;
+      let low: number;
+      let close: number;
+      let vol = 0;
+
+      if (style === "candlestick") {
+        const candle = param.seriesData.get(candleSeries) as CandlestickData<Time> | undefined;
+        if (!candle || candle.open === undefined) {
+          setTooltip(null);
+          return;
+        }
+        open = candle.open;
+        high = candle.high;
+        low = candle.low;
+        close = candle.close;
+        const v = param.seriesData.get(volumeSeries) as HistogramData<Time> | undefined;
+        vol = v?.value ?? 0;
+      } else {
+        const linePt = param.seriesData.get(lineSeries) as LineData<Time> | undefined;
+        const areaPt = param.seriesData.get(areaSeries) as LineData<Time> | undefined;
+        const ptVal = linePt?.value ?? areaPt?.value;
+        if (ptVal === undefined || ptVal === null) {
+          setTooltip(null);
+          return;
+        }
+        const row = chartDataRef.current.find((d) => (d.time as number) === tKey);
+        if (row && typeof row.open === "number") {
+          open = row.open;
+          high = row.high;
+          low = row.low;
+          close = row.close;
+        } else {
+          open = high = low = close = ptVal;
+        }
+        const v = param.seriesData.get(volumeSeries) as HistogramData<Time> | undefined;
+        vol = v?.value ?? 0;
+      }
+
+      const ts =
+        typeof time === "number"
+          ? new Date(time * 1000).toLocaleString("id-ID", {
+              day: "2-digit",
+              month: "short",
+              year: "numeric",
+              hour: "2-digit",
+              minute: "2-digit",
+            })
+          : String(time);
+      const changeAbs = close - open;
+      const changePct = open > 0 ? (changeAbs / open) * 100 : 0;
+      setTooltip({
+        open,
+        high,
+        low,
+        close,
+        volume: vol,
+        time: ts,
+        direction: close >= open ? "up" : "down",
+        changeAbs,
+        changePct,
+      });
     });
 
     // ── Load Data ──
@@ -827,10 +917,19 @@ export default function TradingViewChart({
           lineSeries.setData(lineData);
           areaSeries.setData(lineData);
 
-          // Volume
+          // Volume (softer bars in line / area mode so price series stands out)
+          const dimVol = chartStyleRef.current !== "candlestick";
           const volumeData: HistogramData<Time>[] = chartData.map((d: any) => ({
-            time: d.time, value: d.volume,
-            color: d.close >= d.open ? "rgba(34,197,94,0.25)" : "rgba(239,68,68,0.25)",
+            time: d.time,
+            value: d.volume,
+            color:
+              d.close >= d.open
+                ? dimVol
+                  ? "rgba(34,197,94,0.08)"
+                  : "rgba(34,197,94,0.28)"
+                : dimVol
+                  ? "rgba(239,68,68,0.08)"
+                  : "rgba(239,68,68,0.28)",
           }));
           volumeSeries.setData(volumeData);
 
@@ -938,74 +1037,167 @@ export default function TradingViewChart({
     if (areaSeriesRef.current) areaSeriesRef.current.applyOptions({ visible: chartStyle === "area" });
   }, [chartStyle]);
 
+  // Re-tint volume when switching candle / line / area (no full chart rebuild)
+  useEffect(() => {
+    const vol = volumeSeriesRef.current;
+    if (!vol || !chartDataRef.current.length) return;
+    const dim = chartStyle !== "candlestick";
+    vol.setData(
+      chartDataRef.current.map((d: any) => ({
+        time: d.time,
+        value: d.volume,
+        color:
+          d.close >= d.open
+            ? dim
+              ? "rgba(34,197,94,0.08)"
+              : "rgba(34,197,94,0.28)"
+            : dim
+              ? "rgba(239,68,68,0.08)"
+              : "rgba(239,68,68,0.28)",
+      })),
+    );
+  }, [chartStyle]);
+
   const hasSMC = effectiveOBs.length > 0 || effectiveFVGs.length > 0;
   const hasSetup = !!setup;
+
+  const styleMeta: Record<ChartStyle, { icon: string; short: string; title: string }> = {
+    candlestick: { icon: "🕯️", short: "Candle", title: "Candlestick" },
+    line: { icon: "📈", short: "Line", title: "Line chart" },
+    area: { icon: "📊", short: "Area", title: "Area chart" },
+  };
 
   return (
     <div className="glass-card" style={{ padding: 0, overflow: "hidden", position: "relative", height: "100%", display: "flex", flexDirection: "column" }}>
 
       {/* ── Chart Header ── */}
-      <div style={{ padding: "8px 16px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0, gap: 8 }}>
+      <div
+        style={{
+          padding: compactToolbar ? "6px 10px" : "8px 16px",
+          borderBottom: "1px solid var(--border)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          flexShrink: 0,
+          gap: compactToolbar ? 4 : 8,
+          flexWrap: compactToolbar ? "wrap" : "nowrap",
+        }}
+      >
         {/* Left */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontWeight: 800, fontSize: "1rem" }}>{symbol}</span>
-          {/* WS Status */}
-          <span className="badge badge-active" style={{ padding: "2px 7px", display: "flex", alignItems: "center", gap: 4, cursor: "default" }}>
-            <span style={{
-              width: 6, height: 6, borderRadius: "50%",
-              background: wsStatus === "live" ? "#22c55e" : wsStatus === "connecting" ? "#f59e0b" : "#ef4444",
-              display: "inline-block",
-              animation: wsStatus !== "disconnected" ? "pulse-dot 1.4s infinite" : "none",
-            }} />
-            {wsStatus === "live" ? "LIVE" : wsStatus === "connecting" ? "..." : "⟳"}
+        <div style={{ display: "flex", alignItems: "center", gap: compactToolbar ? 6 : 8, flexWrap: "wrap" }}>
+          <span
+            style={{ fontWeight: 800, fontSize: compactToolbar ? "0.82rem" : "1rem" }}
+            title={compactToolbar ? `WebSocket: ${wsStatus}` : undefined}
+          >
+            {symbol}
           </span>
-          {/* Countdown */}
-          <div style={{
-            display: "flex", alignItems: "center", gap: 4,
-            background: "rgba(255,255,255,0.03)", border: "1px solid var(--border)",
-            padding: "2px 8px", borderRadius: 6, fontSize: "0.72rem",
-            fontFamily: "'JetBrains Mono', monospace", color: "var(--text-secondary)"
-          }}>
-            <span style={{ color: "var(--accent-blue)" }}>🕒</span>
-            <span style={{ fontWeight: 700 }}>{countdown || "--:--"}</span>
-          </div>
-          {hasSetup && <span style={{ fontSize: "0.68rem", padding: "2px 6px", borderRadius: 6, background: "rgba(245,158,11,0.15)", color: "#f59e0b", fontWeight: 700 }}>📐 Setup</span>}
-          {hasSMC && indicators.smcZones && <span style={{ fontSize: "0.68rem", padding: "2px 6px", borderRadius: 6, background: "rgba(139,92,246,0.15)", color: "#a78bfa", fontWeight: 700 }}>📦 SMC</span>}
+          {!compactToolbar && (
+            <>
+              <span className="badge badge-active" style={{ padding: "2px 7px", display: "flex", alignItems: "center", gap: 4, cursor: "default" }}>
+                <span
+                  style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: "50%",
+                    background: wsStatus === "live" ? "#22c55e" : wsStatus === "connecting" ? "#f59e0b" : "#ef4444",
+                    display: "inline-block",
+                    animation: wsStatus !== "disconnected" ? "pulse-dot 1.4s infinite" : "none",
+                  }}
+                />
+                {wsStatus === "live" ? "LIVE" : wsStatus === "connecting" ? "..." : "⟳"}
+              </span>
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "flex-start",
+                  gap: 0,
+                  background: "rgba(255,255,255,0.03)",
+                  border: "1px solid var(--border)",
+                  padding: "2px 8px",
+                  borderRadius: 6,
+                  fontSize: "0.72rem",
+                  fontFamily: "'JetBrains Mono', monospace",
+                  color: "var(--text-secondary)",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                  <span style={{ color: "var(--accent-blue)" }}>🕒</span>
+                  <span style={{ fontWeight: 700 }}>{countdown || "--:--"}</span>
+                </div>
+                <span style={{ fontSize: "0.58rem", color: "var(--text-muted)", fontWeight: 600 }}>~UTC (Binance kline)</span>
+              </div>
+            </>
+          )}
+          {compactToolbar && (
+            <span className="badge badge-active" style={{ padding: "1px 5px", fontSize: "0.62rem" }}>
+              {interval}
+            </span>
+          )}
+          {hasSetup && (
+            <span style={{ fontSize: "0.68rem", padding: "2px 6px", borderRadius: 6, background: "rgba(245,158,11,0.15)", color: "#f59e0b", fontWeight: 700 }}>
+              📐
+            </span>
+          )}
+          {hasSMC && indicators.smcZones && (
+            <span style={{ fontSize: "0.68rem", padding: "2px 6px", borderRadius: 6, background: "rgba(139,92,246,0.15)", color: "#a78bfa", fontWeight: 700 }}>
+              📦
+            </span>
+          )}
         </div>
 
         {/* Right: Chart Style + Timeframes */}
-        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-          {/* Chart Style Selector */}
-          {(["candlestick", "line", "area"] as ChartStyle[]).map(st => (
-            <button key={st} onClick={() => setChartStyle(st)} style={{
-              background: chartStyle === st ? "rgba(139,92,246,0.15)" : "transparent",
-              border: chartStyle === st ? "1px solid rgba(139,92,246,0.3)" : "1px solid transparent",
-              color: chartStyle === st ? "#a78bfa" : "var(--text-muted)",
-              padding: "2px 6px", borderRadius: 4, fontSize: "0.68rem", fontWeight: 600,
-              cursor: "pointer", transition: "all 0.15s", textTransform: "capitalize",
-            }}>
-              {st === "candlestick" ? "🕯️" : st === "line" ? "📈" : "📊"}
-            </button>
-          ))}
+        <div style={{ display: "flex", gap: compactToolbar ? 3 : 4, alignItems: "center", flexWrap: "wrap" }}>
+          {(["candlestick", "line", "area"] as ChartStyle[]).map((st) => {
+            const m = styleMeta[st];
+            return (
+              <button
+                key={st}
+                type="button"
+                title={m.title}
+                onClick={() => setChartStyle(st)}
+                style={{
+                  background: chartStyle === st ? "rgba(139,92,246,0.15)" : "transparent",
+                  border: chartStyle === st ? "1px solid rgba(139,92,246,0.35)" : "1px solid transparent",
+                  color: chartStyle === st ? "#c4b5fd" : "var(--text-muted)",
+                  padding: compactToolbar ? "2px 5px" : "3px 8px",
+                  borderRadius: 6,
+                  fontSize: compactToolbar ? "0.62rem" : "0.7rem",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  transition: "all 0.15s",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                }}
+              >
+                <span aria-hidden>{m.icon}</span>
+                {!compactToolbar && <span>{m.short}</span>}
+              </button>
+            );
+          })}
 
-          <div style={{ width: 1, height: 16, background: "var(--border)", margin: "0 4px" }} />
-
-          {/* Timeframes */}
-          {TIMEFRAMES.map((tf) => (
-            <button key={tf} onClick={() => setInterval_TF(tf)} style={{
-              background: tf === interval ? "rgba(59,130,246,0.15)" : "transparent",
-              border: tf === interval ? "1px solid rgba(59,130,246,0.3)" : "1px solid transparent",
-              color: tf === interval ? "var(--accent-blue)" : "var(--text-secondary)",
-              padding: "2px 8px", borderRadius: 6, fontSize: "0.72rem", fontWeight: 600,
-              cursor: "pointer", fontFamily: "'JetBrains Mono', monospace", transition: "all 0.15s",
-            }}>
-              {tf}
-            </button>
-          ))}
+          {!compactToolbar && (
+            <>
+              <div style={{ width: 1, height: 16, background: "var(--border)", margin: "0 4px" }} />
+              {TIMEFRAMES.map((tf) => (
+                <button key={tf} type="button" onClick={() => setInterval_TF(tf)} style={{
+                  background: tf === interval ? "rgba(59,130,246,0.15)" : "transparent",
+                  border: tf === interval ? "1px solid rgba(59,130,246,0.3)" : "1px solid transparent",
+                  color: tf === interval ? "var(--accent-blue)" : "var(--text-secondary)",
+                  padding: "2px 8px", borderRadius: 6, fontSize: "0.72rem", fontWeight: 600,
+                  cursor: "pointer", fontFamily: "'JetBrains Mono', monospace", transition: "all 0.15s",
+                }}>
+                  {tf}
+                </button>
+              ))}
+            </>
+          )}
         </div>
       </div>
 
       {/* ── Indicator & Tools Bar ── */}
+      {!compactToolbar && (
       <div style={{
         padding: "5px 16px", borderBottom: "1px solid var(--border)",
         display: "flex", gap: 6, alignItems: "center", flexShrink: 0,
@@ -1080,6 +1272,7 @@ export default function TradingViewChart({
           )}
         </div>
       </div>
+      )}
 
       {/* ── Main Chart Canvas ── */}
       <div ref={mainContainerRef} style={{ flexGrow: 1, width: "100%", position: "relative", minHeight: 300 }}>
@@ -1114,7 +1307,19 @@ export default function TradingViewChart({
         )}
 
         {/* EMA Legend */}
-        <div style={{ position: "absolute", bottom: 8, left: 8, zIndex: 10, pointerEvents: "none", display: "flex", gap: 8, fontSize: "0.68rem", fontFamily: "'JetBrains Mono', monospace" }}>
+        <div style={{
+          position: "absolute",
+          bottom: compactToolbar ? 6 : 32,
+          left: 8,
+          zIndex: 10,
+          pointerEvents: "none",
+          display: "flex",
+          gap: compactToolbar ? 4 : 8,
+          fontSize: compactToolbar ? "0.6rem" : "0.68rem",
+          fontFamily: "'JetBrains Mono', monospace",
+          flexWrap: "wrap",
+          maxWidth: "85%",
+        }}>
           {indicators.ema20 && <span style={{ color: "rgba(59,130,246,1)", fontWeight: 700 }}>EMA 20</span>}
           {indicators.ema50 && <span style={{ color: "rgba(245,158,11,1)", fontWeight: 700 }}>EMA 50</span>}
           {indicators.ema200 && <span style={{ color: "rgba(236,72,153,1)", fontWeight: 700 }}>EMA 200</span>}

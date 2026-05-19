@@ -318,6 +318,7 @@ export default function ChartsPage() {
                       setup={selectedSetup}
                       autoFetchSMC={false}
                       timeframeInterval={tf}
+                      compactToolbar
                     />
                   </div>
                 ))}

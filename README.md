@@ -13,21 +13,25 @@ Professional web-based trading **decision support** system with Smart Money Conc
 
 ## Important
 
-| Mode | Default | Notes |
-|------|---------|-------|
-| **Analysis & signals** | Always on | Scanner, setups, charts, journal |
-| **Auto-trading** | **OFF** (`enabled: false`) | Optional; uses Binance Futures API |
-| **Dry-run** | **ON** (`dry_run: true`) | Logs orders without sending when auto-trading is enabled |
+
+| Mode                   | Default                    | Notes                                                    |
+| ---------------------- | -------------------------- | -------------------------------------------------------- |
+| **Analysis & signals** | Always on                  | Scanner, setups, charts, journal                         |
+| **Auto-trading**       | **OFF** (`enabled: false`) | Optional; uses Binance Futures API                       |
+| **Dry-run**            | **ON** (`dry_run: true`)   | Logs orders without sending when auto-trading is enabled |
+
 
 > Manual trading is the primary workflow. Auto-trading requires explicit configuration, Binance API keys, and `API_KEY` for protected endpoints.
 
 ## Data sources
 
-| Exchange | Used for |
-|----------|----------|
-| **OKX** | Primary OHLCV, Smart Tape backend, tickers WebSocket |
-| **Bybit** | Supplementary market data |
+
+| Exchange    | Used for                                                   |
+| ----------- | ---------------------------------------------------------- |
+| **OKX**     | Primary OHLCV, Smart Tape backend, tickers WebSocket       |
+| **Bybit**   | Supplementary market data                                  |
 | **Binance** | Optional execution (auto-trading), Smart Tape browser feed |
+
 
 Hyperliquid is **not** integrated yet.
 
@@ -67,7 +71,7 @@ cp .env.example .env.local
 npm run dev
 ```
 
-Open **http://localhost:3000** — API docs at **http://localhost:8000/docs**.
+Open **[http://localhost:3000](http://localhost:3000)** — API docs at **[http://localhost:8000/docs](http://localhost:8000/docs)**.
 
 ### Docker
 
@@ -91,18 +95,20 @@ In **development**, if `API_KEY` is empty, writes are allowed (with a startup wa
 
 ## Core modules
 
-| Module | Description |
-|--------|-------------|
-| Market Data | OHLCV from OKX/Bybit |
-| Market Structure | HH/HL/LH/LL, BOS, CHOCH |
-| Smart Money | Order blocks, FVG, liquidity |
-| Confluence | Multi-TF scoring |
-| Setup Generator | Entry / SL / TP with R:R |
-| Risk Management | Position sizing, daily limits |
-| Scanner | Multi-asset scan |
-| Journal | Win rate, profit factor, drawdown |
-| Alerts | Telegram, email (SMTP), web |
-| Auto-trading | Optional Binance Futures (dry-run default) |
+
+| Module           | Description                                |
+| ---------------- | ------------------------------------------ |
+| Market Data      | OHLCV from OKX/Bybit                       |
+| Market Structure | HH/HL/LH/LL, BOS, CHOCH                    |
+| Smart Money      | Order blocks, FVG, liquidity               |
+| Confluence       | Multi-TF scoring                           |
+| Setup Generator  | Entry / SL / TP with R:R                   |
+| Risk Management  | Position sizing, daily limits              |
+| Scanner          | Multi-asset scan                           |
+| Journal          | Win rate, profit factor, drawdown          |
+| Alerts           | Telegram, email (SMTP), web                |
+| Auto-trading     | Optional Binance Futures (dry-run default) |
+
 
 ## Environment variables
 
