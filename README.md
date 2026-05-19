@@ -1,3 +1,12 @@
+---
+title: Trading Intelligence API
+emoji: 📊
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+pinned: false
+---
+
 # Trading Intelligence Platform
 
 Professional web-based trading **decision support** system with Smart Money Concepts, multi-timeframe analysis, risk management, and optional auto-trading.
