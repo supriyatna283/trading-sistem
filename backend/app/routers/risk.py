@@ -6,6 +6,7 @@ from app.database import get_db
 from app.models.user_settings import UserSettings
 from app.engines.risk_management import RiskManagementEngine
 from app.schemas.risk import RiskSettingsSchema, PositionSizeRequest
+from app.security import require_api_key
 
 router = APIRouter(prefix="/api/v1/risk", tags=["Risk Management"])
 risk_engine = RiskManagementEngine()
@@ -23,7 +24,7 @@ async def get_risk_settings(db: Session = Depends(get_db)):
     return {"settings": settings.to_dict()}
 
 
-@router.put("/settings")
+@router.put("/settings", dependencies=[Depends(require_api_key)])
 async def update_risk_settings(
     data: RiskSettingsSchema,
     db: Session = Depends(get_db),
@@ -47,4 +48,9 @@ async def update_risk_settings(
 async def calculate_position_size(req: PositionSizeRequest):
     """Calculate position size based on risk parameters."""
     result = risk_engine.calculate_position_size(req)
-    return {"result": result.model_dump()}
+    data = result.model_dump()
+    if req.take_profit is not None:
+        data["risk_reward"] = risk_engine.calculate_risk_reward(
+            req.entry_price, req.stop_loss, req.take_profit, req.direction
+        )
+    return {"result": data}

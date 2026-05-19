@@ -1,6 +1,7 @@
 """Trading setups API endpoints — V3 uses REAL Binance data + full macro integration."""
 
 from fastapi import APIRouter, Depends, Query
+from app.security import require_api_key
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 import json
@@ -183,7 +184,7 @@ async def generate_setup(
     }
 
 
-@router.post("/generate/all")
+@router.post("/generate/all", dependencies=[Depends(require_api_key)])
 async def generate_all_setups(
     timeframe: str = Query("1h"),
     db: Session = Depends(get_db),
@@ -236,7 +237,7 @@ async def get_setup(setup_id: int, db: Session = Depends(get_db)):
     return {"setup": setup.to_dict()}
 
 
-@router.put("/{setup_id}/status")
+@router.put("/{setup_id}/status", dependencies=[Depends(require_api_key)])
 async def update_setup_status(
     setup_id: int,
     update: SetupStatusUpdate,
@@ -251,7 +252,7 @@ async def update_setup_status(
     return {"setup": setup.to_dict()}
 
 
-@router.post("/expire-stale")
+@router.post("/expire-stale", dependencies=[Depends(require_api_key)])
 async def expire_stale_setups(
     max_age_hours: int = Query(24, description="Max age in hours before expiry"),
     db: Session = Depends(get_db),
@@ -274,7 +275,7 @@ async def expire_stale_setups(
     }
 
 
-@router.delete("/clear/all")
+@router.delete("/clear/all", dependencies=[Depends(require_api_key)])
 async def clear_all_setups(db: Session = Depends(get_db)):
     """Delete ALL setups from the database, disconnecting journals first."""
     try:
@@ -291,7 +292,7 @@ async def clear_all_setups(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 
-@router.delete("/clear/by-status")
+@router.delete("/clear/by-status", dependencies=[Depends(require_api_key)])
 async def clear_setups_by_status(
     status: str = Query(...),
     db: Session = Depends(get_db),
@@ -307,7 +308,7 @@ async def clear_setups_by_status(
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 
-@router.delete("/clear/old")
+@router.delete("/clear/old", dependencies=[Depends(require_api_key)])
 async def clear_old_setups_hard(
     older_than_hours: int = Query(48),
     db: Session = Depends(get_db),
@@ -324,7 +325,7 @@ async def clear_old_setups_hard(
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 
-@router.delete("/{setup_id}")
+@router.delete("/{setup_id}", dependencies=[Depends(require_api_key)])
 async def delete_setup(setup_id: int, db: Session = Depends(get_db)):
     """Delete a specific setup by ID, disconnecting journal if exists."""
     try:

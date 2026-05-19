@@ -17,6 +17,7 @@ class PositionSizeRequest(BaseModel):
     entry_price: float
     stop_loss: float
     direction: str  # BUY or SELL
+    take_profit: Optional[float] = None
 
 
 class PositionSizeResult(BaseModel):

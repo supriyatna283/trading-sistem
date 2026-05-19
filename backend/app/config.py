@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     APP_ENV: str = "development"
     APP_SECRET_KEY: str = "change-me-to-a-random-string"
     FRONTEND_URL: str = "http://localhost:3000"
+    # Protect trading, deletes, and config writes (set in production)
+    API_KEY: str = ""
 
     @property
     def DATABASE_URL(self) -> str:

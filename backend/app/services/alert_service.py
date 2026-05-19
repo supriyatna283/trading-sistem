@@ -81,9 +81,32 @@ class AlertService:
             return False
 
     async def _send_email(self, message: str) -> bool:
-        """Send via SMTP (placeholder — implement with aiosmtplib)."""
-        logger.info(f"Email alert (placeholder): {message[:100]}...")
-        return True
+        """Send via SMTP when SMTP_USER and SMTP_PASSWORD are configured."""
+        if not self.settings.SMTP_USER or not self.settings.SMTP_PASSWORD:
+            logger.warning("Email alert skipped: SMTP not configured")
+            return False
+        try:
+            import aiosmtplib
+            from email.message import EmailMessage
+
+            msg = EmailMessage()
+            msg["From"] = self.settings.SMTP_USER
+            msg["To"] = self.settings.SMTP_USER
+            msg["Subject"] = "Trading Intelligence Alert"
+            msg.set_content(message)
+
+            await aiosmtplib.send(
+                msg,
+                hostname=self.settings.SMTP_HOST,
+                port=self.settings.SMTP_PORT,
+                username=self.settings.SMTP_USER,
+                password=self.settings.SMTP_PASSWORD,
+                start_tls=True,
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Email error: {e}")
+            return False
 
     async def _send_web(self, message: str, data: dict = None) -> bool:
         """Send via WebSocket to connected dashboards."""

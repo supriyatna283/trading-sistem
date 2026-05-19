@@ -6,6 +6,7 @@ from app.database import get_db
 from app.models.alert import Alert
 from app.models.user_settings import UserSettings
 from app.services.alert_service import alert_service
+from app.security import require_api_key
 
 router = APIRouter(prefix="/api/v1/alerts", tags=["Alerts"])
 
@@ -17,7 +18,7 @@ async def list_alerts(db: Session = Depends(get_db)):
     return {"alerts": [a.to_dict() for a in alerts]}
 
 
-@router.put("/settings")
+@router.put("/settings", dependencies=[Depends(require_api_key)])
 async def update_alert_settings(
     telegram_chat_id: str = None,
     email: str = None,
@@ -39,7 +40,7 @@ async def update_alert_settings(
     return {"settings": settings.to_dict()}
 
 
-@router.post("/test")
+@router.post("/test", dependencies=[Depends(require_api_key)])
 async def test_alert():
     """Send a test alert to verify configuration."""
     test_setup = {

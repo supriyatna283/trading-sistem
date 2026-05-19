@@ -34,6 +34,8 @@ from app.routers import (
     order_flow,
 )
 from app.services.auto_scheduler import run_scheduler, stop_scheduler, scheduler_state
+from app.security import require_api_key
+from fastapi import Depends
 
 logging.basicConfig(
     level=logging.INFO,
@@ -62,6 +64,12 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"❌ Database connection failed: {e}")
         logger.info("⚠️ Continuing without database connectivity...")
+
+    cfg = get_settings()
+    if cfg.APP_ENV == "production" and not cfg.API_KEY:
+        logger.warning("⚠️ API_KEY is not set — mutating endpoints return 503 in production")
+    elif not cfg.API_KEY:
+        logger.warning("⚠️ API_KEY not set — write endpoints are open (development only)")
 
     # 2. Start Auto Signal Scheduler as background asyncio task
     try:
@@ -119,10 +127,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS
+# CORS — explicit origins only (no wildcard with credentials)
+_cors_origins = list({
+    settings.FRONTEND_URL.rstrip("/"),
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+})
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.FRONTEND_URL, "http://localhost:3000", "*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -183,7 +196,7 @@ async def scheduler_status():
     return {"scheduler": scheduler_state}
 
 
-@app.post("/scheduler/trigger")
+@app.post("/scheduler/trigger", dependencies=[Depends(require_api_key)])
 async def trigger_scheduler():
     """Manually trigger an immediate scheduler run (for testing)."""
     from app.services.auto_scheduler import _run_once
