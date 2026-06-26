@@ -271,18 +271,31 @@ def calculate_volume_profile(df: pd.DataFrame, bins: int = 20) -> Dict:
         return {"poc": None, "vah": None, "val": None, "poc_distance_pct": None, "in_value_area": False}
 
 
-def detect_divergence(df: pd.DataFrame, lookback: int = 5) -> Dict:
+def detect_divergence(df: pd.DataFrame, swing_lookback: int = 3, max_bars: int = 50) -> Dict:
     """
-    Detect RSI & MACD Divergence (Regular Bullish/Bearish).
-    - Regular Bullish: price LL + RSI HL → reversal up
-    - Regular Bearish: price HH + RSI LH → reversal down
+    Detect RSI & MACD Divergence using genuine swing pivot comparison.
+
+    V2 FIX: Divergence must be measured between two SWING POINTS (pivot
+    highs/lows), NOT between two arbitrary candles n bars apart.
+    Comparing closes[-1] vs closes[-n-1] produces false divergence signals
+    because those points are not structural turning points.
+
+    Method:
+    - Regular Bullish: price makes LOWER LOW at pivot, RSI makes HIGHER LOW
+    - Regular Bearish: price makes HIGHER HIGH at pivot, RSI makes LOWER HIGH
+
     Returns: {rsi_divergence, macd_divergence, type, strength}
     """
-    if df.empty or len(df) < lookback + 20:
+    if df.empty or len(df) < swing_lookback * 2 + 20:
         return {"rsi_divergence": False, "macd_divergence": False, "type": "none", "strength": 0}
 
     try:
         closes = df["close"].astype(float).values
+        highs = df["high"].astype(float).values
+        lows = df["low"].astype(float).values
+        n = len(closes)
+
+        # Build RSI series
         period = 14
         deltas = np.diff(closes)
         gains = np.where(deltas > 0, deltas, 0.0)
@@ -294,46 +307,89 @@ def detect_divergence(df: pd.DataFrame, lookback: int = 5) -> Dict:
         for i in range(period, len(gains)):
             avg_gain[i] = (avg_gain[i - 1] * (period - 1) + gains[i]) / period
             avg_loss[i] = (avg_loss[i - 1] * (period - 1) + losses[i]) / period
-
         with np.errstate(divide="ignore", invalid="ignore"):
             rs = np.where(avg_loss != 0, avg_gain / avg_loss, 100.0)
         rsi_series = 100 - (100 / (1 + rs))
+        # Pad to align with closes (rsi_series is len(closes)-1)
+        rsi_aligned = np.concatenate([[np.nan], rsi_series])
 
-        n = min(lookback, len(closes) - 2, len(rsi_series) - 2)
-        price_now = closes[-1]
-        price_prev = closes[-n - 1]
-        rsi_now = rsi_series[-1]
-        rsi_prev = rsi_series[-n - 1]
+        # Find swing lows (for bullish divergence) using 3-bar pivot
+        lb = swing_lookback
+        search_start = max(lb, n - max_bars)
+        swing_lows = []   # (bar_index, close_price, rsi_value)
+        swing_highs = []  # (bar_index, close_price, rsi_value)
+
+        for i in range(search_start, n - lb):
+            # Swing Low: current low is lower than lb bars on each side
+            if all(lows[i] < lows[i - j] for j in range(1, lb + 1)) and \
+               all(lows[i] < lows[i + j] for j in range(1, lb + 1)):
+                rsi_val = rsi_aligned[i] if not np.isnan(rsi_aligned[i]) else None
+                if rsi_val is not None:
+                    swing_lows.append((i, float(lows[i]), float(rsi_val)))
+
+            # Swing High: current high is higher than lb bars on each side
+            if all(highs[i] > highs[i - j] for j in range(1, lb + 1)) and \
+               all(highs[i] > highs[i + j] for j in range(1, lb + 1)):
+                rsi_val = rsi_aligned[i] if not np.isnan(rsi_aligned[i]) else None
+                if rsi_val is not None:
+                    swing_highs.append((i, float(highs[i]), float(rsi_val)))
 
         rsi_div = False
         div_type = "none"
         strength = 0
 
-        if price_now < price_prev and rsi_now > rsi_prev and rsi_now < 50:
-            rsi_div = True
-            div_type = "bullish"
-            strength = round(abs(rsi_now - rsi_prev), 1)
-        elif price_now > price_prev and rsi_now < rsi_prev and rsi_now > 50:
-            rsi_div = True
-            div_type = "bearish"
-            strength = round(abs(rsi_prev - rsi_now), 1)
+        # --- Regular Bullish Divergence ---
+        # Price: Lower Low (LL) | RSI: Higher Low (HL) → reversal up
+        if len(swing_lows) >= 2:
+            prev_low = swing_lows[-2]
+            curr_low = swing_lows[-1]
+            price_ll = curr_low[1] < prev_low[1]    # Price made lower low
+            rsi_hl = curr_low[2] > prev_low[2]      # RSI made higher low
+            if price_ll and rsi_hl and curr_low[2] < 50:  # RSI in bearish territory
+                rsi_div = True
+                div_type = "bullish"
+                price_diff = abs(curr_low[1] - prev_low[1]) / prev_low[1] * 100
+                rsi_diff = abs(curr_low[2] - prev_low[2])
+                strength = round(min(100, rsi_diff * 2 + price_diff), 1)
 
+        # --- Regular Bearish Divergence ---
+        # Price: Higher High (HH) | RSI: Lower High (LH) → reversal down
+        if not rsi_div and len(swing_highs) >= 2:
+            prev_high = swing_highs[-2]
+            curr_high = swing_highs[-1]
+            price_hh = curr_high[1] > prev_high[1]  # Price made higher high
+            rsi_lh = curr_high[2] < prev_high[2]    # RSI made lower high
+            if price_hh and rsi_lh and curr_high[2] > 50:  # RSI in bullish territory
+                rsi_div = True
+                div_type = "bearish"
+                price_diff = abs(curr_high[1] - prev_high[1]) / prev_high[1] * 100
+                rsi_diff = abs(curr_high[2] - prev_high[2])
+                strength = round(min(100, rsi_diff * 2 + price_diff), 1)
+
+        # --- MACD Divergence Confirmation ---
         macd_div = False
-        if len(df) >= 35:
+        if rsi_div and len(df) >= 35:
             close_series = pd.Series(closes)
             fast_ema = close_series.ewm(span=12, adjust=False).mean()
             slow_ema = close_series.ewm(span=26, adjust=False).mean()
             macd_line = fast_ema - slow_ema
             signal_line = macd_line.ewm(span=9, adjust=False).mean()
             hist = (macd_line - signal_line).values
-            hist_now = hist[-1]
-            hist_prev = hist[-n - 1]
-            if div_type == "bullish" and hist_now > hist_prev:
-                macd_div = True
-                strength = min(100, strength + 5)
-            elif div_type == "bearish" and hist_now < hist_prev:
-                macd_div = True
-                strength = min(100, strength + 5)
+
+            if div_type == "bullish" and len(swing_lows) >= 2:
+                # MACD hist should also be making higher lows at the same pivots
+                h_prev = hist[swing_lows[-2][0]] if swing_lows[-2][0] < len(hist) else None
+                h_curr = hist[swing_lows[-1][0]] if swing_lows[-1][0] < len(hist) else None
+                if h_prev is not None and h_curr is not None and h_curr > h_prev:
+                    macd_div = True
+                    strength = min(100, strength + 10)
+
+            elif div_type == "bearish" and len(swing_highs) >= 2:
+                h_prev = hist[swing_highs[-2][0]] if swing_highs[-2][0] < len(hist) else None
+                h_curr = hist[swing_highs[-1][0]] if swing_highs[-1][0] < len(hist) else None
+                if h_prev is not None and h_curr is not None and h_curr < h_prev:
+                    macd_div = True
+                    strength = min(100, strength + 10)
 
         return {
             "rsi_divergence": rsi_div,

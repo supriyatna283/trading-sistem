@@ -135,7 +135,7 @@ class SmartMoneyConceptsEngine:
                 )
                 # Check mitigation: has price revisited this OB after it formed?
                 ob.mitigated = self._check_ob_mitigated(
-                    ob, highs, lows, i, n, "BULLISH"
+                    ob, highs, lows, closes, i, n, "BULLISH"
                 )
                 if not ob.mitigated:
                     obs.append(ob)
@@ -151,7 +151,7 @@ class SmartMoneyConceptsEngine:
                     time=time_val,
                 )
                 ob.mitigated = self._check_ob_mitigated(
-                    ob, highs, lows, i, n, "BEARISH"
+                    ob, highs, lows, closes, i, n, "BEARISH"
                 )
                 if not ob.mitigated:
                     obs.append(ob)
@@ -160,20 +160,25 @@ class SmartMoneyConceptsEngine:
         return obs[-self.ob_lookback:]
 
     def _check_ob_mitigated(
-        self, ob: OrderBlock, highs, lows, start_idx: int, n: int, ob_type: str
+        self, ob: OrderBlock, highs, lows, closes, start_idx: int, n: int, ob_type: str
     ) -> bool:
         """
         Check if an OB has been mitigated (price returned into the OB zone
         after it was created, meaning institutions already filled there).
+
+        V2 FIX: Uses CLOSE price instead of WICK (low/high) for mitigation.
+        Rationale: A wick touching an OB is an institutional re-test — a sign
+        the zone is still respected. Only a CLOSE inside the OB confirms the
+        zone has been consumed and is no longer valid.
         """
         for j in range(start_idx + 1, n):
             if ob_type == "BULLISH":
-                # Bullish OB mitigated if price dipped back into the OB zone
-                if lows[j] <= ob.high and lows[j] >= ob.low:
+                # Bullish OB mitigated only if price CLOSES back inside the zone
+                if ob.low <= closes[j] <= ob.high:
                     return True
             else:
-                # Bearish OB mitigated if price wicked back into the OB zone
-                if highs[j] >= ob.low and highs[j] <= ob.high:
+                # Bearish OB mitigated only if price CLOSES back inside the zone
+                if ob.low <= closes[j] <= ob.high:
                     return True
         return False
 
@@ -350,8 +355,13 @@ class SmartMoneyConceptsEngine:
     ) -> List[LiquidityLevel]:
         """
         Check if recent candles swept any liquidity level.
-        V2: checks a window of `lookback` candles (default 3) instead of
-        only the last candle, to catch sweeps that happen across 2-3 bars.
+
+        V3 FIX: A real sweep (stop hunt) requires TWO conditions:
+          1. Price SPIKES through the level (wick penetrates it).
+          2. Price then CLOSES back on the other side of the level.
+        Simply having high > level.price is NOT a sweep — it's just
+        price making a new high. The close-based reversal is what
+        confirms smart money absorbed liquidity and reversed.
         """
         if df.empty or not levels:
             return []
@@ -359,13 +369,19 @@ class SmartMoneyConceptsEngine:
         window = df.iloc[-lookback:]
         recent_high = float(window["high"].astype(float).max())
         recent_low = float(window["low"].astype(float).min())
+        # Last close tells us where price settled after the spike
+        last_close = float(df.iloc[-1]["close"])
 
         swept = []
         for lv in levels:
-            if lv.type == "EQUAL_HIGH" and recent_high > lv.price:
-                lv.swept = True
-                swept.append(lv)
-            elif lv.type == "EQUAL_LOW" and recent_low < lv.price:
-                lv.swept = True
-                swept.append(lv)
+            if lv.type == "EQUAL_HIGH":
+                # Spike above level (wick) but close BELOW level = sweep + reversal
+                if recent_high > lv.price and last_close < lv.price:
+                    lv.swept = True
+                    swept.append(lv)
+            elif lv.type == "EQUAL_LOW":
+                # Spike below level (wick) but close ABOVE level = sweep + reversal
+                if recent_low < lv.price and last_close > lv.price:
+                    lv.swept = True
+                    swept.append(lv)
         return swept

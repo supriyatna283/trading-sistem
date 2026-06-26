@@ -8,13 +8,17 @@ Generates trade ideas based on SMC, Confluence, and Market Intelligence.
 - OB proximity validation before entry generation
 - Structure-based SL placement with ATR fallback
 - Enriches signal explanation with market intel details.
+- V5.1: Per-gate debug logging for full observability.
 """
 
+import logging
 import pandas as pd
 import numpy as np
 from typing import Optional, List, Dict
 from app.schemas.trade_setup import TradeSetupSchema, ConfluenceResult
 from app.schemas.market_data import SmartMoneyAnalysis, MarketBias
+
+logger = logging.getLogger(__name__)
 
 
 class SetupGenerator:
@@ -39,15 +43,24 @@ class SetupGenerator:
     ) -> Optional[TradeSetupSchema]:
         """Generate a setup ONLY if ALL quality gates pass."""
 
+        def _reject(gate: str, reason: str):
+            logger.debug(
+                f"[{symbol}/{timeframe}] ❌ Gate={gate} | Score={confluence.total_score}/{confluence.max_score} "
+                f"| Rec={confluence.recommendation} | Reason: {reason}"
+            )
+
         # ---- Quality Gate 1: Minimum Confluence Score ----
         if confluence.total_score < self.min_score:
+            _reject("min_score", f"score={confluence.total_score} < required={self.min_score}")
             return None
 
         # ---- Quality Gate 2: Must have a clear direction ----
         if confluence.recommendation in ("NEUTRAL",):
+            _reject("direction", f"recommendation={confluence.recommendation}")
             return None
 
         if df.empty or len(df) < 20:
+            _reject("data", "insufficient candles (<20)")
             return None
 
         direction = "BUY" if confluence.recommendation in ("BUY", "STRONG_BUY") else "SELL"
@@ -58,8 +71,10 @@ class SetupGenerator:
             htf_biases = htf_details.get("biases", {})
             dominant_bias = list(htf_biases.values())[0] if htf_biases else "SIDEWAYS"
             if direction == "BUY" and dominant_bias != "BULLISH":
+                _reject("htf_bias", f"direction=BUY but htf_bias={dominant_bias}")
                 return None
             if direction == "SELL" and dominant_bias != "BEARISH":
+                _reject("htf_bias", f"direction=SELL but htf_bias={dominant_bias}")
                 return None
 
         # ---- Quality Gate 4 (NEW): Mandatory Core Confluence ----
@@ -72,8 +87,10 @@ class SetupGenerator:
         has_structure = confluence.details.get("structure", {}).get("confirmed", False)
 
         if not has_smc_edge:
+            _reject("smc_edge", "no liquidity sweep and not in order block zone")
             return None  # No SMC edge = no institutional footprint = skip
         if not has_structure:
+            _reject("structure", "no BOS/CHOCH confirmed on entry TF")
             return None  # No structure confirmation = unvalidated direction
 
         last_price = float(df.iloc[-1]["close"])
@@ -86,6 +103,7 @@ class SetupGenerator:
         rr = round(reward / risk, 2) if risk > 0 else 0
 
         if rr < self.min_rr:
+            _reject("rr_ratio", f"rr={rr} < required={self.min_rr}")
             return None
 
         # ---- Quality Gate 5: Stop loss sanity check ----
@@ -93,6 +111,7 @@ class SetupGenerator:
         max_sl_pct = 3.0 if symbol.upper() in major_pairs else 5.0
         sl_distance_pct = abs(sl - last_price) / last_price * 100
         if sl_distance_pct > max_sl_pct:
+            _reject("sl_distance", f"sl_pct={sl_distance_pct:.2f}% > max={max_sl_pct}%")
             return None
 
         # Macro filters (MTF, News, Sentiment) are now considered inside the confluence score
@@ -101,6 +120,12 @@ class SetupGenerator:
         # Build detailed explanation (V4 — includes market intel)
         explanation = self._build_explanation(confluence, direction, rr, market_intel_data)
         setup_type = self._build_setup_type(confluence, direction)
+
+        logger.info(
+            f"[{symbol}/{timeframe}] ✅ Setup ACCEPTED | {direction} | "
+            f"Score={confluence.total_score}/{confluence.max_score} | R:R=1:{rr} | "
+            f"Entry={round(entry_low,4)}-{round(entry_high,4)} | SL={round(sl,4)} | TP1={round(tp1,4)}"
+        )
 
         return TradeSetupSchema(
             symbol=symbol,

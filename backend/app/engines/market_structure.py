@@ -75,7 +75,16 @@ class MarketStructureAnalyzer:
     def _label_structure(
         self, swings: List[SwingPoint], df: pd.DataFrame
     ) -> List[StructureLabel]:
-        """Label swing points as HH/HL/LH/LL and detect BOS/CHOCH."""
+        """
+        Label swing points as HH/HL/LH/LL and detect BOS/CHOCH.
+
+        Fix V2:
+        - BOS is now emitted for BOTH bullish (HH) and bearish (LL) continuations.
+          Previously only HH-based BOS was generated — bearish BOS (LL continuation)
+          was silently missing.
+        - CHOCH on LOW swings now correctly updates prev_trend. Previously the trend
+          state was not updated on low-based CHOCH, causing bias to get stuck.
+        """
         labels: List[StructureLabel] = []
         if len(swings) < 2:
             return labels
@@ -96,20 +105,22 @@ class MarketStructureAnalyzer:
                         price=sw.price, time=sw.time,
                     ))
 
-                    # Check for CHOCH / BOS
                     new_trend = "BULLISH" if label == "HH" else "BEARISH"
+
                     if prev_trend != "NEUTRAL" and new_trend != prev_trend:
+                        # Direction changed → Change of Character
                         labels.append(StructureLabel(
                             index=sw.index, label="CHOCH",
                             price=sw.price, time=sw.time,
                         ))
-                    elif prev_trend == new_trend and label == "HH":
-                        # BOS = continuation beyond the last high (only on HH)
+                    elif prev_trend == "BULLISH" and label == "HH":
+                        # Bullish BOS: continuation — price broke the previous HH
                         labels.append(StructureLabel(
                             index=sw.index, label="BOS",
                             price=sw.price, time=sw.time,
                         ))
-                    prev_trend = new_trend
+
+                    prev_trend = new_trend  # always update trend from HIGH swings
                 prev_high = sw
 
             elif sw.type == "LOW":
@@ -124,11 +135,22 @@ class MarketStructureAnalyzer:
                     ))
 
                     new_trend = "BULLISH" if label == "HL" else "BEARISH"
+
                     if prev_trend != "NEUTRAL" and new_trend != prev_trend:
+                        # Direction changed → Change of Character
                         labels.append(StructureLabel(
                             index=sw.index, label="CHOCH",
                             price=sw.price, time=sw.time,
                         ))
+                    elif prev_trend == "BEARISH" and label == "LL":
+                        # Bearish BOS: continuation — price broke the previous LL
+                        # FIX: this was completely missing before (was only HH BOS)
+                        labels.append(StructureLabel(
+                            index=sw.index, label="BOS",
+                            price=sw.price, time=sw.time,
+                        ))
+
+                    # FIX: always update trend from LOW swings too (was missing before)
                     prev_trend = new_trend
                 prev_low = sw
 

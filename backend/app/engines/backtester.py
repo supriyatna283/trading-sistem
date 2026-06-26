@@ -1,17 +1,21 @@
 """
-Automated Backtesting Engine (V2 - Realistic)
-================================================
+Automated Backtesting Engine (V3 - Multi-TF + Threshold Aligned)
+=================================================================
 Runs the SetupGenerator over a historical window of data and simulates
 trade execution with:
 - Fee simulation (0.1% roundtrip)
 - Fixed look-ahead bias (entry on next bar after signal)
 - Extended summary statistics (avg R:R, largest win/loss, etc.)
+- V3: Fetches 1D + 4H candles alongside entry TF so HTF quality
+  gate can pass (mirrors live scanner exactly).
+- V3: Aligned thresholds: min_score=14, min_rr=1.8 (same as live scanner).
 """
 
 import pandas as pd
+import asyncio
 import logging
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from app.engines.market_data import MarketDataEngine
 from app.engines.market_structure import MarketStructureAnalyzer
@@ -24,6 +28,11 @@ logger = logging.getLogger(__name__)
 # V2: Trading fees (maker+taker for entry+exit)
 FEE_RATE = 0.001  # 0.1% roundtrip (0.05% per side typical for crypto)
 
+# HTF timeframes to fetch alongside the entry timeframe
+HTF_TIMEFRAMES = ["1d", "4h"]
+# How many HTF candles to request (covers enough history for structure)
+HTF_CANDLE_LIMIT = 300
+
 
 class BacktestEngine:
     def __init__(self):
@@ -31,7 +40,8 @@ class BacktestEngine:
         self.structure_analyzer = MarketStructureAnalyzer()
         self.smc_engine = SmartMoneyConceptsEngine()
         self.confluence_engine = ConfluenceEngine()
-        self.setup_gen = SetupGenerator(min_confluence_score=5, min_rr=1.5)
+        # V3: Match live scanner thresholds exactly
+        self.setup_gen = SetupGenerator(min_confluence_score=14, min_rr=1.8)
 
     async def run_backtest(
         self,
@@ -44,9 +54,12 @@ class BacktestEngine:
     ) -> Dict[str, Any]:
         """
         Runs a simulation over the given historical period.
-        V2: Includes fee simulation and fixes look-ahead bias.
+        V3: Multi-TF backtest — fetches 1D and 4H candles alongside
+        the entry timeframe so the HTF alignment quality gate works
+        exactly as it does in the live scanner. Threshold also aligned
+        with live scanner (min_score=14, min_rr=1.8).
         """
-        # 1. Fetch historical data
+        # 1. Fetch entry timeframe data
         df = await self.data_engine.fetch_historical_candles(
             symbol=symbol, interval=timeframe, start_ts=start_ts, end_ts=end_ts
         )
@@ -54,7 +67,14 @@ class BacktestEngine:
         if df.empty or len(df) < 200:
             raise ValueError("Insufficient historical data for backtesting. Need at least 200 candles.")
 
-        logger.info(f"Starting backtest for {symbol} on {timeframe} with {len(df)} candles.")
+        logger.info(f"Starting V3 backtest for {symbol} on {timeframe} with {len(df)} candles.")
+
+        # V3: Pre-fetch HTF candles (1D, 4H) for the same period
+        htf_dfs = await self._fetch_htf_candles(symbol, start_ts, end_ts)
+        logger.info(
+            f"HTF data loaded: " +
+            ", ".join(f"{tf}={len(htf_dfs.get(tf, []))} candles" for tf in HTF_TIMEFRAMES)
+        )
 
         trades = []
         equity = initial_capital
@@ -68,8 +88,9 @@ class BacktestEngine:
         for i in range(window_size, len(df)):
             current_bar = df.iloc[i]
             current_time = int(current_bar["open_time"].timestamp() * 1000)
+            current_bar_time = current_bar["open_time"]
 
-            # --- 1. Execute Pending Entry (V2: enter on THIS bar if setup was generated LAST bar) ---
+            # --- 1. Execute Pending Entry (V2: enter on THIS bar if setup generated LAST bar) ---
             if pending_setup and not active_trade:
                 risk_amount = equity * (risk_per_trade_pct / 100.0)
                 entry_price = float(current_bar["open"])  # Enter on open of NEXT bar
@@ -147,13 +168,18 @@ class BacktestEngine:
             if not active_trade and not pending_setup:
                 window_df = df.iloc[i - window_size:i].copy()
 
-                # Mock multi-TF dict (single TF backtest limitation)
-                mock_tfs = {timeframe: window_df}
+                # V3: Build multi-TF dict with HTF candles available up to current bar time
+                candles_by_tf = self._build_candles_by_tf(
+                    entry_tf=timeframe,
+                    entry_df=window_df,
+                    htf_dfs=htf_dfs,
+                    as_of_time=current_bar_time,
+                )
 
                 # Run the analysis pipeline
                 structure = self.structure_analyzer.analyze(window_df, symbol, timeframe)
                 smc = self.smc_engine.analyze(window_df, symbol, timeframe)
-                confluence = self.confluence_engine.score(mock_tfs, symbol, timeframe)
+                confluence = self.confluence_engine.score(candles_by_tf, symbol, timeframe)
 
                 setup = self.setup_gen.generate(
                     symbol, timeframe, confluence, smc, structure, window_df
@@ -170,6 +196,56 @@ class BacktestEngine:
             "trades": trades,
             "equity_curve": equity_curve,
         }
+
+    async def _fetch_htf_candles(
+        self, symbol: str, start_ts: int, end_ts: int
+    ) -> Dict[str, pd.DataFrame]:
+        """
+        V3: Fetch higher timeframe candles for the backtest period.
+        For 1D and 4H — fetches the full available history so we can
+        slice an appropriate window at each bar during simulation.
+        """
+        result = {}
+        tasks = [
+            self.data_engine.fetch_historical_candles(
+                symbol=symbol, interval=tf,
+                start_ts=start_ts, end_ts=end_ts
+            )
+            for tf in HTF_TIMEFRAMES
+        ]
+        dfs = await asyncio.gather(*tasks, return_exceptions=True)
+        for tf, df in zip(HTF_TIMEFRAMES, dfs):
+            if isinstance(df, Exception):
+                logger.warning(f"HTF fetch failed for {tf}: {df}")
+                result[tf] = pd.DataFrame()
+            else:
+                result[tf] = df
+        return result
+
+    def _build_candles_by_tf(
+        self,
+        entry_tf: str,
+        entry_df: pd.DataFrame,
+        htf_dfs: Dict[str, pd.DataFrame],
+        as_of_time,
+        htf_window: int = 200,
+    ) -> Dict[str, pd.DataFrame]:
+        """
+        V3: Build the candles_by_tf dict for the confluence engine.
+        HTF candles are sliced to only include data up to as_of_time
+        (no look-ahead bias), then we take the last htf_window bars.
+        """
+        candles_by_tf = {entry_tf: entry_df}
+        for tf, htf_df in htf_dfs.items():
+            if htf_df.empty:
+                continue
+            # Slice: only candles BEFORE current bar time (no look-ahead)
+            available = htf_df[htf_df["open_time"] <= as_of_time]
+            if available.empty:
+                continue
+            # Take last htf_window candles for structure analysis
+            candles_by_tf[tf] = available.tail(htf_window).reset_index(drop=True)
+        return candles_by_tf
 
     def _calculate_summary(
         self, trades: list, initial_capital: float,
