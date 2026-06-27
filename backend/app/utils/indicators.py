@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from typing import Optional, Tuple, Dict
+from typing import Optional, Tuple, Dict, Any
 
 
 def calculate_rsi(df: pd.DataFrame, period: int = 14) -> Optional[float]:
@@ -158,8 +158,8 @@ def calculate_stoch_rsi(
 
 def calculate_vwap(df: pd.DataFrame) -> Dict:
     """
-    Calculate VWAP (Volume Weighted Average Price).
-    VWAP = Σ(Typical Price × Volume) / Σ(Volume)
+    Calculate VWAP (Volume Weighted Average Price) with Daily Anchor.
+    VWAP = Σ(Typical Price × Volume) / Σ(Volume) reset every day.
     - Price above VWAP = bullish institutional bias
     - Price below VWAP = bearish institutional bias
     Returns: {vwap, position ('above'/'below'), distance_pct}
@@ -175,9 +175,22 @@ def calculate_vwap(df: pd.DataFrame) -> Dict:
         df["vol"] = df["volume"].astype(float)
         df["tp_vol"] = df["typical_price"] * df["vol"]
 
-        window = df.tail(100)
-        cum_tp_vol = window["tp_vol"].sum()
-        cum_vol = window["vol"].sum()
+        if "open_time" in df.columns:
+            # Daily Anchored VWAP
+            # Make sure it's datetime
+            if not pd.api.types.is_datetime64_any_dtype(df["open_time"]):
+                df["open_time"] = pd.to_datetime(df["open_time"])
+            df["date"] = df["open_time"].dt.date
+            df["cum_tp_vol"] = df.groupby("date")["tp_vol"].cumsum()
+            df["cum_vol"] = df.groupby("date")["vol"].cumsum()
+        else:
+            # Fallback if no time column (just use all available data as session)
+            df["cum_tp_vol"] = df["tp_vol"].cumsum()
+            df["cum_vol"] = df["vol"].cumsum()
+
+        last_row = df.iloc[-1]
+        cum_vol = float(last_row["cum_vol"])
+        cum_tp_vol = float(last_row["cum_tp_vol"])
 
         if cum_vol == 0:
             return {"vwap": None, "position": None, "distance_pct": None}
@@ -399,3 +412,119 @@ def detect_divergence(df: pd.DataFrame, swing_lookback: int = 3, max_bars: int =
         }
     except Exception:
         return {"rsi_divergence": False, "macd_divergence": False, "type": "none", "strength": 0}
+
+
+# ══════════════════════════════════════════════════════════════════
+# TIER 2 — POWER FEATURES (Phase 3)
+# ══════════════════════════════════════════════════════════════════
+
+def calculate_adx(df: pd.DataFrame, period: int = 14) -> Optional[float]:
+    """
+    Calculate Average Directional Index (ADX).
+    ADX > 25 = Strong Trend
+    ADX < 20 = Sideways / Ranging
+    Returns the latest ADX value.
+    """
+    if df.empty or len(df) < period * 2:
+        return None
+
+    try:
+        high = df["high"].astype(float).values
+        low = df["low"].astype(float).values
+        close = df["close"].astype(float).values
+
+        tr1 = np.abs(high[1:] - low[1:])
+        tr2 = np.abs(high[1:] - close[:-1])
+        tr3 = np.abs(low[1:] - close[:-1])
+        tr = np.maximum(np.maximum(tr1, tr2), tr3)
+
+        up_move = high[1:] - high[:-1]
+        down_move = low[:-1] - low[1:]
+
+        pos_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+        neg_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+
+        def smma(series, length):
+            res = np.zeros_like(series)
+            if len(series) < length:
+                return res
+            res[length - 1] = np.mean(series[:length])
+            for i in range(length, len(series)):
+                res[i] = (res[i - 1] * (length - 1) + series[i]) / length
+            return res
+
+        tr_smma = smma(tr, period)
+        pos_dm_smma = smma(pos_dm, period)
+        neg_dm_smma = smma(neg_dm, period)
+
+        with np.errstate(divide="ignore", invalid="ignore"):
+            pos_di = np.where(tr_smma > 0, 100 * pos_dm_smma / tr_smma, 0.0)
+            neg_di = np.where(tr_smma > 0, 100 * neg_dm_smma / tr_smma, 0.0)
+            dx = np.where((pos_di + neg_di) > 0, 100 * np.abs(pos_di - neg_di) / (pos_di + neg_di), 0.0)
+
+        adx = smma(dx, period)
+
+        last_adx = float(adx[-1])
+        return round(last_adx, 2) if not np.isnan(last_adx) else None
+    except Exception:
+        return None
+
+
+def detect_candle_pattern(df: pd.DataFrame) -> Dict[str, Any]:
+    """
+    Detect reversal candle patterns on the latest closed candles.
+    Checks for: Engulfing, Pin Bar (Hammer/Shooting Star), Doji.
+    Returns: {"pattern": str|None, "bullish": bool}
+    """
+    if df.empty or len(df) < 2:
+        return {"pattern": None, "bullish": False}
+
+    try:
+        # We look at the last two candles
+        curr = df.iloc[-1]
+        prev = df.iloc[-2]
+
+        c_open, c_high, c_low, c_close = float(curr["open"]), float(curr["high"]), float(curr["low"]), float(curr["close"])
+        p_open, p_high, p_low, p_close = float(prev["open"]), float(prev["high"]), float(prev["low"]), float(prev["close"])
+
+        c_body = abs(c_close - c_open)
+        c_range = c_high - c_low
+        p_body = abs(p_close - p_open)
+
+        if c_range == 0:
+            return {"pattern": None, "bullish": False}
+
+        c_is_bullish = c_close > c_open
+        p_is_bullish = p_close > p_open
+
+        c_upper_wick = c_high - max(c_open, c_close)
+        c_lower_wick = min(c_open, c_close) - c_low
+
+        # 1. Engulfing
+        # Bullish Engulfing: prev is red, curr is green, curr body engulfs prev body
+        if not p_is_bullish and c_is_bullish and c_close >= p_open and c_open <= p_close and c_body > p_body:
+            return {"pattern": "engulfing", "bullish": True}
+        
+        # Bearish Engulfing: prev is green, curr is red, curr body engulfs prev body
+        if p_is_bullish and not c_is_bullish and c_close <= p_open and c_open >= p_close and c_body > p_body:
+            return {"pattern": "engulfing", "bullish": False}
+
+        # 2. Pin Bar
+        # Bullish Pin Bar (Hammer): long lower wick (> 2x body), small upper wick, close in top 30% of range
+        if c_lower_wick > (2 * c_body) and c_upper_wick < c_body and (c_close - c_low) / c_range > 0.7:
+            return {"pattern": "pin_bar", "bullish": True}
+        
+        # Bearish Pin Bar (Shooting Star): long upper wick (> 2x body), small lower wick, close in bottom 30% of range
+        if c_upper_wick > (2 * c_body) and c_lower_wick < c_body and (c_high - c_close) / c_range > 0.7:
+            return {"pattern": "pin_bar", "bullish": False}
+
+        # 3. Doji
+        # Real body is less than 5% of total candle range
+        if c_body <= (c_range * 0.05) and c_range > (c_close * 0.001): # Ensure range is not just a flatline
+            # Doji doesn't inherently have a direction, but it indicates exhaustion.
+            # We can classify it as neutral/none for strong directional booster, but let's return it
+            return {"pattern": "doji", "bullish": False} # bullish flag means nothing here
+
+        return {"pattern": None, "bullish": False}
+    except Exception:
+        return {"pattern": None, "bullish": False}

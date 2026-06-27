@@ -1,4 +1,4 @@
-"""Trading setups API endpoints — V3 uses REAL Binance data + full macro integration."""
+"""Trading setups API endpoints — V4 uses REAL Binance data + full macro integration + Phase 3 Power Features."""
 
 from fastapi import APIRouter, Depends, Query
 from app.security import require_api_key
@@ -10,23 +10,27 @@ from app.models.trade_setup import TradeSetup
 from app.engines.market_data import MarketDataEngine
 from app.engines.market_structure import MarketStructureAnalyzer
 from app.engines.smart_money import SmartMoneyConceptsEngine
-from app.engines.confluence import ConfluenceEngine
+from app.engines.confluence import ConfluenceEngine, MAX_SCORE
 from app.engines.setup_generator import SetupGenerator
 from app.engines.mtf_confirmation import MTFConfirmationEngine
 from app.engines.sentiment import SentimentEngine
 from app.engines.news_calendar import NewsCalendarEngine
+from app.engines.market_intel import MarketIntelEngine
 from app.schemas.trade_setup import SetupStatusUpdate
 
 router = APIRouter(prefix="/api/v1/setups", tags=["Trading Setups"])
 
-setup_gen = SetupGenerator(min_confluence_score=14, min_rr=1.8)
-confluence_engine = ConfluenceEngine()
+# Phase 3: min score = 16 (threshold recalibrated for max_score=36)
+MIN_SCORE = 16
+setup_gen = SetupGenerator(min_confluence_score=MIN_SCORE, min_rr=1.8)
+confluence_engine = ConfluenceEngine(min_confluence_score=MIN_SCORE)
 smc_engine = SmartMoneyConceptsEngine()
 structure_analyzer = MarketStructureAnalyzer()
 data_engine = MarketDataEngine()
 mtf_engine = MTFConfirmationEngine()
 sentiment_engine = SentimentEngine()
 news_engine = NewsCalendarEngine()
+market_intel_engine = MarketIntelEngine()
 
 
 def _sanitize_details(details: dict) -> dict:
@@ -112,22 +116,46 @@ async def generate_setup(
 
     # MTF Confirmation
     mtf_result = mtf_engine.analyze(candles_by_tf, symbol.upper())
-
     structure = structure_analyzer.analyze(entry_df, symbol.upper(), timeframe)
     smc = smc_engine.analyze(entry_df, symbol.upper(), timeframe)
+
+    # Phase 3: Fetch Market Intel (OI, order book, S&R) + Volume Delta
+    latest_price = float(entry_df.iloc[-1]["close"]) if not entry_df.empty else 0
+    market_intel_data = None
+    volume_delta = None
+    try:
+        market_intel_data = await market_intel_engine.get_overview(
+            symbol.upper(), df=entry_df, current_price=latest_price
+        )
+    except Exception:
+        pass
+
     confluence = confluence_engine.score(
         candles_by_tf, symbol.upper(), timeframe,
         sentiment_data=sentiment_data,
         news_events=news_events,
         mtf_result=mtf_result,
+        market_intel_data=market_intel_data,
     )
 
-    # Generate setup (V3 — 8 quality gates)
+    # Phase 3: Volume Delta (only if score is promising, to save API calls)
+    if confluence.total_score >= 12:
+        try:
+            from app.engines.order_flow_engine import order_flow_engine
+            footprint = await order_flow_engine.get_footprint(symbol.upper(), timeframe, limit=1)
+            if footprint and len(footprint) > 0:
+                volume_delta = footprint[-1].get("delta", 0)
+        except Exception:
+            pass
+
+    # Generate setup (V4 — full Phase 3 power features)
     setup = setup_gen.generate(
         symbol.upper(), timeframe, confluence, smc, structure, entry_df,
         mtf_result=mtf_result,
         news_events=news_events,
         sentiment_data=sentiment_data,
+        market_intel_data=market_intel_data,
+        volume_delta=volume_delta,
     )
 
     if setup:
@@ -174,13 +202,13 @@ async def generate_setup(
         return {
             "setup": db_setup.to_dict(),
             "confluence": confluence.model_dump(),
-            "message": f"✅ High-quality {setup.direction} setup generated for {symbol} (Score: {confluence.total_score}/{confluence.max_score}, R:R 1:{setup.risk_reward})",
+            "message": f"High-quality {setup.direction} setup generated for {symbol} (Score: {confluence.total_score}/{confluence.max_score}, R:R 1:{setup.risk_reward})",
         }
 
     return {
         "setup": None,
         "confluence": confluence.model_dump(),
-        "message": f"No setup generated for {symbol} — Score: {confluence.total_score}/{confluence.max_score} (min required: 14/30).",
+        "message": f"No setup generated for {symbol} — Score: {confluence.total_score}/{confluence.max_score} (min required: {MIN_SCORE}/{MAX_SCORE}).",
     }
 
 

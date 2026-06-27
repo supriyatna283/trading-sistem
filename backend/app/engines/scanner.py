@@ -41,7 +41,7 @@ class MarketScanner:
         self.structure = MarketStructureAnalyzer()
         self.smc = SmartMoneyConceptsEngine()
         self.confluence = ConfluenceEngine()
-        self.setup_gen = SetupGenerator(min_confluence_score=14, min_rr=1.8)
+        self.setup_gen = SetupGenerator(min_confluence_score=16, min_rr=1.8)
         self.mtf_engine = MTFConfirmationEngine()
         self.sentiment_engine = SentimentEngine()
         self.news_engine = NewsCalendarEngine()
@@ -55,6 +55,27 @@ class MarketScanner:
             # Fetch dynamic symbols if no specific list provided
             all_syms = await self.data_engine.fetch_symbols()
             symbols = [s["symbol"] for s in all_syms]
+
+        # --- PERPETUAL LIQUIDITY FILTER ---
+        # Only scan pairs that meet minimum liquidity requirements.
+        # This prevents false signals from illiquid markets.
+        PRIORITY_PERPETUALS = [
+            # Major
+            "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+            # Large Cap
+            "ADAUSDT", "AVAXUSDT", "DOGEUSDT", "DOTUSDT", "LINKUSDT",
+            "MATICUSDT", "UNIUSDT", "AAVEUSDT", "ATOMUSDT", "LTCUSDT",
+            "NEARUSDT", "FILUSDT", "APTUSDT", "ARBUSDT", "OPUSDT",
+            "INJUSDT", "SUIUSDT", "TIAUSDT", "WIFUSDT", "JUPUSDT",
+            # DeFi
+            "SEIUSDT", "STRKUSDT", "PYTHUSDT", "JITOUSDT",
+        ]
+        # Intersect: keep only pairs that are both in the fetched list AND in our priority list
+        # If the list is smaller than priority list (e.g. new pairs), allow it through
+        fetched_set = set(symbols)
+        filtered = [s for s in PRIORITY_PERPETUALS if s in fetched_set]
+        # If filter yields nothing (API returned different symbols), use the raw list capped at 50
+        symbols = filtered if filtered else symbols[:50]
 
         # Fetch macro context once for all symbols (shared data)
         sentiment_data, news_events, btc_dominance = await self._fetch_macro_context()
@@ -208,6 +229,17 @@ class MarketScanner:
         else:
             liq_status = "No clear liquidity"
 
+        # Volume Delta Filter (Phase 3) - Only fetch if confluence is decent to save API limits
+        volume_delta = None
+        if conf.total_score >= 12:
+            try:
+                from app.engines.order_flow_engine import order_flow_engine
+                footprint = await order_flow_engine.get_footprint(symbol, "1h", limit=1)
+                if footprint and len(footprint) > 0:
+                    volume_delta = footprint[-1].get("delta", 0)
+            except Exception as e:
+                pass
+
         # Setup generation (V4 — passes market intel for explanation enrichment)
         setup = self.setup_gen.generate(
             symbol, "1h", conf, smc, structure, entry_df,
@@ -215,6 +247,7 @@ class MarketScanner:
             news_events=news_events,
             sentiment_data=sentiment_data,
             market_intel_data=market_intel_data,
+            volume_delta=volume_delta,
         )
         if setup:
             setup_status = f"{setup.direction} setup"
@@ -248,9 +281,9 @@ class MarketScanner:
         det = conf.details
         score_breakdown = {
             "STR": round((det.get("htf_bias", {}).get("score", 0) + det.get("structure", {}).get("score", 0) + det.get("mtf_confirmation", {}).get("score", 0)) / 4 * 20),
-            "PA":  round((det.get("rsi", {}).get("score", 0) + det.get("ema", {}).get("score", 0) + det.get("macd", {}).get("score", 0) + det.get("bollinger_bands", {}).get("score", 0) + det.get("stoch_rsi", {}).get("score", 0)) / 7 * 20),
+            "PA":  round((det.get("rsi", {}).get("score", 0) + det.get("ema", {}).get("score", 0) + det.get("macd", {}).get("score", 0) + det.get("bollinger_bands", {}).get("score", 0) + det.get("stoch_rsi", {}).get("score", 0) + det.get("divergence", {}).get("score", 0)) / 9 * 20),
             "SMC": round((det.get("liquidity", {}).get("score", 0) + det.get("order_block", {}).get("score", 0) + det.get("fvg", {}).get("score", 0) + det.get("premium_discount", {}).get("score", 0)) / 6 * 20),
-            "VOL": round(det.get("volume", {}).get("score", 0) / 1 * 20),
+            "VOL": round((det.get("volume", {}).get("score", 0) + det.get("vwap", {}).get("score", 0) + det.get("volume_profile", {}).get("score", 0)) / 5 * 20),
             "TIM": round((det.get("session", {}).get("score", 0) + det.get("news", {}).get("score", 0) + det.get("sentiment", {}).get("score", 0)) / 3 * 10),
             "RR":  round((det.get("btc_dominance", {}).get("score", 0) + det.get("orderbook", {}).get("score", 0) + det.get("liquidation", {}).get("score", 0) + det.get("market_cap", {}).get("score", 0) + det.get("support_resistance", {}).get("score", 0)) / 6 * 10),
         }

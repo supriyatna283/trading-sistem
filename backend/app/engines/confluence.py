@@ -19,6 +19,7 @@ from app.utils.indicators import (
     calculate_rsi, calculate_ema, calculate_macd,
     calculate_bollinger_bands, calculate_stoch_rsi,
     calculate_vwap, calculate_volume_profile, detect_divergence,
+    calculate_adx, detect_candle_pattern
 )
 
 
@@ -55,9 +56,12 @@ SCORE_WEIGHTS = {
     "volume_profile_poc": 2,     # Price near POC / inside Value Area
     "rsi_divergence": 1,         # RSI divergence confirms reversal direction
     "macd_divergence": 1,        # MACD divergence reinforces RSI divergence
+    # --- TIER 2 — Power Features (3 pts) ---
+    "candle_pattern_aligned": 2, # Engulfing or Pin Bar confirms entry
+    "open_interest_increasing": 1,# Fresh capital supports move
 }
 
-MAX_SCORE = sum(SCORE_WEIGHTS.values())  # 30 (24 base + 6 Tier 1)
+MAX_SCORE = sum(SCORE_WEIGHTS.values())  # 33
 
 # Session windows (UTC hours)
 LONDON_SESSION = (8, 16)   # 08:00 - 16:00 UTC
@@ -67,7 +71,7 @@ NY_SESSION = (13, 21)      # 13:00 - 21:00 UTC
 class ConfluenceEngine:
     """V4 — Scores trade setups with market intelligence + multi-timeframe confluence."""
 
-    def __init__(self, min_confluence_score: int = 14):
+    def __init__(self, min_confluence_score: int = 16):
         self.structure_analyzer = MarketStructureAnalyzer()
         self.smc_engine = SmartMoneyConceptsEngine()
         self.min_confluence_score = min_confluence_score
@@ -422,6 +426,44 @@ class ConfluenceEngine:
             ),
         }
 
+        # T5. ADX Trend Strength Filter
+        adx_val = calculate_adx(entry_df)
+        if adx_val is not None and adx_val < 20:
+            # Soft penalty for ranging market
+            total_score = max(0, total_score - 2)
+        details["adx"] = {
+            "value": adx_val,
+            "penalty": -2 if (adx_val is not None and adx_val < 20) else 0
+        }
+
+        # T6. Candle Pattern Confirmation
+        pattern_data = detect_candle_pattern(entry_df)
+        pattern_ok = pattern_data["pattern"] is not None and (
+            (structure.bias == "BULLISH" and pattern_data["bullish"]) or
+            (structure.bias == "BEARISH" and not pattern_data["bullish"])
+        )
+        if pattern_ok:
+            total_score += SCORE_WEIGHTS["candle_pattern_aligned"]
+        details["candle_pattern"] = {
+            "aligned": pattern_ok,
+            "pattern": pattern_data["pattern"],
+            "score": SCORE_WEIGHTS["candle_pattern_aligned"] if pattern_ok else 0,
+        }
+
+        # T7. Open Interest Change
+        oi_ok = False
+        if market_intel_data and "open_interest" in market_intel_data:
+            oi_trend = market_intel_data["open_interest"].get("trend", "flat")
+            if oi_trend == "increasing":
+                oi_ok = True
+        if oi_ok:
+            total_score += SCORE_WEIGHTS["open_interest_increasing"]
+        details["open_interest"] = {
+            "aligned": oi_ok,
+            "trend": market_intel_data["open_interest"].get("trend", "flat") if market_intel_data and "open_interest" in market_intel_data else "flat",
+            "score": SCORE_WEIGHTS["open_interest_increasing"] if oi_ok else 0,
+        }
+
         # Determine recommendation
         recommendation = self._get_recommendation(total_score, structure.bias, htf_biases)
 
@@ -731,12 +773,12 @@ class ConfluenceEngine:
         # For BUY: short liquidation cluster above price = magnet pulling price up
         if bias == "BULLISH":
             distance_to_short_liq = abs(cluster_high - last_close) / last_close * 100
-            return distance_to_short_liq < 15  # Within 15%
+            return distance_to_short_liq < 5  # Within 5%
 
         # For SELL: long liquidation cluster below price = magnet pulling price down
         if bias == "BEARISH":
             distance_to_long_liq = abs(last_close - cluster_low) / last_close * 100
-            return distance_to_long_liq < 15
+            return distance_to_long_liq < 5
 
         return False
 

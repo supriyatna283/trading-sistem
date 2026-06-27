@@ -342,7 +342,7 @@ export default function SetupsPage() {
                     </div>
                   </div>
 
-                   {/* ── Tier 1 Institutional Indicators ────────── */}
+                  {/* ── Tier 1 Institutional Indicators ────────── */}
                   {(() => {
                     const vwap = details.vwap || {};
                     const vp = details.volume_profile || {};
@@ -434,6 +434,61 @@ export default function SetupsPage() {
                             </div>
                           </div>
                         )}
+                      </div>
+                    );
+                  })()}
+
+                  {/* ── TIER 2: Phase 3 Power Features ──────────── */}
+                  {(() => {
+                    const adx = details.adx || {};
+                    const cp = details.candle_pattern || {};
+                    const oi = details.open_interest || {};
+                    const hasAny = adx.value != null || cp.pattern || oi.trend;
+                    if (!hasAny) return null;
+                    return (
+                      <div style={{ background: "rgba(245,158,11,0.03)", border: "1px solid rgba(245,158,11,0.15)", borderRadius: 12, padding: "14px 16px", marginBottom: 14 }}>
+                        <div style={{ fontSize: "0.62rem", fontWeight: 800, color: "#f59e0b", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 12 }}>
+                          ⚡ Phase 3: Power Features
+                        </div>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                          {/* ADX */}
+                          {adx.value != null && (
+                            <div style={{ background: "rgba(255,255,255,0.03)", borderRadius: 8, padding: "8px 10px", border: adx.penalty < 0 ? "1px solid rgba(239,68,68,0.25)" : "1px solid rgba(255,255,255,0.06)" }}>
+                              <div style={{ fontSize: "0.55rem", fontWeight: 800, color: "var(--text-muted)", marginBottom: 4 }}>ADX (14)</div>
+                              <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "0.82rem", fontWeight: 900, color: adx.value >= 25 ? "#10b981" : adx.value >= 20 ? "#f59e0b" : "#ef4444" }}>
+                                {adx.value}
+                              </div>
+                              <div style={{ fontSize: "0.55rem", color: adx.value >= 25 ? "#10b981" : adx.value >= 20 ? "#f59e0b" : "#ef4444", fontWeight: 700, marginTop: 2 }}>
+                                {adx.value >= 25 ? "TRENDING" : adx.value >= 20 ? "WEAK" : "RANGING"}
+                                {adx.penalty < 0 && <span style={{ color: "#ef4444", marginLeft: 4 }}>({adx.penalty})</span>}
+                              </div>
+                            </div>
+                          )}
+                          {/* Candle Pattern */}
+                          {cp.pattern && (
+                            <div style={{ background: "rgba(255,255,255,0.03)", borderRadius: 8, padding: "8px 10px", border: cp.aligned ? "1px solid rgba(16,185,129,0.25)" : "1px solid rgba(255,255,255,0.06)" }}>
+                              <div style={{ fontSize: "0.55rem", fontWeight: 800, color: "var(--text-muted)", marginBottom: 4 }}>PATTERN</div>
+                              <div style={{ fontSize: "0.68rem", fontWeight: 800, color: cp.aligned ? "#10b981" : "#94a3b8", textTransform: "capitalize" }}>
+                                {cp.pattern?.replace("_", " ")}
+                              </div>
+                              <div style={{ fontSize: "0.55rem", color: cp.aligned ? "#10b981" : "var(--text-muted)", fontWeight: 700, marginTop: 2 }}>
+                                {cp.aligned ? `+${cp.score}pts` : "No Match"}
+                              </div>
+                            </div>
+                          )}
+                          {/* OI Trend */}
+                          {oi.trend && (
+                            <div style={{ background: "rgba(255,255,255,0.03)", borderRadius: 8, padding: "8px 10px", border: oi.aligned ? "1px solid rgba(139,92,246,0.25)" : "1px solid rgba(255,255,255,0.06)" }}>
+                              <div style={{ fontSize: "0.55rem", fontWeight: 800, color: "var(--text-muted)", marginBottom: 4 }}>OPEN INT.</div>
+                              <div style={{ fontSize: "0.68rem", fontWeight: 800, color: oi.trend === "increasing" ? "#a78bfa" : oi.trend === "decreasing" ? "#ef4444" : "#94a3b8" }}>
+                                {oi.trend === "increasing" ? "▲ RISING" : oi.trend === "decreasing" ? "▼ FALLING" : "→ FLAT"}
+                              </div>
+                              <div style={{ fontSize: "0.55rem", color: oi.aligned ? "#a78bfa" : "var(--text-muted)", fontWeight: 700, marginTop: 2 }}>
+                                {oi.aligned ? `+${oi.score}pts` : "No Boost"}
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     );
                   })()}

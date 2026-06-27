@@ -313,6 +313,55 @@ class MarketIntelEngine:
         return levels
 
     # -----------------------------------------------------------------
+    # 6. Open Interest Trend (OKX)
+    # -----------------------------------------------------------------
+    async def get_open_interest_trend(self, symbol: str) -> Dict[str, Any]:
+        """
+        Fetch Open Interest data from OKX to see if it's increasing or decreasing.
+        Uses a local cache to compare previous scans.
+        """
+        now = time.time()
+        cache_key = symbol.upper()
+
+        if not hasattr(self, "_oi_cache"):
+            self._oi_cache = {}
+
+        try:
+            base = symbol.upper().replace("USDT", "")
+            instId = f"{base}-USDT-SWAP"
+            url = f"https://www.okx.com/api/v5/public/open-interest"
+            resp = await self.client.get(url, params={"instId": instId})
+            resp.raise_for_status()
+            data = resp.json()
+
+            if data.get("code") == "0" and data.get("data"):
+                current_oi = float(data["data"][0].get("oi", 0))
+                
+                trend = "flat"
+                change_pct = 0.0
+                
+                if cache_key in self._oi_cache:
+                    prev_oi = self._oi_cache[cache_key]["value"]
+                    if prev_oi > 0:
+                        change_pct = (current_oi - prev_oi) / prev_oi * 100
+                        if change_pct > 0.5:
+                            trend = "increasing"
+                        elif change_pct < -0.5:
+                            trend = "decreasing"
+                
+                self._oi_cache[cache_key] = {"value": current_oi, "ts": now}
+                
+                return {
+                    "trend": trend,
+                    "value": current_oi,
+                    "change_pct": round(change_pct, 2)
+                }
+        except Exception as e:
+            logger.debug(f"Failed to fetch OI for {symbol}: {e}")
+            
+        return {"trend": "flat", "value": 0, "change_pct": 0}
+
+    # -----------------------------------------------------------------
     # Combined overview for one symbol
     # -----------------------------------------------------------------
     async def get_overview(self, symbol: str, df: pd.DataFrame = None, current_price: float = 0) -> Dict[str, Any]:
@@ -320,6 +369,7 @@ class MarketIntelEngine:
         btc_dom = await self.get_btc_dominance()
         orderbook = await self.get_order_book_depth(symbol)
         mcap = await self.get_market_cap(symbol)
+        oi_trend = await self.get_open_interest_trend(symbol)
 
         liq_levels = self.calculate_liquidation_levels(current_price or orderbook.get("best_bid", 0), symbol)
         sr_levels = self.calculate_support_resistance(df, symbol) if df is not None and not df.empty else {}
@@ -330,6 +380,7 @@ class MarketIntelEngine:
             "liquidation": liq_levels,
             "market_cap": mcap,
             "support_resistance": sr_levels,
+            "open_interest": oi_trend,
         }
 
     async def close(self):

@@ -40,6 +40,7 @@ class SetupGenerator:
         news_events: Optional[List[Dict]] = None,
         sentiment_data: Optional[Dict] = None,
         market_intel_data: Optional[Dict] = None,
+        volume_delta: Optional[float] = None,
     ) -> Optional[TradeSetupSchema]:
         """Generate a setup ONLY if ALL quality gates pass."""
 
@@ -93,6 +94,15 @@ class SetupGenerator:
             _reject("structure", "no BOS/CHOCH confirmed on entry TF")
             return None  # No structure confirmation = unvalidated direction
 
+        # Phase 3: Volume Delta Mandatory Filter (if order flow data is available)
+        if volume_delta is not None:
+            if direction == "BUY" and volume_delta < 0:
+                _reject("volume_delta", f"direction=BUY but volume_delta={volume_delta} < 0")
+                return None
+            if direction == "SELL" and volume_delta > 0:
+                _reject("volume_delta", f"direction=SELL but volume_delta={volume_delta} > 0")
+                return None
+
         last_price = float(df.iloc[-1]["close"])
         entry_low, entry_high, sl, tp1, tp2, tp3 = self._calculate_levels(
             direction, last_price, smc, df
@@ -118,7 +128,7 @@ class SetupGenerator:
         # rather than being strict blockers, to maximize signal generation based on core technicals.
 
         # Build detailed explanation (V4 — includes market intel)
-        explanation = self._build_explanation(confluence, direction, rr, market_intel_data)
+        explanation = self._build_explanation(confluence, direction, rr, market_intel_data, volume_delta)
         setup_type = self._build_setup_type(confluence, direction)
 
         logger.info(
@@ -254,7 +264,7 @@ class SetupGenerator:
         # Return the nearest (lowest) swing high above reference
         return min(swing_highs)
 
-    def _build_explanation(self, confluence: ConfluenceResult, direction: str, rr: float, market_intel_data: Optional[Dict] = None) -> str:
+    def _build_explanation(self, confluence: ConfluenceResult, direction: str, rr: float, market_intel_data: Optional[Dict] = None, volume_delta: Optional[float] = None) -> str:
         """Build a professional explanation string."""
         parts = []
         details = confluence.details
@@ -306,6 +316,21 @@ class SetupGenerator:
 
         if details.get("macd", {}).get("aligned"):
             parts.append("MACD Momentum aligned")
+
+        # --- Phase 3: Power Features ---
+        if details.get("adx", {}).get("value") is not None:
+            adx = details["adx"]["value"]
+            parts.append(f"ADX Trend Strength: {adx}")
+
+        if details.get("candle_pattern", {}).get("aligned"):
+            pattern = details["candle_pattern"].get("pattern", "unknown").replace("_", " ").title()
+            parts.append(f"Candle Pattern Confirmed: {pattern}")
+
+        if details.get("open_interest", {}).get("aligned"):
+            parts.append(f"Open Interest Increasing (+)")
+            
+        if volume_delta is not None:
+            parts.append(f"Volume Delta Confirmed ({volume_delta})")
 
         parts.append(f"R:R = 1:{rr}")
         parts.append(f"Confluence Score: {confluence.total_score}/{confluence.max_score}")

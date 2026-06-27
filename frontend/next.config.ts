@@ -10,6 +10,7 @@ const withPWA = withPWAInit({
 const nextConfig: NextConfig = {
   // Rewrites removed to bypass proxy issues (ECONNRESET)
   // The frontend now directly fetches from NEXT_PUBLIC_API_URL
+  turbopack: {},
 };
 
 export default withPWA(nextConfig);
