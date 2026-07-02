@@ -13,6 +13,7 @@ import {
   LineData,
   ColorType,
 } from "lightweight-charts";
+import { formatPrice as fmtPrice, API_URL } from "@/lib/utils";
 
 // ---------------------------------------------------------------
 // Prop Types
@@ -75,14 +76,21 @@ interface IndicatorState {
 }
 
 type ChartStyle = "candlestick" | "line" | "area";
+type DrawingMode = "none" | "hline" | "fibonacci";
 
 const TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"];
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
 const WS_RECONNECT_DELAY = 3000;
+
+// localStorage key for persistent drawings
+const drawingsStorageKey = (symbol: string) => `chart-drawings-${symbol}`;
 
 // ---------------------------------------------------------------
 // Calculation Helpers
 // ---------------------------------------------------------------
+function formatPrice(val: number): string {
+  return fmtPrice(val);
+}
+
 function priceLine(
   series: ISeriesApi<"Candlestick"> | ISeriesApi<"Line"> | ISeriesApi<"Area">,
   price: number,
@@ -187,7 +195,6 @@ function calculateMACD(data: any[], fast = 12, slow = 26, signal = 9) {
     macdLine.push({ time: emaFast[i].time, value: fVal - sVal });
   }
 
-  // Signal line (EMA of MACD)
   const signalLine: LineData<Time>[] = [];
   if (macdLine.length >= signal) {
     const k = 2 / (signal + 1);
@@ -198,7 +205,6 @@ function calculateMACD(data: any[], fast = 12, slow = 26, signal = 9) {
     }
   }
 
-  // Histogram
   const histogram: HistogramData<Time>[] = [];
   for (let i = 0; i < macdLine.length; i++) {
     const sig = signalLine[i]?.value ?? 0;
@@ -232,13 +238,6 @@ function calculateBollingerBands(data: any[], period = 20, stdDev = 2) {
     lower.push({ time: t, value: avg - stdDev * sd });
   }
   return { upper, middle, lower };
-}
-
-function formatPrice(val: number): string {
-  if (!val && val !== 0) return "-";
-  return val > 10
-    ? val.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-    : val.toFixed(5);
 }
 
 // ---------------------------------------------------------------
@@ -297,14 +296,14 @@ export default function TradingViewChart({
   const chartDataRef = useRef<any[]>([]);
 
   const [isLoading, setIsLoading] = useState(true);
-  const [interval, setInterval_TF] = useState(timeframeInterval);
+  const [hasError, setHasError] = useState(false);
+  const [timeframe, setTimeframe] = useState(timeframeInterval);
   const [smcData, setSmcData] = useState<{ orderBlocks: OrderBlockOverlay[]; fvgs: FVGOverlay[] } | null>(null);
   const [smcStructure, setSmcStructure] = useState<StructureMarker[]>([]);
   const [wsStatus, setWsStatus] = useState<"connecting" | "live" | "disconnected">("connecting");
   const [chartStyle, setChartStyle] = useState<ChartStyle>("candlestick");
   const chartStyleRef = useRef<ChartStyle>("candlestick");
   chartStyleRef.current = chartStyle;
-  const [showIndicatorPanel, setShowIndicatorPanel] = useState(false);
   const [indicators, setIndicators] = useState<IndicatorState>({
     ema20: true, ema50: false, ema200: true, volume: true,
     smcZones: true, bollingerBands: false, rsi: true, stochRsi: false, macd: false,
@@ -321,17 +320,20 @@ export default function TradingViewChart({
   const [srLevels, setSrLevels] = useState<{ supports: number[]; resistances: number[] }>({ supports: [], resistances: [] });
 
   // Drawing tool state
-  const [drawingMode, setDrawingMode] = useState<"none" | "hline">("none");
-  const [drawingsCount, setDrawingsCount] = useState(0); // reactive count for Clear button
+  const [drawingMode, setDrawingMode] = useState<DrawingMode>("none");
+  const [drawingsCount, setDrawingsCount] = useState(0);
   const userDrawingsRef = useRef<any[]>([]);
 
-  // ── Countdown Timer (fixed for 4h/1d candle boundaries) ──
+  // Fibonacci state
+  const [fibAnchor, setFibAnchor] = useState<{ price: number } | null>(null);
+  const fibLinesRef = useRef<any[]>([]);
+
+  // ── Countdown Timer ──
   useEffect(() => {
     const tfMs: Record<string, number> = { "1m": 60000, "5m": 300000, "15m": 900000, "1h": 3600000, "4h": 14400000, "1d": 86400000 };
     const updateCountdown = () => {
-      const ms = tfMs[interval] || 3600000;
+      const ms = tfMs[timeframe] || 3600000;
       const now = Date.now();
-      // Binance candle boundaries are aligned to UTC epoch multiples of the interval
       const currentCandleStart = Math.floor(now / ms) * ms;
       const nextCandleStart = currentCandleStart + ms;
       const remaining = Math.max(0, Math.floor((nextCandleStart - now) / 1000));
@@ -346,19 +348,19 @@ export default function TradingViewChart({
     updateCountdown();
     const timer = setInterval(updateCountdown, 1000);
     return () => clearInterval(timer);
-  }, [interval]);
+  }, [timeframe]);
 
-  // ── ESC key handler for drawing mode ──
+  // ── ESC key handler ──
   useEffect(() => {
     if (drawingMode === "none") return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setDrawingMode("none");
+      if (e.key === "Escape") { setDrawingMode("none"); setFibAnchor(null); }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [drawingMode]);
 
-  useEffect(() => { setInterval_TF(timeframeInterval); }, [timeframeInterval]);
+  useEffect(() => { setTimeframe(timeframeInterval); }, [timeframeInterval]);
 
   // ── Effective overlays ──
   const effectiveOBs = orderBlocks.length > 0 ? orderBlocks : (smcData?.orderBlocks ?? []);
@@ -387,16 +389,33 @@ export default function TradingViewChart({
     } catch (e) { console.warn("SMC fetch failed:", e); }
   }, [autoFetchSMC]);
 
-  // ── Fetch S/R levels ──
+  // ── Fetch S/R levels — also re-fetched when timeframe changes ──
   const fetchSR = useCallback(async (sym: string, tf: string) => {
     try {
       const res = await fetch(`${API_URL}/api/v1/market-intel/support-resistance/${sym}?timeframe=${tf}`);
-      const data = await res.json();
+      const d = await res.json();
       setSrLevels({
-        supports: data.supports || [],
-        resistances: data.resistances || [],
+        supports: d.supports || [],
+        resistances: d.resistances || [],
       });
     } catch (e) { console.warn("S/R fetch failed:", e); }
+  }, []);
+
+  // Re-fetch S/R when timeframe changes (not just on mount)
+  useEffect(() => {
+    if (symbol && timeframe) fetchSR(symbol, timeframe);
+  }, [symbol, timeframe, fetchSR]);
+
+  // ── Load/save drawings via localStorage ──
+  const saveDrawings = useCallback((sym: string, drawings: { price: number; label: string }[]) => {
+    try { localStorage.setItem(drawingsStorageKey(sym), JSON.stringify(drawings)); } catch (_) {}
+  }, []);
+
+  const loadSavedDrawings = useCallback((sym: string): { price: number; label: string }[] => {
+    try {
+      const raw = localStorage.getItem(drawingsStorageKey(sym));
+      return raw ? JSON.parse(raw) : [];
+    } catch (_) { return []; }
   }, []);
 
   // ── Clear price lines ──
@@ -431,8 +450,8 @@ export default function TradingViewChart({
 
     // S/R lines
     if (indicators.supportResistance) {
-      srLevels.supports.slice(0, 3).forEach((s, i) => {
-        lines.push(priceLine(series, s, `S${i + 1}`, "rgba(34,197,94,0.6)", LineStyle.Dashed, 1));
+      srLevels.supports.slice(0, 3).forEach((sv, i) => {
+        lines.push(priceLine(series, sv, `S${i + 1}`, "rgba(34,197,94,0.6)", LineStyle.Dashed, 1));
       });
       srLevels.resistances.slice(0, 3).forEach((r, i) => {
         lines.push(priceLine(series, r, `R${i + 1}`, "rgba(239,68,68,0.6)", LineStyle.Dashed, 1));
@@ -495,7 +514,7 @@ export default function TradingViewChart({
     setIndicators(prev => ({ ...prev, [key]: !prev[key] }));
   }, []);
 
-  // Apply indicator visibility + trigger resize for sub-pane charts
+  // Apply indicator visibility
   useEffect(() => {
     ema20SeriesRef.current?.applyOptions({ visible: indicators.ema20 });
     ema50SeriesRef.current?.applyOptions({ visible: indicators.ema50 });
@@ -505,7 +524,6 @@ export default function TradingViewChart({
     bbMiddleRef.current?.applyOptions({ visible: indicators.bollingerBands });
     bbLowerRef.current?.applyOptions({ visible: indicators.bollingerBands });
 
-    // Fix: force sub-chart resize after display toggle (prevents blank panes)
     requestAnimationFrame(() => {
       if (indicators.rsi && rsiContainerRef.current && rsiChartRef.current) {
         rsiChartRef.current.applyOptions({ width: rsiContainerRef.current.clientWidth });
@@ -529,11 +547,8 @@ export default function TradingViewChart({
 
     try {
       setWsStatus("connecting");
-
-      // Binance kline stream — reliable, works directly in browser, no proxy needed
       const bnSymbol = sym.toLowerCase().replace("-", "");
-      const bnInterval = tf === "1d" ? "1d" : tf; // Binance uses same format
-      const wsUrl = `wss://stream.binance.com:9443/ws/${bnSymbol}@kline_${bnInterval}`;
+      const wsUrl = `wss://stream.binance.com:9443/ws/${bnSymbol}@kline_${tf}`;
 
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
@@ -543,7 +558,7 @@ export default function TradingViewChart({
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
-          const k = msg?.k; // Binance kline object
+          const k = msg?.k;
           if (!k) return;
 
           const tick: CandlestickData<Time> = {
@@ -563,13 +578,65 @@ export default function TradingViewChart({
             value: volValue,
             color:
               chartStyleRef.current !== "candlestick"
-                ? tick.close >= tick.open
-                  ? "rgba(34,197,94,0.1)"
-                  : "rgba(239,68,68,0.1)"
-                : tick.close >= tick.open
-                  ? "rgba(34,197,94,0.3)"
-                  : "rgba(239,68,68,0.3)",
+                ? tick.close >= tick.open ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)"
+                : tick.close >= tick.open ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)",
           });
+
+          // ── Realtime indicator recalculation ──
+          const currentData = chartDataRef.current;
+          if (!currentData.length) return;
+          // Update last candle in chartDataRef
+          const lastIdx = currentData.length - 1;
+          if ((currentData[lastIdx].time as number) === (tick.time as number)) {
+            currentData[lastIdx] = { ...currentData[lastIdx], ...tick };
+          } else {
+            currentData.push({ ...tick, volume: volValue });
+          }
+
+          // Recalc EMAs
+          if (ema20SeriesRef.current && indicators.ema20) {
+            const d = calculateEMA(currentData, 20);
+            if (d.length) ema20SeriesRef.current.update(d[d.length - 1]);
+          }
+          if (ema50SeriesRef.current && indicators.ema50) {
+            const d = calculateEMA(currentData, 50);
+            if (d.length) ema50SeriesRef.current.update(d[d.length - 1]);
+          }
+          if (ema200SeriesRef.current && indicators.ema200) {
+            const d = calculateEMA(currentData, 200);
+            if (d.length) ema200SeriesRef.current.update(d[d.length - 1]);
+          }
+
+          // Recalc BB
+          if (indicators.bollingerBands) {
+            const bb = calculateBollingerBands(currentData);
+            if (bb.upper.length) {
+              bbUpperRef.current?.update(bb.upper[bb.upper.length - 1]);
+              bbMiddleRef.current?.update(bb.middle[bb.middle.length - 1]);
+              bbLowerRef.current?.update(bb.lower[bb.lower.length - 1]);
+            }
+          }
+
+          // Recalc RSI
+          if (rsiSeriesRef.current && indicators.rsi) {
+            const rsiD = calculateRSI(currentData, 14);
+            if (rsiD.length) rsiSeriesRef.current.update(rsiD[rsiD.length - 1]);
+          }
+
+          // Recalc Stoch RSI
+          if (stochRsiKRef.current && stochRsiDRef.current && indicators.stochRsi) {
+            const stoch = calculateStochRSI(currentData, 14, 3, 3);
+            if (stoch.kLine.length) stochRsiKRef.current.update(stoch.kLine[stoch.kLine.length - 1]);
+            if (stoch.dLine.length) stochRsiDRef.current.update(stoch.dLine[stoch.dLine.length - 1]);
+          }
+
+          // Recalc MACD
+          if (macdHistRef.current && macdLineRef.current && macdSignalRef.current && indicators.macd) {
+            const m = calculateMACD(currentData);
+            if (m.histogram.length) macdHistRef.current.update(m.histogram[m.histogram.length - 1]);
+            if (m.macdLine.length) macdLineRef.current.update(m.macdLine[m.macdLine.length - 1]);
+            if (m.signalLine.length) macdSignalRef.current.update(m.signalLine[m.signalLine.length - 1]);
+          }
         } catch (e) { console.warn("WS message parse error:", e); }
       };
 
@@ -581,21 +648,27 @@ export default function TradingViewChart({
         }
       };
     } catch (err) { console.error("WS init failed:", err); setWsStatus("disconnected"); }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── WebSocket ──
-
-
-  // ---------------------------------------------------------------
-  // Chart theme config
-  // ---------------------------------------------------------------
+  // ── Chart config ──
   const chartOptions = {
-    autoSize: true,  // Smooth high-DPI/retina rendering + auto-resize
+    autoSize: true,
     layout: {
       background: { type: ColorType.Solid, color: "transparent" },
       textColor: "#8b95a9",
       fontFamily: "'Inter', sans-serif",
       fontSize: 11,
+    },
+    watermark: {
+      visible: true,
+      text: symbol,
+      color: "rgba(255,255,255,0.03)",
+      fontSize: 60,
+      fontFamily: "'Inter', sans-serif",
+      fontStyle: "bold",
+      horzAlign: "center",
+      vertAlign: "center",
     },
     grid: {
       vertLines: { color: "rgba(42, 49, 66, 0.25)" },
@@ -614,27 +687,23 @@ export default function TradingViewChart({
       borderColor: "rgba(42, 49, 66, 0.4)",
       timeVisible: true,
       secondsVisible: false,
-      minBarSpacing: 3,  // Smoother zoom levels
+      minBarSpacing: 3,
     },
     handleScroll: { mouseWheel: true, pressedMouseMove: true },
     handleScale: { axisPressedMouseMove: true, mouseWheel: true },
   };
 
-  // ---------------------------------------------------------------
-  // Main Chart + Sub-pane init
-  // ---------------------------------------------------------------
+  // ── Main Chart + Sub-pane init ──
   useEffect(() => {
     if (!mainContainerRef.current) return;
     wsDestroyedRef.current = false;
+    setHasError(false);
 
-    // Clean up any existing chart instances before creating new ones
-    // (handles React strict mode double-mounting without breaking React DOM)
     if (chartRef.current) { try { chartRef.current.remove(); } catch (_) {} chartRef.current = null; }
     if (rsiChartRef.current) { try { rsiChartRef.current.remove(); } catch (_) {} rsiChartRef.current = null; }
     if (stochRsiChartRef.current) { try { stochRsiChartRef.current.remove(); } catch (_) {} stochRsiChartRef.current = null; }
     if (macdChartRef.current) { try { macdChartRef.current.remove(); } catch (_) {} macdChartRef.current = null; }
 
-    // --- Main Chart ---
     const chart = createChart(mainContainerRef.current, chartOptions as any);
 
     const candleSeries = chart.addCandlestickSeries({
@@ -667,18 +736,15 @@ export default function TradingViewChart({
       visible: chartStyle === "area",
     });
 
-    // Volume
     const volumeSeries = chart.addHistogramSeries({
       color: "#26a69a", priceFormat: { type: "volume" }, priceScaleId: "",
     });
     chart.priceScale("").applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
 
-    // EMAs
     const ema20Series = chart.addLineSeries({ color: "rgba(59,130,246,0.9)", lineWidth: 1, crosshairMarkerVisible: false });
     const ema50Series = chart.addLineSeries({ color: "rgba(245,158,11,0.9)", lineWidth: 1, crosshairMarkerVisible: false, visible: false });
     const ema200Series = chart.addLineSeries({ color: "rgba(236,72,153,0.9)", lineWidth: 2, crosshairMarkerVisible: false });
 
-    // Bollinger Bands
     const bbUpper = chart.addLineSeries({ color: "rgba(147,51,234,0.5)", lineWidth: 1, crosshairMarkerVisible: false, visible: false });
     const bbMiddle = chart.addLineSeries({ color: "rgba(147,51,234,0.3)", lineWidth: 1, crosshairMarkerVisible: false, lineStyle: LineStyle.Dashed, visible: false });
     const bbLower = chart.addLineSeries({ color: "rgba(147,51,234,0.5)", lineWidth: 1, crosshairMarkerVisible: false, visible: false });
@@ -695,18 +761,16 @@ export default function TradingViewChart({
     bbMiddleRef.current = bbMiddle;
     bbLowerRef.current = bbLower;
 
-    // --- RSI Sub-Chart ---
+    // ── RSI Sub-Chart ──
     let rsiChart: IChartApi | null = null;
     let rsiSeries: ISeriesApi<"Line"> | null = null;
 
     if (rsiContainerRef.current) {
       rsiChart = createChart(rsiContainerRef.current, {
         ...chartOptions as any,
-        rightPriceScale: {
-          borderColor: "rgba(42,49,66,0.4)",
-          scaleMargins: { top: 0.1, bottom: 0.1 },
-        },
+        rightPriceScale: { borderColor: "rgba(42,49,66,0.4)", scaleMargins: { top: 0.1, bottom: 0.1 } },
         timeScale: { visible: false },
+        watermark: { visible: false },
       });
 
       rsiSeries = rsiChart.addLineSeries({
@@ -714,7 +778,6 @@ export default function TradingViewChart({
         priceFormat: { type: "custom", minMove: 0.01, formatter: (p: number) => p.toFixed(1) },
       });
 
-      // OB/OS bands
       rsiSeries.createPriceLine({ price: 70, color: "rgba(239,68,68,0.4)", lineStyle: LineStyle.Dashed, lineWidth: 1, axisLabelVisible: true, title: "" });
       rsiSeries.createPriceLine({ price: 30, color: "rgba(34,197,94,0.4)", lineStyle: LineStyle.Dashed, lineWidth: 1, axisLabelVisible: true, title: "" });
       rsiSeries.createPriceLine({ price: 50, color: "rgba(255,255,255,0.1)", lineStyle: LineStyle.Dotted, lineWidth: 1, axisLabelVisible: false, title: "" });
@@ -723,7 +786,7 @@ export default function TradingViewChart({
       rsiSeriesRef.current = rsiSeries;
     }
 
-    // --- STOCH RSI Sub-Chart ---
+    // ── STOCH RSI Sub-Chart ──
     let stochRsiChart: IChartApi | null = null;
     let stochRsiK: ISeriesApi<"Line"> | null = null;
     let stochRsiD: ISeriesApi<"Line"> | null = null;
@@ -731,11 +794,9 @@ export default function TradingViewChart({
     if (stochRsiContainerRef.current) {
       stochRsiChart = createChart(stochRsiContainerRef.current, {
         ...chartOptions as any,
-        rightPriceScale: {
-          borderColor: "rgba(42,49,66,0.4)",
-          scaleMargins: { top: 0.1, bottom: 0.1 },
-        },
+        rightPriceScale: { borderColor: "rgba(42,49,66,0.4)", scaleMargins: { top: 0.1, bottom: 0.1 } },
         timeScale: { visible: false },
+        watermark: { visible: false },
       });
 
       stochRsiK = stochRsiChart.addLineSeries({
@@ -747,7 +808,6 @@ export default function TradingViewChart({
         priceFormat: { type: "custom", minMove: 0.01, formatter: (p: number) => p.toFixed(1) },
       });
 
-      // OB/OS bands
       stochRsiK.createPriceLine({ price: 80, color: "rgba(239,68,68,0.4)", lineStyle: LineStyle.Dashed, lineWidth: 1, axisLabelVisible: true, title: "" });
       stochRsiK.createPriceLine({ price: 20, color: "rgba(34,197,94,0.4)", lineStyle: LineStyle.Dashed, lineWidth: 1, axisLabelVisible: true, title: "" });
       stochRsiK.createPriceLine({ price: 50, color: "rgba(255,255,255,0.1)", lineStyle: LineStyle.Dotted, lineWidth: 1, axisLabelVisible: false, title: "" });
@@ -757,7 +817,7 @@ export default function TradingViewChart({
       stochRsiDRef.current = stochRsiD;
     }
 
-    // --- MACD Sub-Chart ---
+    // ── MACD Sub-Chart ──
     let macdChart: IChartApi | null = null;
     let macdLineSeries: ISeriesApi<"Line"> | null = null;
     let macdSignalSeries: ISeriesApi<"Line"> | null = null;
@@ -766,11 +826,9 @@ export default function TradingViewChart({
     if (macdContainerRef.current) {
       macdChart = createChart(macdContainerRef.current, {
         ...chartOptions as any,
-        rightPriceScale: {
-          borderColor: "rgba(42,49,66,0.4)",
-          scaleMargins: { top: 0.1, bottom: 0.1 },
-        },
+        rightPriceScale: { borderColor: "rgba(42,49,66,0.4)", scaleMargins: { top: 0.1, bottom: 0.1 } },
         timeScale: { visible: false },
+        watermark: { visible: false },
       });
 
       macdHistSeries = macdChart.addHistogramSeries({
@@ -786,21 +844,21 @@ export default function TradingViewChart({
       macdHistRef.current = macdHistSeries;
     }
 
-    // Sync time scales (with guard to prevent infinite sync loops)
+    // ── Sync all time scales bidirectionally ──
     let isSyncing = false;
-    const syncFrom = (source: IChartApi, targets: (IChartApi | null)[]) => {
-      source.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+    const allCharts = [chart, rsiChart, stochRsiChart, macdChart].filter(Boolean) as IChartApi[];
+    allCharts.forEach(src => {
+      src.timeScale().subscribeVisibleLogicalRangeChange((range) => {
         if (!range || isSyncing) return;
         isSyncing = true;
-        targets.forEach(t => { if (t) t.timeScale().setVisibleLogicalRange(range); });
+        allCharts.forEach(target => {
+          if (target !== src) target.timeScale().setVisibleLogicalRange(range);
+        });
         isSyncing = false;
       });
-    };
-    const subCharts = [rsiChart, stochRsiChart, macdChart].filter(Boolean) as IChartApi[];
-    syncFrom(chart, subCharts);
-    subCharts.forEach(sub => syncFrom(sub, [chart]));
+    });
 
-    // OHLCV Tooltip
+    // ── OHLCV Tooltip ──
     chart.subscribeCrosshairMove((param) => {
       if (!param.time || !param.seriesData) {
         setTooltip(null);
@@ -810,38 +868,22 @@ export default function TradingViewChart({
       const time = param.time;
       const tKey = typeof time === "number" ? time : 0;
 
-      let open: number;
-      let high: number;
-      let low: number;
-      let close: number;
-      let vol = 0;
+      let open: number, high: number, low: number, close: number, vol = 0;
 
       if (style === "candlestick") {
         const candle = param.seriesData.get(candleSeries) as CandlestickData<Time> | undefined;
-        if (!candle || candle.open === undefined) {
-          setTooltip(null);
-          return;
-        }
-        open = candle.open;
-        high = candle.high;
-        low = candle.low;
-        close = candle.close;
+        if (!candle || candle.open === undefined) { setTooltip(null); return; }
+        open = candle.open; high = candle.high; low = candle.low; close = candle.close;
         const v = param.seriesData.get(volumeSeries) as HistogramData<Time> | undefined;
         vol = v?.value ?? 0;
       } else {
         const linePt = param.seriesData.get(lineSeries) as LineData<Time> | undefined;
         const areaPt = param.seriesData.get(areaSeries) as LineData<Time> | undefined;
         const ptVal = linePt?.value ?? areaPt?.value;
-        if (ptVal === undefined || ptVal === null) {
-          setTooltip(null);
-          return;
-        }
+        if (ptVal === undefined || ptVal === null) { setTooltip(null); return; }
         const row = chartDataRef.current.find((d) => (d.time as number) === tKey);
         if (row && typeof row.open === "number") {
-          open = row.open;
-          high = row.high;
-          low = row.low;
-          close = row.close;
+          open = row.open; high = row.high; low = row.low; close = row.close;
         } else {
           open = high = low = close = ptVal;
         }
@@ -849,34 +891,18 @@ export default function TradingViewChart({
         vol = v?.value ?? 0;
       }
 
-      const ts =
-        typeof time === "number"
-          ? new Date(time * 1000).toLocaleString("id-ID", {
-              day: "2-digit",
-              month: "short",
-              year: "numeric",
-              hour: "2-digit",
-              minute: "2-digit",
-            })
-          : String(time);
+      const ts = typeof time === "number"
+        ? new Date(time * 1000).toLocaleString("id-ID", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })
+        : String(time);
       const changeAbs = close - open;
       const changePct = open > 0 ? (changeAbs / open) * 100 : 0;
-      setTooltip({
-        open,
-        high,
-        low,
-        close,
-        volume: vol,
-        time: ts,
-        direction: close >= open ? "up" : "down",
-        changeAbs,
-        changePct,
-      });
+      setTooltip({ open, high, low, close, volume: vol, time: ts, direction: close >= open ? "up" : "down", changeAbs, changePct });
     });
 
     // ── Load Data ──
     const fillChartData = async () => {
       setIsLoading(true);
+      setHasError(false);
       try {
         let chartData: any[] = [];
 
@@ -891,7 +917,7 @@ export default function TradingViewChart({
           try {
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 10000);
-            const res = await fetch(`${API_URL}/api/v1/market/candles/${symbol}?timeframe=${interval}&limit=500`, { signal: controller.signal });
+            const res = await fetch(`${API_URL}/api/v1/market/candles/${symbol}?timeframe=${timeframe}&limit=500`, { signal: controller.signal });
             clearTimeout(timeoutId);
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const json = await res.json();
@@ -904,66 +930,61 @@ export default function TradingViewChart({
               })).sort((a: any, b: any) => a.time - b.time);
             }
           } catch (e: any) {
-            if (e.name !== "AbortError") console.error("Fetch failed:", e);
+            if (e.name !== "AbortError") {
+              console.error("Fetch failed:", e);
+              setHasError(true);
+            }
           }
         }
 
         chartDataRef.current = chartData;
 
         if (chartData.length > 0) {
-          // Main data
           candleSeries.setData(chartData as CandlestickData<Time>[]);
           const lineData = chartData.map(d => ({ time: d.time, value: d.close }));
           lineSeries.setData(lineData);
           areaSeries.setData(lineData);
 
-          // Volume (softer bars in line / area mode so price series stands out)
           const dimVol = chartStyleRef.current !== "candlestick";
           const volumeData: HistogramData<Time>[] = chartData.map((d: any) => ({
             time: d.time,
             value: d.volume,
-            color:
-              d.close >= d.open
-                ? dimVol
-                  ? "rgba(34,197,94,0.08)"
-                  : "rgba(34,197,94,0.28)"
-                : dimVol
-                  ? "rgba(239,68,68,0.08)"
-                  : "rgba(239,68,68,0.28)",
+            color: d.close >= d.open ? (dimVol ? "rgba(34,197,94,0.08)" : "rgba(34,197,94,0.28)") : (dimVol ? "rgba(239,68,68,0.08)" : "rgba(239,68,68,0.28)"),
           }));
           volumeSeries.setData(volumeData);
 
-          // EMAs
           ema20Series.setData(calculateEMA(chartData, 20));
           ema50Series.setData(calculateEMA(chartData, 50));
           ema200Series.setData(calculateEMA(chartData, 200));
 
-          // Bollinger Bands
           const bb = calculateBollingerBands(chartData);
           bbUpper.setData(bb.upper);
           bbMiddle.setData(bb.middle);
           bbLower.setData(bb.lower);
 
-          // RSI
-          if (rsiSeries) {
-            const rsiData = calculateRSI(chartData, 14);
-            rsiSeries.setData(rsiData);
-          }
-
-          // Stoch RSI
+          if (rsiSeries) rsiSeries.setData(calculateRSI(chartData, 14));
           if (stochRsiK && stochRsiD) {
-            const stochRsiData = calculateStochRSI(chartData, 14, 3, 3);
-            stochRsiK.setData(stochRsiData.kLine);
-            stochRsiD.setData(stochRsiData.dLine);
+            const stoch = calculateStochRSI(chartData, 14, 3, 3);
+            stochRsiK.setData(stoch.kLine);
+            stochRsiD.setData(stoch.dLine);
           }
-
-          // MACD
           if (macdLineSeries && macdSignalSeries && macdHistSeries) {
             const macd = calculateMACD(chartData);
             macdLineSeries.setData(macd.macdLine);
             macdSignalSeries.setData(macd.signalLine);
             macdHistSeries.setData(macd.histogram);
           }
+
+          // ── Restore persistent drawings ──
+          const savedDrawings = loadSavedDrawings(symbol);
+          savedDrawings.forEach(d => {
+            const pl = candleSeries.createPriceLine({
+              price: d.price, color: "#818cf8", lineStyle: LineStyle.Solid,
+              lineWidth: 1, axisLabelVisible: true, title: d.label,
+            });
+            userDrawingsRef.current.push({ pl, price: d.price, label: d.label });
+            setDrawingsCount(c => c + 1);
+          });
         }
 
         chart.timeScale().fitContent();
@@ -973,15 +994,15 @@ export default function TradingViewChart({
         drawAnnotations(indicators.smcZones);
       } catch (error) {
         console.error("Error loading chart:", error);
+        setHasError(true);
       } finally {
         setIsLoading(false);
       }
     };
 
     fillChartData();
-    if (autoFetchSMC) fetchSMC(symbol, interval);
-    fetchSR(symbol, interval);
-    setupWebSocket(symbol, interval);
+    if (autoFetchSMC) fetchSMC(symbol, timeframe);
+    setupWebSocket(symbol, timeframe);
 
     // Resize
     const handleResize = () => {
@@ -993,30 +1014,69 @@ export default function TradingViewChart({
     window.addEventListener("resize", handleResize);
     handleResize();
 
-    // Drawing tool: click to add horizontal line (stored for deletion)
+    // ── Click handler (H-Line & Fibonacci) ──
     chart.subscribeClick((param) => {
       if (drawingMode === "hline" && param.point) {
         const price = candleSeries.coordinateToPrice(param.point.y);
         if (price !== null) {
+          const label = `📏 ${formatPrice(price)}`;
           const pl = candleSeries.createPriceLine({
             price, color: "#818cf8", lineStyle: LineStyle.Solid,
-            lineWidth: 1, axisLabelVisible: true, title: `📏 ${formatPrice(price)}`,
+            lineWidth: 1, axisLabelVisible: true, title: label,
           });
-          userDrawingsRef.current.push(pl);
-          setDrawingsCount(c => c + 1); // trigger re-render to show Clear button
+          const entry = { pl, price, label };
+          userDrawingsRef.current.push(entry);
+          setDrawingsCount(c => c + 1);
           setDrawingMode("none");
+
+          // Save to localStorage
+          const saved = userDrawingsRef.current.map(d => ({ price: d.price, label: d.label }));
+          saveDrawings(symbol, saved);
+        }
+      }
+
+      if (drawingMode === "fibonacci" && param.point) {
+        const price = candleSeries.coordinateToPrice(param.point.y);
+        if (price !== null) {
+          if (!fibAnchor) {
+            setFibAnchor({ price });
+          } else {
+            // Draw Fibonacci levels between anchor and this price
+            const high = Math.max(fibAnchor.price, price);
+            const low = Math.min(fibAnchor.price, price);
+            const range = high - low;
+            const fibLevels = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0];
+            const fibColors = ["#ef4444", "#f59e0b", "#10b981", "#60a5fa", "#a78bfa", "#f59e0b", "#ef4444"];
+            const newFibLines: any[] = [];
+            fibLevels.forEach((lvl, i) => {
+              const fibPrice = high - range * lvl;
+              const pl = candleSeries.createPriceLine({
+                price: fibPrice,
+                color: fibColors[i],
+                lineStyle: LineStyle.Dashed,
+                lineWidth: 1,
+                axisLabelVisible: true,
+                title: `Fib ${(lvl * 100).toFixed(1)}%`,
+              });
+              newFibLines.push(pl);
+            });
+            fibLinesRef.current = newFibLines;
+            setFibAnchor(null);
+            setDrawingMode("none");
+          }
         }
       }
     });
 
-    // Reset drawing state when chart rebuilds
     return () => {
       wsDestroyedRef.current = true;
       if (wsReconnectRef.current) clearTimeout(wsReconnectRef.current);
       if (wsRef.current) wsRef.current.close();
       window.removeEventListener("resize", handleResize);
       userDrawingsRef.current = [];
+      fibLinesRef.current = [];
       setDrawingsCount(0);
+      setFibAnchor(null);
       chart.remove();
       rsiChart?.remove();
       stochRsiChart?.remove();
@@ -1028,16 +1088,16 @@ export default function TradingViewChart({
       macdChartRef.current = null;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbol, data, interval, autoFetchSMC, fetchSMC, fetchSR, setupWebSocket]);
+  }, [symbol, data, timeframe, autoFetchSMC, fetchSMC, setupWebSocket, drawingMode, fibAnchor]);
 
-  // ── Sync Chart Style Visibility ──
+  // ── Sync Chart Style ──
   useEffect(() => {
     if (seriesRef.current) seriesRef.current.applyOptions({ visible: chartStyle === "candlestick" });
     if (lineSeriesRef.current) lineSeriesRef.current.applyOptions({ visible: chartStyle === "line" });
     if (areaSeriesRef.current) areaSeriesRef.current.applyOptions({ visible: chartStyle === "area" });
   }, [chartStyle]);
 
-  // Re-tint volume when switching candle / line / area (no full chart rebuild)
+  // Re-tint volume on style switch
   useEffect(() => {
     const vol = volumeSeriesRef.current;
     if (!vol || !chartDataRef.current.length) return;
@@ -1046,14 +1106,7 @@ export default function TradingViewChart({
       chartDataRef.current.map((d: any) => ({
         time: d.time,
         value: d.volume,
-        color:
-          d.close >= d.open
-            ? dim
-              ? "rgba(34,197,94,0.08)"
-              : "rgba(34,197,94,0.28)"
-            : dim
-              ? "rgba(239,68,68,0.08)"
-              : "rgba(239,68,68,0.28)",
+        color: d.close >= d.open ? (dim ? "rgba(34,197,94,0.08)" : "rgba(34,197,94,0.28)") : (dim ? "rgba(239,68,68,0.08)" : "rgba(239,68,68,0.28)"),
       })),
     );
   }, [chartStyle]);
@@ -1085,10 +1138,7 @@ export default function TradingViewChart({
       >
         {/* Left */}
         <div style={{ display: "flex", alignItems: "center", gap: compactToolbar ? 6 : 8, flexWrap: "wrap" }}>
-          <span
-            style={{ fontWeight: 800, fontSize: compactToolbar ? "0.82rem" : "1rem" }}
-            title={compactToolbar ? `WebSocket: ${wsStatus}` : undefined}
-          >
+          <span style={{ fontWeight: 800, fontSize: compactToolbar ? "0.82rem" : "1rem" }}>
             {symbol}
           </span>
           {!compactToolbar && (
@@ -1096,9 +1146,7 @@ export default function TradingViewChart({
               <span className="badge badge-active" style={{ padding: "2px 7px", display: "flex", alignItems: "center", gap: 4, cursor: "default" }}>
                 <span
                   style={{
-                    width: 6,
-                    height: 6,
-                    borderRadius: "50%",
+                    width: 6, height: 6, borderRadius: "50%",
                     background: wsStatus === "live" ? "#22c55e" : wsStatus === "connecting" ? "#f59e0b" : "#ef4444",
                     display: "inline-block",
                     animation: wsStatus !== "disconnected" ? "pulse-dot 1.4s infinite" : "none",
@@ -1108,17 +1156,10 @@ export default function TradingViewChart({
               </span>
               <div
                 style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "flex-start",
-                  gap: 0,
-                  background: "rgba(255,255,255,0.03)",
-                  border: "1px solid var(--border)",
-                  padding: "2px 8px",
-                  borderRadius: 6,
-                  fontSize: "0.72rem",
-                  fontFamily: "'JetBrains Mono', monospace",
-                  color: "var(--text-secondary)",
+                  display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 0,
+                  background: "rgba(255,255,255,0.03)", border: "1px solid var(--border)",
+                  padding: "2px 8px", borderRadius: 6, fontSize: "0.72rem",
+                  fontFamily: "'JetBrains Mono', monospace", color: "var(--text-secondary)",
                 }}
               >
                 <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -1131,24 +1172,22 @@ export default function TradingViewChart({
           )}
           {compactToolbar && (
             <span className="badge badge-active" style={{ padding: "1px 5px", fontSize: "0.62rem" }}>
-              {interval}
+              {timeframe}
             </span>
           )}
           {hasSetup && (
-            <span style={{ fontSize: "0.68rem", padding: "2px 6px", borderRadius: 6, background: "rgba(245,158,11,0.15)", color: "#f59e0b", fontWeight: 700 }}>
-              📐
-            </span>
+            <span style={{ fontSize: "0.68rem", padding: "2px 6px", borderRadius: 6, background: "rgba(245,158,11,0.15)", color: "#f59e0b", fontWeight: 700 }}>📐</span>
           )}
           {hasSMC && indicators.smcZones && (
-            <span style={{ fontSize: "0.68rem", padding: "2px 6px", borderRadius: 6, background: "rgba(139,92,246,0.15)", color: "#a78bfa", fontWeight: 700 }}>
-              📦
-            </span>
+            <span style={{ fontSize: "0.68rem", padding: "2px 6px", borderRadius: 6, background: "rgba(139,92,246,0.15)", color: "#a78bfa", fontWeight: 700 }}>📦</span>
           )}
         </div>
 
         {/* Right: Chart Style + Timeframes */}
         <div style={{ display: "flex", gap: compactToolbar ? 3 : 4, alignItems: "center", flexWrap: "wrap" }}>
-          {(["candlestick", "line", "area"] as ChartStyle[]).map((st) => {
+          {([
+            "candlestick", "line", "area",
+          ] as ChartStyle[]).map((st) => {
             const m = styleMeta[st];
             return (
               <button
@@ -1161,14 +1200,9 @@ export default function TradingViewChart({
                   border: chartStyle === st ? "1px solid rgba(139,92,246,0.35)" : "1px solid transparent",
                   color: chartStyle === st ? "#c4b5fd" : "var(--text-muted)",
                   padding: compactToolbar ? "2px 5px" : "3px 8px",
-                  borderRadius: 6,
-                  fontSize: compactToolbar ? "0.62rem" : "0.7rem",
-                  fontWeight: 600,
-                  cursor: "pointer",
-                  transition: "all 0.15s",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 4,
+                  borderRadius: 6, fontSize: compactToolbar ? "0.62rem" : "0.7rem",
+                  fontWeight: 600, cursor: "pointer", transition: "all 0.15s",
+                  display: "flex", alignItems: "center", gap: 4,
                 }}
               >
                 <span aria-hidden>{m.icon}</span>
@@ -1181,10 +1215,10 @@ export default function TradingViewChart({
             <>
               <div style={{ width: 1, height: 16, background: "var(--border)", margin: "0 4px" }} />
               {TIMEFRAMES.map((tf) => (
-                <button key={tf} type="button" onClick={() => setInterval_TF(tf)} style={{
-                  background: tf === interval ? "rgba(59,130,246,0.15)" : "transparent",
-                  border: tf === interval ? "1px solid rgba(59,130,246,0.3)" : "1px solid transparent",
-                  color: tf === interval ? "var(--accent-blue)" : "var(--text-secondary)",
+                <button key={tf} type="button" onClick={() => setTimeframe(tf)} style={{
+                  background: tf === timeframe ? "rgba(59,130,246,0.15)" : "transparent",
+                  border: tf === timeframe ? "1px solid rgba(59,130,246,0.3)" : "1px solid transparent",
+                  color: tf === timeframe ? "var(--accent-blue)" : "var(--text-secondary)",
                   padding: "2px 8px", borderRadius: 6, fontSize: "0.72rem", fontWeight: 600,
                   cursor: "pointer", fontFamily: "'JetBrains Mono', monospace", transition: "all 0.15s",
                 }}>
@@ -1198,80 +1232,105 @@ export default function TradingViewChart({
 
       {/* ── Indicator & Tools Bar ── */}
       {!compactToolbar && (
-      <div style={{
-        padding: "5px 16px", borderBottom: "1px solid var(--border)",
-        display: "flex", gap: 6, alignItems: "center", flexShrink: 0,
-        background: "rgba(0,0,0,0.12)", justifyContent: "space-between",
-      }}>
-        <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={{ fontSize: "0.68rem", color: "var(--text-muted)", marginRight: 2, fontWeight: 600 }}>INDICATORS</span>
-          {([
-            { key: "ema20", label: "EMA 20", color: "rgba(59,130,246,0.9)" },
-            { key: "ema50", label: "EMA 50", color: "rgba(245,158,11,0.9)" },
-            { key: "ema200", label: "EMA 200", color: "rgba(236,72,153,0.9)" },
-            { key: "bollingerBands", label: "BB", color: "rgba(147,51,234,0.9)" },
-            { key: "volume", label: "VOL", color: "rgba(38,166,154,0.9)" },
-            { key: "rsi", label: "RSI", color: "rgba(245,158,11,0.9)" },
-            { key: "stochRsi", label: "STOCH RSI", color: "rgba(16,185,129,0.9)" },
-            { key: "macd", label: "MACD", color: "rgba(59,130,246,0.9)" },
-            { key: "supportResistance", label: "S/R", color: "rgba(34,197,94,0.9)" },
-            { key: "smcZones", label: "SMC", color: "rgba(139,92,246,0.9)" },
-          ] as { key: keyof IndicatorState; label: string; color: string }[]).map(({ key, label, color }) => (
-            <button key={key} onClick={() => toggleIndicator(key)} style={{
-              padding: "2px 8px", borderRadius: 20,
-              border: `1px solid ${indicators[key] ? color : "var(--border)"}`,
-              background: indicators[key] ? `${color.replace("0.9)", "0.12)")}` : "transparent",
-              color: indicators[key] ? color : "var(--text-muted)",
-              fontSize: "0.68rem", fontWeight: 700, cursor: "pointer", transition: "all 0.15s",
-              fontFamily: "'JetBrains Mono', monospace",
-            }}>
-              {label}
-            </button>
-          ))}
-        </div>
+        <div style={{
+          padding: "5px 16px", borderBottom: "1px solid var(--border)",
+          display: "flex", gap: 6, alignItems: "center", flexShrink: 0,
+          background: "rgba(0,0,0,0.12)", justifyContent: "space-between",
+        }}>
+          <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ fontSize: "0.68rem", color: "var(--text-muted)", marginRight: 2, fontWeight: 600 }}>INDICATORS</span>
+            {([
+              { key: "ema20", label: "EMA 20", color: "rgba(59,130,246,0.9)" },
+              { key: "ema50", label: "EMA 50", color: "rgba(245,158,11,0.9)" },
+              { key: "ema200", label: "EMA 200", color: "rgba(236,72,153,0.9)" },
+              { key: "bollingerBands", label: "BB", color: "rgba(147,51,234,0.9)" },
+              { key: "volume", label: "VOL", color: "rgba(38,166,154,0.9)" },
+              { key: "rsi", label: "RSI", color: "rgba(245,158,11,0.9)" },
+              { key: "stochRsi", label: "STOCH RSI", color: "rgba(16,185,129,0.9)" },
+              { key: "macd", label: "MACD", color: "rgba(59,130,246,0.9)" },
+              { key: "supportResistance", label: "S/R", color: "rgba(34,197,94,0.9)" },
+              { key: "smcZones", label: "SMC", color: "rgba(139,92,246,0.9)" },
+            ] as { key: keyof IndicatorState; label: string; color: string }[]).map(({ key, label, color }) => (
+              <button key={key} onClick={() => toggleIndicator(key)} style={{
+                padding: "2px 8px", borderRadius: 20,
+                border: `1px solid ${indicators[key] ? color : "var(--border)"}`,
+                background: indicators[key] ? `${color.replace("0.9)", "0.12)")}` : "transparent",
+                color: indicators[key] ? color : "var(--text-muted)",
+                fontSize: "0.68rem", fontWeight: 700, cursor: "pointer", transition: "all 0.15s",
+                fontFamily: "'JetBrains Mono', monospace",
+              }}>
+                {label}
+              </button>
+            ))}
+          </div>
 
-        {/* Drawing Tools */}
-        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-          <span style={{ fontSize: "0.68rem", color: "var(--text-muted)", marginRight: 2, fontWeight: 600 }}>TOOLS</span>
-          <button
-            onClick={() => setDrawingMode(drawingMode === "hline" ? "none" : "hline")}
-            title="Horizontal Line"
-            style={{
-              padding: "2px 8px", borderRadius: 20,
-              border: `1px solid ${drawingMode === "hline" ? "rgba(129,140,248,0.6)" : "var(--border)"}`,
-              background: drawingMode === "hline" ? "rgba(129,140,248,0.12)" : "transparent",
-              color: drawingMode === "hline" ? "#818cf8" : "var(--text-muted)",
-              fontSize: "0.68rem", fontWeight: 700, cursor: "pointer", transition: "all 0.15s",
-            }}
-          >
-            ── H-Line
-          </button>
-          {drawingsCount > 0 && (
+          {/* Drawing Tools */}
+          <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+            <span style={{ fontSize: "0.68rem", color: "var(--text-muted)", marginRight: 2, fontWeight: 600 }}>TOOLS</span>
+            {/* H-Line */}
             <button
-              onClick={() => {
-                const activeSeries = seriesRef.current || lineSeriesRef.current || areaSeriesRef.current;
-                if (activeSeries) {
-                  userDrawingsRef.current.forEach(pl => {
-                    try { activeSeries.removePriceLine(pl); } catch (_) {}
-                  });
-                  userDrawingsRef.current = [];
-                  setDrawingsCount(0);
-                }
-              }}
-              title="Clear all drawn lines"
+              onClick={() => { setDrawingMode(drawingMode === "hline" ? "none" : "hline"); setFibAnchor(null); }}
+              title="Horizontal Line"
               style={{
                 padding: "2px 8px", borderRadius: 20,
-                border: "1px solid rgba(239,68,68,0.4)",
-                background: "rgba(239,68,68,0.08)",
-                color: "rgba(239,68,68,0.8)",
+                border: `1px solid ${drawingMode === "hline" ? "rgba(129,140,248,0.6)" : "var(--border)"}`,
+                background: drawingMode === "hline" ? "rgba(129,140,248,0.12)" : "transparent",
+                color: drawingMode === "hline" ? "#818cf8" : "var(--text-muted)",
                 fontSize: "0.68rem", fontWeight: 700, cursor: "pointer", transition: "all 0.15s",
               }}
             >
-              ✕ Clear ({drawingsCount})
+              ── H-Line
             </button>
-          )}
+            {/* Fibonacci */}
+            <button
+              onClick={() => { setDrawingMode(drawingMode === "fibonacci" ? "none" : "fibonacci"); setFibAnchor(null); }}
+              title="Fibonacci Retracement"
+              style={{
+                padding: "2px 8px", borderRadius: 20,
+                border: `1px solid ${drawingMode === "fibonacci" ? "rgba(245,158,11,0.6)" : "var(--border)"}`,
+                background: drawingMode === "fibonacci" ? "rgba(245,158,11,0.12)" : "transparent",
+                color: drawingMode === "fibonacci" ? "#f59e0b" : "var(--text-muted)",
+                fontSize: "0.68rem", fontWeight: 700, cursor: "pointer", transition: "all 0.15s",
+              }}
+            >
+              📐 Fib
+            </button>
+            {/* Clear drawings */}
+            {drawingsCount > 0 && (
+              <button
+                onClick={() => {
+                  const activeSeries = seriesRef.current || lineSeriesRef.current || areaSeriesRef.current;
+                  if (activeSeries) {
+                    userDrawingsRef.current.forEach(d => {
+                      try { activeSeries.removePriceLine(d.pl ?? d); } catch (_) {}
+                    });
+                    userDrawingsRef.current = [];
+                    setDrawingsCount(0);
+                    saveDrawings(symbol, []);
+                  }
+                  // Also clear fibonacci lines
+                  fibLinesRef.current.forEach(pl => {
+                    try {
+                      const activeSer = seriesRef.current || lineSeriesRef.current || areaSeriesRef.current;
+                      activeSer?.removePriceLine(pl);
+                    } catch (_) {}
+                  });
+                  fibLinesRef.current = [];
+                }}
+                title="Clear all drawn lines"
+                style={{
+                  padding: "2px 8px", borderRadius: 20,
+                  border: "1px solid rgba(239,68,68,0.4)",
+                  background: "rgba(239,68,68,0.08)",
+                  color: "rgba(239,68,68,0.8)",
+                  fontSize: "0.68rem", fontWeight: 700, cursor: "pointer", transition: "all 0.15s",
+                }}
+              >
+                ✕ Clear ({drawingsCount})
+              </button>
+            )}
+          </div>
         </div>
-      </div>
       )}
 
       {/* ── Main Chart Canvas ── */}
@@ -1308,17 +1367,10 @@ export default function TradingViewChart({
 
         {/* EMA Legend */}
         <div style={{
-          position: "absolute",
-          bottom: compactToolbar ? 6 : 32,
-          left: 8,
-          zIndex: 10,
-          pointerEvents: "none",
-          display: "flex",
-          gap: compactToolbar ? 4 : 8,
+          position: "absolute", bottom: compactToolbar ? 6 : 32, left: 8, zIndex: 10,
+          pointerEvents: "none", display: "flex", gap: compactToolbar ? 4 : 8,
           fontSize: compactToolbar ? "0.6rem" : "0.68rem",
-          fontFamily: "'JetBrains Mono', monospace",
-          flexWrap: "wrap",
-          maxWidth: "85%",
+          fontFamily: "'JetBrains Mono', monospace", flexWrap: "wrap", maxWidth: "85%",
         }}>
           {indicators.ema20 && <span style={{ color: "rgba(59,130,246,1)", fontWeight: 700 }}>EMA 20</span>}
           {indicators.ema50 && <span style={{ color: "rgba(245,158,11,1)", fontWeight: 700 }}>EMA 50</span>}
@@ -1326,49 +1378,43 @@ export default function TradingViewChart({
           {indicators.bollingerBands && <span style={{ color: "rgba(147,51,234,1)", fontWeight: 700 }}>BB(20,2)</span>}
         </div>
 
-        {/* Drawing mode cursor indicator */}
+        {/* Drawing mode indicator */}
         {drawingMode !== "none" && (
           <div style={{
             position: "absolute", top: 8, right: 8, zIndex: 20,
-            background: "rgba(129,140,248,0.15)", border: "1px solid rgba(129,140,248,0.4)",
-            borderRadius: 8, padding: "6px 12px", fontSize: "0.72rem", color: "#818cf8", fontWeight: 700,
+            background: drawingMode === "fibonacci" ? "rgba(245,158,11,0.15)" : "rgba(129,140,248,0.15)",
+            border: `1px solid ${drawingMode === "fibonacci" ? "rgba(245,158,11,0.4)" : "rgba(129,140,248,0.4)"}`,
+            borderRadius: 8, padding: "6px 12px", fontSize: "0.72rem",
+            color: drawingMode === "fibonacci" ? "#f59e0b" : "#818cf8", fontWeight: 700,
           }}>
-            🎯 Click to place {drawingMode === "hline" ? "Horizontal Line" : ""} — press ESC to cancel
+            {drawingMode === "fibonacci"
+              ? fibAnchor
+                ? "🎯 Click second point to complete Fibonacci — ESC to cancel"
+                : "📐 Click first point (high or low) — ESC to cancel"
+              : "🎯 Click to place Horizontal Line — ESC to cancel"}
           </div>
         )}
       </div>
 
-      {/* ── RSI Sub-Pane (always rendered, toggled via display) ── */}
+      {/* ── RSI Sub-Pane ── */}
       <div style={{ borderTop: "1px solid var(--border)", position: "relative", display: indicators.rsi ? "block" : "none" }}>
-        <div style={{
-          position: "absolute", top: 4, left: 12, zIndex: 10, pointerEvents: "none",
-          fontSize: "0.65rem", fontWeight: 700, color: "rgba(245,158,11,0.8)",
-          fontFamily: "'JetBrains Mono', monospace",
-        }}>
+        <div style={{ position: "absolute", top: 4, left: 12, zIndex: 10, pointerEvents: "none", fontSize: "0.65rem", fontWeight: 700, color: "rgba(245,158,11,0.8)", fontFamily: "'JetBrains Mono', monospace" }}>
           RSI(14)
         </div>
         <div ref={rsiContainerRef} style={{ width: "100%", height: 100 }} />
       </div>
 
-      {/* ── STOCH RSI Sub-Pane (always rendered, toggled via display) ── */}
+      {/* ── STOCH RSI Sub-Pane ── */}
       <div style={{ borderTop: "1px solid var(--border)", position: "relative", display: indicators.stochRsi ? "block" : "none" }}>
-        <div style={{
-          position: "absolute", top: 4, left: 12, zIndex: 10, pointerEvents: "none",
-          fontSize: "0.65rem", fontWeight: 700, color: "rgba(16,185,129,0.8)",
-          fontFamily: "'JetBrains Mono', monospace",
-        }}>
+        <div style={{ position: "absolute", top: 4, left: 12, zIndex: 10, pointerEvents: "none", fontSize: "0.65rem", fontWeight: 700, color: "rgba(16,185,129,0.8)", fontFamily: "'JetBrains Mono', monospace" }}>
           STOCH RSI(14,3,3)
         </div>
         <div ref={stochRsiContainerRef} style={{ width: "100%", height: 100 }} />
       </div>
 
-      {/* ── MACD Sub-Pane (always rendered, toggled via display) ── */}
+      {/* ── MACD Sub-Pane ── */}
       <div style={{ borderTop: "1px solid var(--border)", position: "relative", display: indicators.macd ? "block" : "none" }}>
-        <div style={{
-          position: "absolute", top: 4, left: 12, zIndex: 10, pointerEvents: "none",
-          fontSize: "0.65rem", fontWeight: 700, color: "rgba(59,130,246,0.8)",
-          fontFamily: "'JetBrains Mono', monospace",
-        }}>
+        <div style={{ position: "absolute", top: 4, left: 12, zIndex: 10, pointerEvents: "none", fontSize: "0.65rem", fontWeight: 700, color: "rgba(59,130,246,0.8)", fontFamily: "'JetBrains Mono', monospace" }}>
           MACD(12,26,9)
         </div>
         <div ref={macdContainerRef} style={{ width: "100%", height: 100 }} />
@@ -1378,12 +1424,30 @@ export default function TradingViewChart({
       {isLoading && (
         <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, zIndex: 20, background: "rgba(10,14,23,0.6)", backdropFilter: "blur(4px)" }}>
           <div style={{ width: 28, height: 28, border: "2px solid var(--border)", borderTopColor: "var(--accent-blue)", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
-          <span style={{ color: "var(--text-muted)", fontSize: "0.85rem" }}>Loading {symbol} ({interval})...</span>
+          <span style={{ color: "var(--text-muted)", fontSize: "0.85rem" }}>Loading {symbol} ({timeframe})...</span>
         </div>
       )}
 
-      {/* Animations moved to globals.css — no duplicate dangerouslySetInnerHTML needed */}
+      {/* ── Error Overlay ── */}
+      {hasError && !isLoading && (
+        <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, zIndex: 20, background: "rgba(10,14,23,0.85)", backdropFilter: "blur(4px)" }}>
+          <div style={{ fontSize: "2rem" }}>⚠️</div>
+          <div style={{ color: "var(--text-muted)", fontSize: "0.9rem", textAlign: "center" }}>
+            Failed to load chart data for <strong style={{ color: "#fff" }}>{symbol}</strong>
+          </div>
+          <button
+            onClick={() => {
+              setHasError(false);
+              setIsLoading(true);
+              // Re-trigger by toggling a dummy state — the chart effect handles rebuild
+              setTimeframe(tf => tf);
+            }}
+            style={{ padding: "9px 22px", borderRadius: 10, border: "1px solid rgba(59,130,246,0.4)", background: "rgba(59,130,246,0.15)", color: "#60a5fa", cursor: "pointer", fontSize: "0.85rem", fontWeight: 700 }}
+          >
+            ↺ Retry
+          </button>
+        </div>
+      )}
     </div>
   );
 }
-

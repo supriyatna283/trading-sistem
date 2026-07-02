@@ -24,9 +24,9 @@ async def run_backtest(params: BacktestParams):
     """
     Run a simulation over the specified number of days in the past.
     """
-    if params.days > 90:
+    if params.days > 365:
         raise HTTPException(
-            status_code=400, detail="Max backtest period is 90 days for now."
+            status_code=400, detail="Max backtest period is 365 days."
         )
 
     end_date = datetime.utcnow()

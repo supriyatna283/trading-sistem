@@ -365,31 +365,46 @@ class MarketDataEngine:
                     raise e
 
             if not all_data:
-                return self._empty_df()
+                df = self._empty_df()
+            else:
+                rows = []
+                for r in all_data:
+                    try:
+                        rows.append({
+                            "open_time": int(r[0]),
+                            "open": r[1],
+                            "high": r[2],
+                            "low": r[3],
+                            "close": r[4],
+                            "volume": r[5],
+                        })
+                    except Exception:
+                        continue
 
-            rows = []
-            for r in all_data:
-                try:
-                    rows.append({
-                        "open_time": int(r[0]),
-                        "open": r[1],
-                        "high": r[2],
-                        "low": r[3],
-                        "close": r[4],
-                        "volume": r[5],
-                    })
-                except Exception:
-                    continue
+                df = pd.DataFrame(rows)
+                df = self._normalize(df, symbol, interval)
+                # Sort chronologically
+                df = df.sort_values("open_time").reset_index(drop=True)
 
-            df = pd.DataFrame(rows)
-            df = self._normalize(df, symbol, interval)
-            # Sort chronologically
-            df = df.sort_values("open_time").reset_index(drop=True)
-            return df
-            
         except Exception as e:
             logger.error(f"Failed to fetch historical Binance data for {symbol}: {e}")
-            return self._empty_df()
+            df = self._empty_df()
+            
+        # Fallback to sample data if fetch failed (e.g. HF Space IP block)
+        if df.empty:
+            logger.warning(f"Using sample data for historical backtest: {symbol}")
+            interval_ms_map = {
+                "1m": 60000, "5m": 300000, "15m": 900000,
+                "1h": 3600000, "4h": 14400000, "1d": 86400000
+            }
+            interval_ms = interval_ms_map.get(interval, 3600000)
+            periods = int((end_ts - start_ts) / interval_ms)
+            if periods < 200:
+                periods = 200
+            base = BASE_PRICES.get(symbol.upper(), 100)
+            df = self.generate_sample_data(symbol.upper(), interval, periods, base)
+            
+        return df
 
     # ---------------------------------------------------------
     # Resilient fetch (Binance → Sample Data fallback)

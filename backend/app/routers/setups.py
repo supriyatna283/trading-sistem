@@ -215,13 +215,14 @@ async def generate_setup(
 @router.post("/generate/all", dependencies=[Depends(require_api_key)])
 async def generate_all_setups(
     timeframe: str = Query("1h"),
-    db: Session = Depends(get_db),
 ):
     """
     Trigger signal generation for ALL dynamic symbols from Binance.
-    Uses concurrency limit to avoid overwhelming system resources.
+    Each symbol gets its own DB session to avoid SQLAlchemy concurrent-write conflicts.
+    Uses concurrency limit (semaphore) to avoid overwhelming system resources.
     """
     import asyncio
+    from app.database import SessionLocal
     
     # 1. Fetch dynamic symbols
     all_syms = await data_engine.fetch_symbols()
@@ -230,24 +231,27 @@ async def generate_all_setups(
     if not symbols:
         return {"message": "No symbols found to generate setups for."}
 
-    # 2. Process in batches to limit concurrency
-    semaphore = asyncio.Semaphore(10) # 10 parallel scans at a time
+    # 2. Process in batches — each symbol gets its own fresh DB session
+    semaphore = asyncio.Semaphore(10)  # max 10 parallel scans at a time
     
     async def process_symbol(symbol):
         async with semaphore:
+            # Create an isolated session per symbol to prevent session conflicts
+            local_db = SessionLocal()
             try:
-                # We reuse the logic but without the full HTTP overhead of calling ourselves
-                # For simplicity in this endpoint, we just call the generate_setup function logic
-                # or better, just leave it as is and let the frontend call it if we want progress.
-                # But a POST /generate/all is what the user probably wants for "one click".
-                return await generate_setup(symbol, timeframe, db)
+                result = await generate_setup(symbol, timeframe, local_db)
+                local_db.commit()
+                return result
             except Exception as e:
+                local_db.rollback()
                 return {"symbol": symbol, "error": str(e)}
+            finally:
+                local_db.close()
 
     tasks = [process_symbol(s) for s in symbols]
     results = await asyncio.gather(*tasks)
     
-    generated_count = sum(1 for r in results if r.get("setup") is not None)
+    generated_count = sum(1 for r in results if isinstance(r, dict) and r.get("setup") is not None)
     
     return {
         "total_symbols": len(symbols),
@@ -294,7 +298,7 @@ async def expire_stale_setups(
     )
     expired_count = 0
     for setup in stale:
-        setup.status = "INVALIDATED"
+        setup.status = "EXPIRED"  # Use EXPIRED (not INVALIDATED) for age-based expiry
         expired_count += 1
     db.commit()
     return {
@@ -373,7 +377,7 @@ async def delete_setup(setup_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 
-@router.get("/test-telegram")
+@router.get("/test-telegram", dependencies=[Depends(require_api_key)])
 async def test_telegram_signal(db: Session = Depends(get_db)):
     """Send a test signal to Telegram using the latest ACTIVE setup or a dummy one."""
     from app.services.telegram_bot import send_telegram_signal

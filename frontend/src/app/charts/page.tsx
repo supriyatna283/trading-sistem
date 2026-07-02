@@ -4,8 +4,7 @@ import MainLayout from "@/components/layout/MainLayout";
 import TradingViewChart, { SetupOverlay } from "@/components/charts/TradingViewChart";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { api } from "@/lib/api";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+import { API_URL, debounce } from "@/lib/utils";
 
 const MTF_TIMEFRAMES = [
   { tf: "1d", label: "1D" },
@@ -13,6 +12,31 @@ const MTF_TIMEFRAMES = [
   { tf: "1h", label: "1H" },
   { tf: "15m", label: "15m" },
 ];
+
+// Toast notification
+function Toast({ message, type, onClose }: { message: string; type: "error" | "success"; onClose: () => void }) {
+  useEffect(() => {
+    const t = setTimeout(onClose, 3500);
+    return () => clearTimeout(t);
+  }, [onClose]);
+
+  return (
+    <div style={{
+      position: "fixed", bottom: 24, right: 24, zIndex: 9999,
+      padding: "12px 20px", borderRadius: 12,
+      background: type === "error" ? "rgba(239,68,68,0.15)" : "rgba(16,185,129,0.15)",
+      border: `1px solid ${type === "error" ? "rgba(239,68,68,0.4)" : "rgba(16,185,129,0.4)"}`,
+      color: type === "error" ? "#f87171" : "#10b981",
+      fontSize: "0.85rem", fontWeight: 700, backdropFilter: "blur(8px)",
+      display: "flex", alignItems: "center", gap: 10,
+      animation: "slideUp 0.2s ease",
+      boxShadow: "0 8px 32px rgba(0,0,0,0.3)",
+    }}>
+      {type === "error" ? "⚠️" : "✅"} {message}
+      <button onClick={onClose} style={{ background: "none", border: "none", color: "inherit", cursor: "pointer", fontSize: "1rem", padding: 0, marginLeft: 4 }}>✕</button>
+    </div>
+  );
+}
 
 export default function ChartsPage() {
   const [selectedSymbol, setSelectedSymbol] = useState("BTCUSDT");
@@ -28,7 +52,11 @@ export default function ChartsPage() {
   const [watchlistInput, setWatchlistInput] = useState("");
   const [mtfData, setMtfData] = useState<Record<string, any[]>>({});
   const [isMtfLoading, setIsMtfLoading] = useState(false);
+  const [toast, setToast] = useState<{ message: string; type: "error" | "success" } | null>(null);
+  const [setupDirFilter, setSetupDirFilter] = useState<"ALL" | "BUY" | "SELL">("ALL");
+  const [setupTfFilter, setSetupTfFilter] = useState("ALL");
   const pageRef = useRef<HTMLDivElement>(null);
+  const mtfAbortRef = useRef<AbortController | null>(null);
 
   // ── Load Watchlist from localStorage ──
   useEffect(() => {
@@ -37,7 +65,6 @@ export default function ChartsPage() {
       if (saved) {
         setWatchlist(JSON.parse(saved));
       } else {
-        // Default minimalist watchlist if none saved
         setWatchlist(["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT"]);
       }
     } catch (_) {}
@@ -67,16 +94,15 @@ export default function ChartsPage() {
           api.getSetups("ACTIVE").catch(() => ({ setups: [] })),
           api.getSymbols().catch(() => ({ symbols: [] })),
         ]);
-        
+
         const setupsArr = Array.isArray(setupsRes?.setups) ? setupsRes.setups : [];
         const symbolsArr = Array.isArray(symbolsRes?.symbols) ? symbolsRes.symbols : [];
-        
+
         setActiveSetups(setupsArr);
-        
+
         if (symbolsArr.length > 0) {
           setAllSymbols(symbolsArr.map((s: any) => s.symbol));
         } else {
-          // Fallback if API fails
           setAllSymbols(["BTCUSDT", "ETHUSDT"]);
         }
       } catch (err) {
@@ -88,14 +114,19 @@ export default function ChartsPage() {
     fetchData();
   }, []);
 
-  // ── MTF Grid: fetch all 4 timeframes in parallel at parent, pass as data prop ──
+  // ── MTF Grid: fetch all 4 timeframes with abort support ──
   const fetchMTFData = useCallback(async (sym: string) => {
+    // Cancel previous pending fetch
+    if (mtfAbortRef.current) mtfAbortRef.current.abort();
+    const controller = new AbortController();
+    mtfAbortRef.current = controller;
+
     setIsMtfLoading(true);
     setMtfData({});
     try {
       const results = await Promise.all(
         MTF_TIMEFRAMES.map(({ tf }) =>
-          fetch(`${API_URL}/api/v1/market/candles/${sym}?timeframe=${tf}&limit=200`)
+          fetch(`${API_URL}/api/v1/market/candles/${sym}?timeframe=${tf}&limit=200`, { signal: controller.signal })
             .then(r => r.json())
             .then(j => ({ tf, candles: j.candles ?? [] }))
             .catch(() => ({ tf, candles: [] }))
@@ -104,27 +135,49 @@ export default function ChartsPage() {
       const dataMap: Record<string, any[]> = {};
       results.forEach(({ tf, candles }) => { dataMap[tf] = candles; });
       setMtfData(dataMap);
-    } catch (e) {
-      console.error("MTF fetch error:", e);
+    } catch (e: any) {
+      if (e.name !== "AbortError") console.error("MTF fetch error:", e);
     } finally {
       setIsMtfLoading(false);
     }
   }, []);
 
+  // Debounced MTF fetch (300ms)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const debouncedFetchMTF = useCallback(
+    debounce((sym: string) => fetchMTFData(sym), 300),
+    [fetchMTFData]
+  );
+
   // Fetch MTF data when grid activated or symbol changes
   useEffect(() => {
-    if (isMTFGrid) fetchMTFData(selectedSymbol);
-  }, [isMTFGrid, selectedSymbol, fetchMTFData]);
+    if (isMTFGrid) debouncedFetchMTF(selectedSymbol);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isMTFGrid, selectedSymbol]);
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (searchInput.trim()) {
       const formatted = searchInput.trim().toUpperCase();
       const finalSymbol = formatted.endsWith("USDT") ? formatted : `${formatted}USDT`;
+
+      // Validate: check if symbol exists in allSymbols (if loaded)
+      if (allSymbols.length > 0 && !allSymbols.includes(finalSymbol)) {
+        setToast({ message: `Symbol "${finalSymbol}" not found in market list`, type: "error" });
+      }
+
       setSelectedSymbol(finalSymbol);
       setSelectedSetup(null);
       setSearchInput("");
     }
+  };
+
+  // Manual refresh data (re-sets selectedSymbol to trigger chart rebuild)
+  const handleRefresh = () => {
+    const current = selectedSymbol;
+    setSelectedSymbol("");
+    setTimeout(() => setSelectedSymbol(current), 50);
+    setToast({ message: "Chart data refreshed", type: "success" });
   };
 
   // ── Fullscreen ──
@@ -142,9 +195,21 @@ export default function ChartsPage() {
     return () => document.removeEventListener("fullscreenchange", handler);
   }, []);
 
+  // ── Unique timeframes from active setups (for filter) ──
+  const setupTimeframes = ["ALL", ...Array.from(new Set(activeSetups.map(s => s.timeframe).filter(Boolean)))];
+
+  const filteredSetups = activeSetups.filter(s => {
+    if (setupDirFilter !== "ALL" && s.direction !== setupDirFilter) return false;
+    if (setupTfFilter !== "ALL" && s.timeframe !== setupTfFilter) return false;
+    return true;
+  });
+
   return (
     <MainLayout>
       <div ref={pageRef} className="charts-page-root">
+
+        {/* Toast */}
+        {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
 
         {/* ── Top Header ── */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
@@ -155,7 +220,7 @@ export default function ChartsPage() {
             </p>
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             {/* Search */}
             <form onSubmit={handleSearchSubmit} style={{ display: "flex", gap: 8 }}>
               <input
@@ -180,6 +245,23 @@ export default function ChartsPage() {
               </datalist>
               <button type="submit" className="btn-primary" style={{ padding: "8px 16px", fontSize: "0.85rem" }}>Load</button>
             </form>
+
+            {/* Refresh */}
+            <button
+              onClick={handleRefresh}
+              title="Refresh chart data"
+              style={{
+                background: "rgba(255,255,255,0.03)",
+                border: "1px solid var(--border)",
+                borderRadius: 10, padding: "8px 12px",
+                color: "var(--text-secondary)",
+                fontSize: "1rem", cursor: "pointer", transition: "all 0.2s",
+              }}
+              onMouseEnter={e => (e.currentTarget.style.color = "#60a5fa")}
+              onMouseLeave={e => (e.currentTarget.style.color = "var(--text-secondary)")}
+            >
+              ↺
+            </button>
 
             {/* Watchlist toggle */}
             <button
@@ -290,7 +372,7 @@ export default function ChartsPage() {
 
           {/* ── Chart Area ── */}
           {isMTFGrid ? (
-            /* MTF 2×2 Grid — data fetched once at parent level */
+            /* MTF 2×2 Grid */
             <div style={{ position: "relative", minHeight: 600 }}>
               {isMtfLoading && (
                 <div style={{
@@ -310,8 +392,18 @@ export default function ChartsPage() {
                 gap: 8,
                 height: "100%",
               }}>
-                {MTF_TIMEFRAMES.map(({ tf }) => (
+                {MTF_TIMEFRAMES.map(({ tf, label }) => (
                   <div key={tf} style={{ position: "relative", minHeight: 280 }}>
+                    {/* Prominent TF label overlay */}
+                    <div style={{
+                      position: "absolute", top: 38, left: 10, zIndex: 5,
+                      pointerEvents: "none",
+                      fontSize: "1.4rem", fontWeight: 900, opacity: 0.12,
+                      color: "#fff", fontFamily: "'Inter', sans-serif",
+                      letterSpacing: "-0.04em",
+                    }}>
+                      {label}
+                    </div>
                     <TradingViewChart
                       symbol={selectedSymbol}
                       data={mtfData[tf]}
@@ -336,22 +428,45 @@ export default function ChartsPage() {
           {/* ── Right Sidebar: Active Setups (single mode only) ── */}
           {!isMTFGrid && (
             <div className="glass-card" style={{ padding: "20px", display: "flex", flexDirection: "column", overflowY: "auto" }}>
-              <div style={{ fontSize: "0.85rem", fontWeight: 700, marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ fontSize: "0.85rem", fontWeight: 700, marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <span>Active Setups</span>
                 <span className="badge badge-score">{activeSetups.length} active</span>
+              </div>
+
+              {/* Setup filters */}
+              <div style={{ display: "flex", gap: 4, marginBottom: 12, flexWrap: "wrap" }}>
+                {(["ALL", "BUY", "SELL"] as const).map(d => (
+                  <button key={d} onClick={() => setSetupDirFilter(d)} style={{
+                    padding: "3px 9px", borderRadius: 6, fontSize: "0.68rem", fontWeight: 700, cursor: "pointer",
+                    border: setupDirFilter === d ? `1px solid ${d === "BUY" ? "#22c55e40" : d === "SELL" ? "#ef444440" : "rgba(255,255,255,0.2)"}` : "1px solid var(--border)",
+                    background: setupDirFilter === d ? (d === "BUY" ? "rgba(34,197,94,0.1)" : d === "SELL" ? "rgba(239,68,68,0.1)" : "rgba(255,255,255,0.06)") : "transparent",
+                    color: setupDirFilter === d ? (d === "BUY" ? "#22c55e" : d === "SELL" ? "#ef4444" : "#fff") : "var(--text-muted)",
+                  }}>
+                    {d === "BUY" ? "▲" : d === "SELL" ? "▼" : ""} {d}
+                  </button>
+                ))}
+                {setupTimeframes.length > 2 && (
+                  <select
+                    value={setupTfFilter}
+                    onChange={e => setSetupTfFilter(e.target.value)}
+                    style={{ padding: "3px 8px", borderRadius: 6, fontSize: "0.68rem", background: "rgba(255,255,255,0.04)", border: "1px solid var(--border)", color: "var(--text-secondary)", outline: "none", cursor: "pointer" }}
+                  >
+                    {setupTimeframes.map(tf => <option key={tf} value={tf}>{tf}</option>)}
+                  </select>
+                )}
               </div>
 
               {isLoading ? (
                 <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
                   <div className="animate-pulse-dot" style={{ width: 16, height: 16, borderRadius: "50%", background: "var(--accent-blue)" }} />
                 </div>
-              ) : activeSetups.length === 0 ? (
+              ) : filteredSetups.length === 0 ? (
                 <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", fontSize: "0.85rem", textAlign: "center" }}>
                   No active setups currently.<br />Run scanner to find opportunities.
                 </div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  {activeSetups.map((setup: any, idx: number) => (
+                  {filteredSetups.map((setup: any, idx: number) => (
                     <div
                       key={setup.id || idx}
                       style={{
@@ -374,16 +489,22 @@ export default function ChartsPage() {
                     >
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                         <span style={{ fontWeight: 700, fontSize: "0.9rem" }}>{setup.symbol}</span>
-                        <span className={`badge ${setup.direction === "BUY" ? "badge-buy" : "badge-sell"}`}>{setup.direction}</span>
+                        <div style={{ display: "flex", gap: 4 }}>
+                          <span className={`badge ${setup.direction === "BUY" ? "badge-buy" : "badge-sell"}`}>{setup.direction}</span>
+                          <span style={{ fontSize: "0.65rem", padding: "2px 6px", borderRadius: 4, background: "rgba(255,255,255,0.05)", color: "var(--text-muted)" }}>{setup.timeframe}</span>
+                        </div>
                       </div>
                       <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)", fontFamily: "'JetBrains Mono', monospace", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px" }}>
-                        <div>Entry: <span style={{ color: "var(--text-primary)" }}>{formatPrice(setup.entry_low)} – {formatPrice(setup.entry_high)}</span></div>
-                        <div>SL: <span style={{ color: "var(--accent-red)" }}>{formatPrice(setup.stop_loss)}</span></div>
-                        <div>TP: <span style={{ color: "var(--accent-green)" }}>{formatPrice(setup.take_profit_1)}</span></div>
+                        <div>Entry: <span style={{ color: "var(--text-primary)" }}>{(setup.entry_low ?? 0).toLocaleString("en-US", { maximumFractionDigits: 2 })} – {(setup.entry_high ?? 0).toLocaleString("en-US", { maximumFractionDigits: 2 })}</span></div>
+                        <div>SL: <span style={{ color: "var(--accent-red)" }}>{(setup.stop_loss ?? 0).toLocaleString("en-US", { maximumFractionDigits: 2 })}</span></div>
+                        <div>TP: <span style={{ color: "var(--accent-green)" }}>{(setup.take_profit_1 ?? 0).toLocaleString("en-US", { maximumFractionDigits: 2 })}</span></div>
                         <div>R:R: <span style={{ color: "var(--accent-blue)" }}>1:{(setup.risk_reward ?? 0).toFixed(1)}</span></div>
                       </div>
-                      <div style={{ marginTop: 8, fontSize: "0.7rem", color: "var(--text-muted)" }}>
-                        {setup.setup_type} · TF: {setup.timeframe}
+                      <div style={{ marginTop: 8, fontSize: "0.7rem", color: "var(--text-muted)", display: "flex", justifyContent: "space-between" }}>
+                        <span>{setup.setup_type}</span>
+                        <span style={{ color: (setup.signal_score ?? setup.confluence_score ?? 0) >= 65 ? "#10b981" : "var(--text-muted)" }}>
+                          Score: {setup.signal_score ?? setup.confluence_score ?? 0}
+                        </span>
                       </div>
                     </div>
                   ))}
@@ -394,8 +515,10 @@ export default function ChartsPage() {
         </div>
       </div>
 
-      {/* Responsive styles for charts layout */}
-      <style dangerouslySetInnerHTML={{ __html: `
+      {/* Responsive styles */}
+      <style>{`
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes slideUp { from { opacity: 0; transform: translate(-50%, -45%); } to { opacity: 1; transform: translate(-50%, -50%); } }
         .charts-page-root {
           display: flex;
           flex-direction: column;
@@ -417,35 +540,16 @@ export default function ChartsPage() {
         .charts-grid-no-watchlist {
           grid-template-columns: 1fr 320px;
         }
-        /* Tablet: collapse watchlist, shrink sidebar */
         @media (max-width: 1100px) {
-          .charts-grid-full {
-            grid-template-columns: 160px 1fr 260px;
-          }
-          .charts-grid-no-watchlist {
-            grid-template-columns: 1fr 260px;
-          }
+          .charts-grid-full { grid-template-columns: 160px 1fr 260px; }
+          .charts-grid-no-watchlist { grid-template-columns: 1fr 260px; }
         }
-        /* Mobile / small screen: stack vertically, hide sidebar panels */
         @media (max-width: 768px) {
-          .charts-page-root {
-            height: auto;
-            min-height: calc(100vh - 80px);
-          }
+          .charts-page-root { height: auto; min-height: calc(100vh - 80px); }
           .charts-grid-full,
-          .charts-grid-no-watchlist {
-            grid-template-columns: 1fr;
-            grid-template-rows: auto;
-          }
+          .charts-grid-no-watchlist { grid-template-columns: 1fr; grid-template-rows: auto; }
         }
-      ` }} />
+      `}</style>
     </MainLayout>
   );
-}
-
-function formatPrice(val: number) {
-  if (!val && val !== 0) return "-";
-  return val > 10
-    ? val.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-    : val.toFixed(4);
 }
