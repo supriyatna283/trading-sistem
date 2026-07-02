@@ -5,7 +5,6 @@ import TradingViewChart, { SetupOverlay } from "@/components/charts/TradingViewC
 import { useState, useEffect, useCallback, useRef } from "react";
 import { api } from "@/lib/api";
 import { API_URL, debounce } from "@/lib/utils";
-import { useTradingMode, TradingModeSwitcher, TradingModeBadge } from "@/lib/tradingMode";
 
 const MTF_TIMEFRAMES = [
   { tf: "1d", label: "1D" },
@@ -40,7 +39,6 @@ function Toast({ message, type, onClose }: { message: string; type: "error" | "s
 }
 
 export default function ChartsPage() {
-  const { config: modeConfig } = useTradingMode();
   const [selectedSymbol, setSelectedSymbol] = useState("BTCUSDT");
   const [searchInput, setSearchInput] = useState("");
   const [allSymbols, setAllSymbols] = useState<string[]>([]);
@@ -117,16 +115,7 @@ export default function ChartsPage() {
     fetchData();
   }, []);
 
-  // ── MTF Grid: use mode-specific timeframes ──
-  const MTF_GRID_TIMEFRAMES = isMTFGrid
-    ? (modeConfig.id === "scalping"
-      ? [{ tf: "1m", label: "1m" }, { tf: "5m", label: "5m" }, { tf: "15m", label: "15m" }, { tf: "1h", label: "1H" }]
-      : modeConfig.id === "swing_trading"
-      ? [{ tf: "1d", label: "1D" }, { tf: "4h", label: "4H" }, { tf: "1h", label: "1H" }, { tf: "15m", label: "15m" }]
-      : MTF_TIMEFRAMES)
-    : MTF_TIMEFRAMES;
-
-  // ── Fetch MTF Data ──
+  // ── MTF Grid: fetch all 4 timeframes with abort support ──
   const fetchMTFData = useCallback(async (sym: string) => {
     // Cancel previous pending fetch
     if (mtfAbortRef.current) mtfAbortRef.current.abort();
@@ -137,7 +126,7 @@ export default function ChartsPage() {
     setMtfData({});
     try {
       const results = await Promise.all(
-        MTF_GRID_TIMEFRAMES.map(({ tf }) =>
+        MTF_TIMEFRAMES.map(({ tf }) =>
           fetch(`${API_URL}/api/v1/market/candles/${sym}?timeframe=${tf}&limit=200`, { signal: controller.signal })
             .then(r => r.json())
             .then(j => ({ tf, candles: j.candles ?? [] }))
@@ -152,7 +141,7 @@ export default function ChartsPage() {
     } finally {
       setIsMtfLoading(false);
     }
-  }, [MTF_GRID_TIMEFRAMES]);
+  }, []);
 
   // Debounced MTF fetch (300ms)
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -225,18 +214,12 @@ export default function ChartsPage() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
           <div>
             <h1 style={{ fontSize: "1.5rem", fontWeight: 800, letterSpacing: "-0.03em", margin: 0 }}>Advanced Charts</h1>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
-              <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem", margin: 0 }}>
-                Real-time market analysis with Smart Money Concepts
-              </p>
-              <TradingModeBadge />
-            </div>
+            <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem", margin: "4px 0 0" }}>
+              Real-time market analysis with Smart Money Concepts
+            </p>
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            {/* Mode Switcher */}
-            <TradingModeSwitcher compact />
-
             {/* Search */}
             <form onSubmit={handleSearchSubmit} style={{ display: "flex", gap: 8 }}>
               <input
@@ -408,7 +391,7 @@ export default function ChartsPage() {
                 gap: 8,
                 height: "100%",
               }}>
-                {MTF_GRID_TIMEFRAMES.map(({ tf, label }) => (
+                {MTF_TIMEFRAMES.map(({ tf, label }) => (
                   <div key={`${tf}-${refreshKey}`} style={{ position: "relative", minHeight: 280 }}>
                     {/* Prominent TF label overlay */}
                     <div style={{

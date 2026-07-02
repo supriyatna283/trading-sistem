@@ -7,7 +7,6 @@ import { api } from "@/lib/api";
 import { formatPrice, timeAgo } from "@/lib/utils";
 import { Gauge, BBPanelDetail, ScoreRing } from "@/components/setups/SetupComponents";
 import ConfirmModal from "@/components/ui/ConfirmModal";
-import { useTradingMode, TradingModeSwitcher, TradingModeBadge } from "@/lib/tradingMode";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 type StatusFilter = "ALL" | "ACTIVE" | "TRIGGERED" | "EXPIRED";
@@ -33,7 +32,6 @@ const PAGE_SIZE = 20;
 
 export default function SetupsPage() {
   const router = useRouter();
-  const { config: modeConfig, mode } = useTradingMode();
   const [setups, setSetups] = useState<any[]>([]);
   const [allSymbols, setAllSymbols] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -41,7 +39,7 @@ export default function SetupsPage() {
   const [generatingSymbol, setGeneratingSymbol] = useState("");
   const [schedulerStatus, setSchedulerStatus] = useState<any>(null);
 
-  // Filters — initialized from trading mode
+  // Filters
   const [filter, setFilter] = useState<StatusFilter>("ALL");
   const [minScore, setMinScore] = useState(0);
   const [sortKey, setSortKey] = useState<SortKey>("newest");
@@ -56,11 +54,6 @@ export default function SetupsPage() {
   // Live timeAgo ticker
   const [tick, setTick] = useState(0);
   const tickRef = useRef<NodeJS.Timeout | null>(null);
-
-  // Auto-apply trading mode score threshold when mode changes
-  useEffect(() => {
-    setMinScore(modeConfig.minScore);
-  }, [mode, modeConfig.minScore]);
 
   useEffect(() => {
     tickRef.current = setInterval(() => setTick(t => t + 1), 60000);
@@ -113,14 +106,8 @@ export default function SetupsPage() {
 
   const generateAllSignals = async () => {
     setGenerating(true);
-    try {
-      setGeneratingSymbol(`${modeConfig.icon} ${modeConfig.label} — scanning ${modeConfig.timeframes.join("/")}...`);
-      const res = await api.generateAllSetups(modeConfig.defaultTF, mode);
-      setGeneratingSymbol("");
-      await fetchSetups();
-      // Show result summary in console for now
-      console.log(`[${modeConfig.label}] Scan complete:`, res.message);
-    } catch (err) { console.error(err); } finally { setGenerating(false); setGeneratingSymbol(""); }
+    try { setGeneratingSymbol("scanning markets..."); await api.generateAllSetups("1h"); await fetchSetups(); }
+    catch (err) { console.error(err); } finally { setGenerating(false); setGeneratingSymbol(""); }
   };
 
   const handleExecute = useCallback(async (id: number) => {
@@ -216,32 +203,20 @@ export default function SetupsPage() {
           <h1 style={{ fontSize: "1.8rem", fontWeight: 900, letterSpacing: "-0.04em", margin: 0, background: "linear-gradient(135deg, #fff 40%, #94a3b8)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
             Signal Dashboard
           </h1>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
-            <p style={{ color: "var(--text-muted)", fontSize: "0.8rem", margin: 0 }}>
-              BB · Stoch RSI · SMC · Multi-TF Confluence — {allSymbols.length} pairs monitored
-            </p>
-            <TradingModeBadge size="sm" />
-          </div>
+          <p style={{ color: "var(--text-muted)", fontSize: "0.8rem", margin: "6px 0 0" }}>
+            BB · Stoch RSI · SMC · Multi-TF Confluence — {allSymbols.length} pairs monitored
+          </p>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {/* Mode Switcher */}
-          <TradingModeSwitcher />
-          <div style={{ width: 1, background: "var(--border)", margin: "0 4px" }} />
           <button
             className="btn-primary"
             onClick={generateAllSignals}
             disabled={generating}
-            style={{
-              opacity: generating ? 0.7 : 1,
-              display: "flex", alignItems: "center", gap: 8,
-              padding: "10px 18px", fontWeight: 700, fontSize: "0.82rem",
-              background: generating ? undefined : `linear-gradient(135deg, ${modeConfig.color}cc, ${modeConfig.color}88)`,
-              border: `1px solid ${modeConfig.color}60`,
-            }}
+            style={{ opacity: generating ? 0.7 : 1, display: "flex", alignItems: "center", gap: 8, padding: "10px 18px", fontWeight: 700, fontSize: "0.82rem" }}
           >
             {generating
               ? <><span style={{ width: 13, height: 13, border: "2px solid rgba(255,255,255,0.3)", borderTopColor: "#fff", borderRadius: "50%", animation: "spin 0.8s linear infinite", display: "inline-block" }} />Scanning {generatingSymbol}</>
-              : <>{modeConfig.icon} Scan {modeConfig.shortLabel} <span style={{ opacity: 0.7, fontWeight: 400, fontSize: "0.72rem" }}>· {modeConfig.defaultTF}</span></>}
+              : "⚡ Scan Markets"}
           </button>
           <button
             onClick={forceSchedulerRun}
@@ -257,34 +232,6 @@ export default function SetupsPage() {
             🗑
           </button>
         </div>
-      </div>
-
-      {/* ── Mode Info Banner ── */}
-      <div style={{
-        display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap",
-        padding: "10px 16px", marginBottom: 16, borderRadius: 10,
-        background: `${modeConfig.color}08`,
-        border: `1px solid ${modeConfig.color}20`,
-      }}>
-        <span style={{ fontSize: "1.1rem" }}>{modeConfig.icon}</span>
-        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", flex: 1, alignItems: "center" }}>
-          <span style={{ fontSize: "0.72rem", fontWeight: 800, color: modeConfig.color, letterSpacing: "0.05em" }}>
-            {modeConfig.label.toUpperCase()} MODE
-          </span>
-          <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>
-            Scan TF: <span style={{ color: modeConfig.color, fontWeight: 700, fontFamily: "JetBrains Mono" }}>{modeConfig.timeframes.join(" · ")}</span>
-          </span>
-          <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>
-            Entry TF: <span style={{ color: modeConfig.color, fontWeight: 700, fontFamily: "JetBrains Mono" }}>{modeConfig.defaultTF}</span>
-          </span>
-          <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>
-            Min Score: <span style={{ color: modeConfig.color, fontWeight: 700 }}>{modeConfig.minScore}+</span>
-          </span>
-          <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>
-            Hold: <span style={{ fontWeight: 600, color: "var(--text-secondary)" }}>{modeConfig.holdingPeriod}</span>
-          </span>
-        </div>
-        <span style={{ fontSize: "0.65rem", color: "var(--text-muted)", fontStyle: "italic" }}>{modeConfig.description}</span>
       </div>
 
       {/* ── Scheduler Banner ── */}
@@ -306,11 +253,9 @@ export default function SetupsPage() {
         {SCORE_PRESETS.map(p => {
           const isActive = minScore === p.value;
           const count = p.value === 0 ? setups.length : setups.filter(s => (s.signal_score ?? s.confluence_score ?? 0) >= p.value).length;
-          // Highlight the preset matching current trading mode
-          const isModeRecommended = p.value === modeConfig.minScore;
           return (
-            <button key={p.label} onClick={() => setMinScore(p.value)} style={{ padding: "5px 14px", borderRadius: 8, border: isActive ? `1px solid ${p.color}60` : isModeRecommended ? `1px solid ${p.color}30` : "1px solid var(--border)", background: isActive ? `${p.color}18` : isModeRecommended ? `${p.color}08` : "transparent", color: isActive ? p.color : isModeRecommended ? `${p.color}` : "var(--text-muted)", fontWeight: 800, fontSize: "0.78rem", cursor: "pointer", transition: "all 0.15s", display: "flex", alignItems: "center", gap: 5, opacity: isModeRecommended && !isActive ? 0.7 : 1 }}>
-              {p.label}{isModeRecommended && !isActive ? " ★" : ""}<span style={{ opacity: 0.65, fontSize: "0.7rem", fontWeight: 600 }}>{count}</span>
+            <button key={p.label} onClick={() => setMinScore(p.value)} style={{ padding: "5px 14px", borderRadius: 8, border: isActive ? `1px solid ${p.color}60` : "1px solid var(--border)", background: isActive ? `${p.color}18` : "transparent", color: isActive ? p.color : "var(--text-muted)", fontWeight: 800, fontSize: "0.78rem", cursor: "pointer", transition: "all 0.15s", display: "flex", alignItems: "center", gap: 5 }}>
+              {p.label}<span style={{ opacity: 0.65, fontSize: "0.7rem", fontWeight: 600 }}>{count}</span>
             </button>
           );
         })}

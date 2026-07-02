@@ -14,7 +14,6 @@ import {
   ColorType,
 } from "lightweight-charts";
 import { formatPrice as fmtPrice, API_URL } from "@/lib/utils";
-import { useTradingMode } from "@/lib/tradingMode";
 
 // ---------------------------------------------------------------
 // Prop Types
@@ -254,7 +253,8 @@ export default function TradingViewChart({
   autoFetchSMC = false,
   timeframeInterval = "1h",
   compactToolbar = false,
-}: Props) {  // Main chart container
+}: Props) {
+  // Main chart container
   const mainContainerRef = useRef<HTMLDivElement>(null);
   const rsiContainerRef = useRef<HTMLDivElement>(null);
   const stochRsiContainerRef = useRef<HTMLDivElement>(null);
@@ -295,24 +295,20 @@ export default function TradingViewChart({
   const priceLineRefs = useRef<any[]>([]);
   const chartDataRef = useRef<any[]>([]);
 
-  // ── Trading Mode: apply preset on mount / mode change ──
-  const { config: modeConfig } = useTradingMode();
-
-  // Use mode-aware default timeframe only for the initial value
-  const resolvedInitialTF = timeframeInterval !== "1h" ? timeframeInterval : modeConfig.defaultTF;
-
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
-  const [timeframe, setTimeframe] = useState(resolvedInitialTF);
+  const [timeframe, setTimeframe] = useState(timeframeInterval);
   const [smcData, setSmcData] = useState<{ orderBlocks: OrderBlockOverlay[]; fvgs: FVGOverlay[] } | null>(null);
   const [smcStructure, setSmcStructure] = useState<StructureMarker[]>([]);
   const [wsStatus, setWsStatus] = useState<"connecting" | "live" | "disconnected">("connecting");
   const [chartStyle, setChartStyle] = useState<ChartStyle>("candlestick");
   const chartStyleRef = useRef<ChartStyle>("candlestick");
   chartStyleRef.current = chartStyle;
-  const [indicators, setIndicators] = useState<IndicatorState>(() => ({
-    ...modeConfig.indicators,
-  }));
+  const [indicators, setIndicators] = useState<IndicatorState>({
+    ema20: true, ema50: false, ema200: true, volume: true,
+    smcZones: true, bollingerBands: false, rsi: true, stochRsi: false, macd: false,
+    supportResistance: true,
+  });
 
   const [tooltip, setTooltip] = useState<{
     open: number; high: number; low: number; close: number;
@@ -371,19 +367,6 @@ export default function TradingViewChart({
   }, [drawingMode]);
 
   useEffect(() => { setTimeframe(timeframeInterval); }, [timeframeInterval]);
-
-  // ── Sync indicator preset when trading mode changes (not on first render) ──
-  const isMountedRef = useRef(false);
-  useEffect(() => {
-    if (!isMountedRef.current) { isMountedRef.current = true; return; }
-    setIndicators({ ...modeConfig.indicators });
-    // Also switch TF to mode's default (unless timeframeInterval prop is explicitly set by parent)
-    if (timeframeInterval === "1h") {
-      setTimeframe(modeConfig.defaultTF);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modeConfig.id]);
-
 
   // ── Effective overlays ──
   const effectiveOBs = orderBlocks.length > 0 ? orderBlocks : (smcData?.orderBlocks ?? []);

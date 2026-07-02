@@ -3,7 +3,6 @@
 import MainLayout from "@/components/layout/MainLayout";
 import { useState, useEffect } from "react";
 import { api } from "@/lib/api";
-import { useTradingMode, TradingModeBadge, TradingModeSwitcher } from "@/lib/tradingMode";
 
 function BiasTag({ bias }: { bias: string }) {
   if (!bias) return <span className="badge" style={{ fontSize: "0.65rem", padding: "2px 6px", color: "var(--text-muted)" }}>-</span>;
@@ -77,7 +76,6 @@ function PriceTag({ price, label }: { price: number; label: string }) {
 }
 
 export default function ScannerPage() {
-  const { mode, config: modeConfig } = useTradingMode();
   const [filter, setFilter] = useState("ALL");
   const [scannerData, setScannerData] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -99,8 +97,6 @@ export default function ScannerPage() {
   const handleRunScan = async () => {
     setIsLoading(true);
     try {
-      // Pass trading mode info to generate setups matching current mode
-      await api.generateAllSetups(modeConfig.defaultTF, mode);
       await api.runScanner();
       const res = await api.getScanner();
       setScannerData(Array.isArray(res?.results) ? res.results : []);
@@ -144,24 +140,9 @@ export default function ScannerPage() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 32 }}>
         <div>
           <h1 style={{ fontSize: "1.75rem", fontWeight: 900, letterSpacing: "-0.04em", margin: 0, background: "linear-gradient(135deg, #fff, #94a3b8)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>Market Scanner</h1>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
-            <p style={{ color: "var(--text-muted)", fontSize: "0.85rem", margin: 0 }}>
-              V7 Professional — 6-Layer Multi-Point Analysis · Institutional SMC V3
-            </p>
-            <TradingModeBadge size="sm" />
-          </div>
-          {/* Mode parameters */}
-          <div style={{ marginTop: 6, display: "flex", gap: 12, alignItems: "center" }}>
-            <span style={{ fontSize: "0.68rem", color: "var(--text-muted)" }}>
-              Entry TF: <span style={{ color: modeConfig.color, fontWeight: 700, fontFamily: "JetBrains Mono" }}>{modeConfig.defaultTF}</span>
-            </span>
-            <span style={{ fontSize: "0.68rem", color: "var(--text-muted)" }}>
-              Min Score: <span style={{ color: modeConfig.color, fontWeight: 700 }}>{modeConfig.minScore}+</span>
-            </span>
-            <span style={{ fontSize: "0.68rem", color: "var(--text-muted)" }}>
-              Hold: <span style={{ fontWeight: 600 }}>{modeConfig.holdingPeriod}</span>
-            </span>
-          </div>
+          <p style={{ color: "var(--text-muted)", fontSize: "0.85rem", margin: "8px 0 0" }}>
+            V7 Professional — 6-Layer Multi-Point Analysis · Institutional SMC V3
+          </p>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
           {btcDominance > 0 && (
@@ -178,18 +159,13 @@ export default function ScannerPage() {
               BTC.D: {btcDominance.toFixed(1)}%
             </div>
           )}
-          <TradingModeSwitcher compact />
-          <button
-            className="btn-primary"
+          <button 
+            className="btn-primary" 
             onClick={handleRunScan}
             disabled={isLoading}
-            style={{
-              opacity: isLoading ? 0.7 : 1, padding: "10px 22px", fontWeight: 800,
-              background: isLoading ? undefined : `linear-gradient(135deg, ${modeConfig.color}cc, ${modeConfig.color}88)`,
-              border: `1px solid ${modeConfig.color}60`,
-            }}
+            style={{ opacity: isLoading ? 0.7 : 1, padding: "10px 22px", fontWeight: 800 }}
           >
-            {isLoading ? "🔄 Analyzing Markets..." : `${modeConfig.icon} Run ${modeConfig.shortLabel} Scan`}
+            {isLoading ? "🔄 Analyzing Markets..." : "⚡ Run Global Scan"}
           </button>
         </div>
       </div>

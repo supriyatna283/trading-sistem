@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState, useEffect } from "react";
-import { useTradingMode } from "@/lib/tradingMode";
 import { 
   LayoutDashboard, 
   Search, 
@@ -63,7 +62,6 @@ export default function Sidebar({ onWidthChange }: { onWidthChange?: (w: number)
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
   const [time, setTime] = useState("");
-  const { mode, config, setMode, allModes } = useTradingMode();
 
   const handleCollapse = (val: boolean) => {
     setCollapsed(val);
@@ -329,106 +327,6 @@ export default function Sidebar({ onWidthChange }: { onWidthChange?: (w: number)
           </div>
         ))}
       </nav>
-
-      {/* ── Trading Mode Switcher ── */}
-      {!collapsed && (
-        <div
-          style={{
-            padding: "12px 14px",
-            borderTop: "1px solid #1e2a3d",
-            background: "rgba(0,0,0,0.15)",
-          }}
-        >
-          <div
-            style={{
-              fontSize: "0.58rem",
-              fontWeight: 700,
-              color: "#2e3f5c",
-              textTransform: "uppercase",
-              letterSpacing: "0.1em",
-              marginBottom: 8,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-            }}
-          >
-            <span>Trading Mode</span>
-            <span style={{ color: config.color, fontSize: "0.6rem" }}>{config.holdingPeriod}</span>
-          </div>
-          {/* 3 mode buttons */}
-          <div style={{ display: "flex", gap: 3 }}>
-            {allModes.map((m) => {
-              const isActive = mode === m.id;
-              return (
-                <button
-                  key={m.id}
-                  onClick={() => setMode(m.id)}
-                  title={`${m.label}: ${m.description}`}
-                  style={{
-                    flex: 1,
-                    padding: "5px 0",
-                    borderRadius: 7,
-                    border: isActive ? `1px solid ${m.color}50` : "1px solid transparent",
-                    background: isActive ? m.bg : "rgba(255,255,255,0.02)",
-                    color: isActive ? m.color : "#475569",
-                    fontSize: "0.6rem",
-                    fontWeight: 800,
-                    cursor: "pointer",
-                    transition: "all 0.18s",
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
-                    gap: 1,
-                  }}
-                >
-                  <span style={{ fontSize: "0.9rem" }}>{m.icon}</span>
-                  <span>{m.shortLabel}</span>
-                </button>
-              );
-            })}
-          </div>
-          {/* Description */}
-          <div style={{ marginTop: 6, fontSize: "0.6rem", color: config.color, fontWeight: 600, textAlign: "center", opacity: 0.7 }}>
-            {config.description}
-          </div>
-        </div>
-      )}
-      {/* Collapsed: show active mode icon */}
-      {collapsed && (
-        <div
-          style={{
-            padding: "10px 0",
-            display: "flex",
-            justifyContent: "center",
-            borderTop: "1px solid #1e2a3d",
-          }}
-        >
-          <button
-            title={`Mode: ${config.label}`}
-            style={{
-              background: config.bg,
-              border: `1px solid ${config.color}40`,
-              borderRadius: 8,
-              color: config.color,
-              width: 32,
-              height: 32,
-              cursor: "pointer",
-              fontSize: "1rem",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-            onClick={() => {
-              // Cycle through modes
-              const order: (typeof mode)[] = ["scalping", "day_trading", "swing_trading"];
-              const next = order[(order.indexOf(mode) + 1) % 3];
-              setMode(next);
-            }}
-          >
-            {config.icon}
-          </button>
-        </div>
-      )}
 
       {/* ── Exchange Status ── */}
       {!collapsed && (
