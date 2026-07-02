@@ -14,6 +14,7 @@ import {
   ColorType,
 } from "lightweight-charts";
 import { formatPrice as fmtPrice, API_URL } from "@/lib/utils";
+import { useTradingMode } from "@/lib/tradingMode";
 
 // ---------------------------------------------------------------
 // Prop Types
@@ -253,8 +254,7 @@ export default function TradingViewChart({
   autoFetchSMC = false,
   timeframeInterval = "1h",
   compactToolbar = false,
-}: Props) {
-  // Main chart container
+}: Props) {  // Main chart container
   const mainContainerRef = useRef<HTMLDivElement>(null);
   const rsiContainerRef = useRef<HTMLDivElement>(null);
   const stochRsiContainerRef = useRef<HTMLDivElement>(null);
@@ -295,20 +295,24 @@ export default function TradingViewChart({
   const priceLineRefs = useRef<any[]>([]);
   const chartDataRef = useRef<any[]>([]);
 
+  // ── Trading Mode: apply preset on mount / mode change ──
+  const { config: modeConfig } = useTradingMode();
+
+  // Use mode-aware default timeframe only for the initial value
+  const resolvedInitialTF = timeframeInterval !== "1h" ? timeframeInterval : modeConfig.defaultTF;
+
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
-  const [timeframe, setTimeframe] = useState(timeframeInterval);
+  const [timeframe, setTimeframe] = useState(resolvedInitialTF);
   const [smcData, setSmcData] = useState<{ orderBlocks: OrderBlockOverlay[]; fvgs: FVGOverlay[] } | null>(null);
   const [smcStructure, setSmcStructure] = useState<StructureMarker[]>([]);
   const [wsStatus, setWsStatus] = useState<"connecting" | "live" | "disconnected">("connecting");
   const [chartStyle, setChartStyle] = useState<ChartStyle>("candlestick");
   const chartStyleRef = useRef<ChartStyle>("candlestick");
   chartStyleRef.current = chartStyle;
-  const [indicators, setIndicators] = useState<IndicatorState>({
-    ema20: true, ema50: false, ema200: true, volume: true,
-    smcZones: true, bollingerBands: false, rsi: true, stochRsi: false, macd: false,
-    supportResistance: true,
-  });
+  const [indicators, setIndicators] = useState<IndicatorState>(() => ({
+    ...modeConfig.indicators,
+  }));
 
   const [tooltip, setTooltip] = useState<{
     open: number; high: number; low: number; close: number;
@@ -327,6 +331,12 @@ export default function TradingViewChart({
   // Fibonacci state
   const [fibAnchor, setFibAnchor] = useState<{ price: number } | null>(null);
   const fibLinesRef = useRef<any[]>([]);
+
+  // ── Refs to expose current drawing state to chart click handler WITHOUT re-triggering chart rebuild ──
+  const drawingModeRef = useRef<DrawingMode>("none");
+  const fibAnchorRef = useRef<{ price: number } | null>(null);
+  drawingModeRef.current = drawingMode;
+  fibAnchorRef.current = fibAnchor;
 
   // ── Countdown Timer ──
   useEffect(() => {
@@ -361,6 +371,19 @@ export default function TradingViewChart({
   }, [drawingMode]);
 
   useEffect(() => { setTimeframe(timeframeInterval); }, [timeframeInterval]);
+
+  // ── Sync indicator preset when trading mode changes (not on first render) ──
+  const isMountedRef = useRef(false);
+  useEffect(() => {
+    if (!isMountedRef.current) { isMountedRef.current = true; return; }
+    setIndicators({ ...modeConfig.indicators });
+    // Also switch TF to mode's default (unless timeframeInterval prop is explicitly set by parent)
+    if (timeframeInterval === "1h") {
+      setTimeframe(modeConfig.defaultTF);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modeConfig.id]);
+
 
   // ── Effective overlays ──
   const effectiveOBs = orderBlocks.length > 0 ? orderBlocks : (smcData?.orderBlocks ?? []);
@@ -695,9 +718,11 @@ export default function TradingViewChart({
 
   // ── Main Chart + Sub-pane init ──
   useEffect(() => {
+    if (!symbol) return;
     if (!mainContainerRef.current) return;
     wsDestroyedRef.current = false;
     setHasError(false);
+    let isCancelled = false;
 
     if (chartRef.current) { try { chartRef.current.remove(); } catch (_) {} chartRef.current = null; }
     if (rsiChartRef.current) { try { rsiChartRef.current.remove(); } catch (_) {} rsiChartRef.current = null; }
@@ -899,7 +924,7 @@ export default function TradingViewChart({
       setTooltip({ open, high, low, close, volume: vol, time: ts, direction: close >= open ? "up" : "down", changeAbs, changePct });
     });
 
-    // ── Load Data ──
+        // ── Load Data ──
     const fillChartData = async () => {
       setIsLoading(true);
       setHasError(false);
@@ -921,6 +946,7 @@ export default function TradingViewChart({
             clearTimeout(timeoutId);
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const json = await res.json();
+            if (isCancelled) return;
             if (json.candles && Array.isArray(json.candles)) {
               chartData = json.candles.map((c: any) => ({
                 time: (new Date(c.open_time).getTime() / 1000) as Time,
@@ -932,11 +958,13 @@ export default function TradingViewChart({
           } catch (e: any) {
             if (e.name !== "AbortError") {
               console.error("Fetch failed:", e);
-              setHasError(true);
+              if (!isCancelled) setHasError(true);
             }
+            if (isCancelled) return;
           }
         }
 
+        if (isCancelled) return;
         chartDataRef.current = chartData;
 
         if (chartData.length > 0) {
@@ -987,6 +1015,7 @@ export default function TradingViewChart({
           });
         }
 
+        if (isCancelled) return;
         chart.timeScale().fitContent();
         rsiChart?.timeScale().fitContent();
         stochRsiChart?.timeScale().fitContent();
@@ -994,9 +1023,9 @@ export default function TradingViewChart({
         drawAnnotations(indicators.smcZones);
       } catch (error) {
         console.error("Error loading chart:", error);
-        setHasError(true);
+        if (!isCancelled) setHasError(true);
       } finally {
-        setIsLoading(false);
+        if (!isCancelled) setIsLoading(false);
       }
     };
 
@@ -1014,9 +1043,9 @@ export default function TradingViewChart({
     window.addEventListener("resize", handleResize);
     handleResize();
 
-    // ── Click handler (H-Line & Fibonacci) ──
+    // ── Click handler: H-Line & Fibonacci — reads from refs to avoid chart rebuild on mode change ──
     chart.subscribeClick((param) => {
-      if (drawingMode === "hline" && param.point) {
+      if (drawingModeRef.current === "hline" && param.point) {
         const price = candleSeries.coordinateToPrice(param.point.y);
         if (price !== null) {
           const label = `📏 ${formatPrice(price)}`;
@@ -1035,15 +1064,15 @@ export default function TradingViewChart({
         }
       }
 
-      if (drawingMode === "fibonacci" && param.point) {
+      if (drawingModeRef.current === "fibonacci" && param.point) {
         const price = candleSeries.coordinateToPrice(param.point.y);
         if (price !== null) {
-          if (!fibAnchor) {
+          if (!fibAnchorRef.current) {
             setFibAnchor({ price });
           } else {
             // Draw Fibonacci levels between anchor and this price
-            const high = Math.max(fibAnchor.price, price);
-            const low = Math.min(fibAnchor.price, price);
+            const high = Math.max(fibAnchorRef.current.price, price);
+            const low = Math.min(fibAnchorRef.current.price, price);
             const range = high - low;
             const fibLevels = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0];
             const fibColors = ["#ef4444", "#f59e0b", "#10b981", "#60a5fa", "#a78bfa", "#f59e0b", "#ef4444"];
@@ -1069,6 +1098,7 @@ export default function TradingViewChart({
     });
 
     return () => {
+      isCancelled = true;
       wsDestroyedRef.current = true;
       if (wsReconnectRef.current) clearTimeout(wsReconnectRef.current);
       if (wsRef.current) wsRef.current.close();
@@ -1088,7 +1118,7 @@ export default function TradingViewChart({
       macdChartRef.current = null;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbol, data, timeframe, autoFetchSMC, fetchSMC, setupWebSocket, drawingMode, fibAnchor]);
+  }, [symbol, data, timeframe, autoFetchSMC, fetchSMC, setupWebSocket]);
 
   // ── Sync Chart Style ──
   useEffect(() => {

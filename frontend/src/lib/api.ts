@@ -85,10 +85,10 @@ export const api = {
   // Setups
   getSetups: (status?: string) =>
     fetchAPI<any>(`/api/v1/setups${status ? `?status=${status}` : ""}`),
-  generateSetup: (symbol: string, tf = "1h") =>
-    fetchAPI<any>(`/api/v1/setups/generate/${symbol}?timeframe=${tf}`),
-  generateAllSetups: (tf = "1h") =>
-    fetchAPI<any>(`/api/v1/setups/generate/all?timeframe=${tf}`, { method: "POST" }),
+  generateSetup: (symbol: string, tf = "1h", trading_mode = "day_trading") =>
+    fetchAPI<any>(`/api/v1/setups/generate/${symbol}?timeframe=${tf}&trading_mode=${trading_mode}`),
+  generateAllSetups: (tf = "1h", trading_mode = "day_trading") =>
+    fetchAPI<any>(`/api/v1/setups/generate/all?timeframe=${tf}&trading_mode=${trading_mode}`, { method: "POST" }),
   updateSetupStatus: (id: number, status: string) =>
     fetchAPI<any>(`/api/v1/setups/${id}/status`, {
       method: "PUT",

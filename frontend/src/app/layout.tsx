@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import { TradingModeProvider } from "@/lib/tradingMode";
 
 export const viewport: Viewport = {
   themeColor: "#0a0a0a",
@@ -23,7 +24,11 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <TradingModeProvider>
+          {children}
+        </TradingModeProvider>
+      </body>
     </html>
   );
 }

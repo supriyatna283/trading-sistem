@@ -32,6 +32,30 @@ sentiment_engine = SentimentEngine()
 news_engine = NewsCalendarEngine()
 market_intel_engine = MarketIntelEngine()
 
+# ── Trading Mode Configuration ─────────────────────────────────────────────────
+# Defines which timeframes to fetch & min score per mode.
+MODE_CONFIG = {
+    "scalping": {
+        "timeframes": ["1h", "15m", "5m", "1m"],  # primary context → detail
+        "entry_tf": "5m",
+        "min_score": 10,   # lower bar — fast signals
+        "label": "Scalping",
+    },
+    "day_trading": {
+        "timeframes": ["1d", "4h", "1h", "15m"],  # standard MTF
+        "entry_tf": "1h",
+        "min_score": 16,   # standard
+        "label": "Day Trading",
+    },
+    "swing_trading": {
+        "timeframes": ["1d", "4h", "1h", "15m"],  # same MTF, higher bar
+        "entry_tf": "4h",
+        "min_score": 20,   # higher quality required
+        "label": "Swing Trading",
+    },
+}
+DEFAULT_MODE = "day_trading"
+
 
 def _sanitize_details(details: dict) -> dict:
     """Convert confluence details to a JSON-safe dict."""
@@ -62,24 +86,28 @@ async def list_setups(
 async def generate_setup(
     symbol: str,
     timeframe: str = Query("1h"),
+    trading_mode: str = Query(DEFAULT_MODE, description="Trading mode: scalping | day_trading | swing_trading"),
     db: Session = Depends(get_db),
 ):
     """
     Generate a trade setup using REAL market data from Binance.
-    V3 Pipeline:
-    1. Fetch real OHLCV candles across multiple timeframes (parallel)
-    2. Fetch macro context: sentiment (F&G, funding, OI) + news calendar
-    3. Run MTF Confirmation analysis
-    4. Analyze Market Structure (HH/HL/LH/LL, BOS, CHOCH)
-    5. Detect Smart Money Concepts (unmitigated OB, unfilled FVG, Liquidity)
-    6. Score Multi-TF Confluence (24-point system with macro filters)
-    7. Generate setup ONLY if score >= 12/24 and R:R >= 1.8 (V5 hardened gates)
+    Supports trading_mode param to auto-select optimal entry timeframe and quality gate.
     """
     import asyncio
     candles_by_tf = {}
 
+    # Resolve mode config
+    cfg = MODE_CONFIG.get(trading_mode, MODE_CONFIG[DEFAULT_MODE])
+    tfs = cfg["timeframes"]
+    # Use provided timeframe if explicitly given, else use mode default entry TF
+    entry_tf = timeframe if timeframe != "1h" or trading_mode == "day_trading" else cfg["entry_tf"]
+    # Ensure entry_tf is included in fetch list
+    if entry_tf not in tfs:
+        tfs = [entry_tf] + tfs
+
+    mode_min_score = cfg["min_score"]
+
     # Fetch candles + macro context in parallel
-    tfs = ["1d", "4h", "1h", "15m"]
     candle_tasks = [data_engine.get_candles(symbol.upper(), tf, 200) for tf in tfs]
     sentiment_task = sentiment_engine.get_full_sentiment()
     news_task = news_engine.get_events()
@@ -105,19 +133,19 @@ async def generate_setup(
             "message": f"Could not fetch market data for {symbol}",
         }
 
-    # Run confluence analysis
-    entry_df = candles_by_tf.get(timeframe, candles_by_tf.get("1h"))
+    # Run confluence analysis — use resolved entry TF
+    entry_df = candles_by_tf.get(entry_tf) or candles_by_tf.get("1h") or next(iter(candles_by_tf.values()), None)
     if entry_df is None or entry_df.empty:
         return {
             "setup": None,
             "confluence": None,
-            "message": f"No candle data available for {symbol} on {timeframe}",
+            "message": f"No candle data available for {symbol} on {entry_tf}",
         }
 
     # MTF Confirmation
     mtf_result = mtf_engine.analyze(candles_by_tf, symbol.upper())
-    structure = structure_analyzer.analyze(entry_df, symbol.upper(), timeframe)
-    smc = smc_engine.analyze(entry_df, symbol.upper(), timeframe)
+    structure = structure_analyzer.analyze(entry_df, symbol.upper(), entry_tf)
+    smc = smc_engine.analyze(entry_df, symbol.upper(), entry_tf)
 
     # Phase 3: Fetch Market Intel (OI, order book, S&R) + Volume Delta
     latest_price = float(entry_df.iloc[-1]["close"]) if not entry_df.empty else 0
@@ -131,7 +159,7 @@ async def generate_setup(
         pass
 
     confluence = confluence_engine.score(
-        candles_by_tf, symbol.upper(), timeframe,
+        candles_by_tf, symbol.upper(), entry_tf,
         sentiment_data=sentiment_data,
         news_events=news_events,
         mtf_result=mtf_result,
@@ -148,9 +176,17 @@ async def generate_setup(
         except Exception:
             pass
 
+    # Mode-aware quality gate: only generate if score meets mode minimum
+    if confluence.total_score < mode_min_score:
+        return {
+            "setup": None,
+            "confluence": confluence.model_dump(),
+            "message": f"Score {confluence.total_score}/{confluence.max_score} below {cfg['label']} threshold ({mode_min_score}).",
+        }
+
     # Generate setup (V4 — full Phase 3 power features)
     setup = setup_gen.generate(
-        symbol.upper(), timeframe, confluence, smc, structure, entry_df,
+        symbol.upper(), entry_tf, confluence, smc, structure, entry_df,
         mtf_result=mtf_result,
         news_events=news_events,
         sentiment_data=sentiment_data,
@@ -168,7 +204,7 @@ async def generate_setup(
         for s in active_setups:
             s.status = "INVALIDATED"
 
-        # Persist to DB
+        # Persist to DB — record the trading_mode so frontend can filter by it
         db_setup = TradeSetup(
             symbol=setup.symbol,
             direction=setup.direction,
@@ -202,44 +238,50 @@ async def generate_setup(
         return {
             "setup": db_setup.to_dict(),
             "confluence": confluence.model_dump(),
-            "message": f"High-quality {setup.direction} setup generated for {symbol} (Score: {confluence.total_score}/{confluence.max_score}, R:R 1:{setup.risk_reward})",
+            "message": f"[{cfg['label']}] {setup.direction} setup for {symbol} on {entry_tf} (Score: {confluence.total_score}/{confluence.max_score}, R:R 1:{setup.risk_reward})",
         }
 
     return {
         "setup": None,
         "confluence": confluence.model_dump(),
-        "message": f"No setup generated for {symbol} — Score: {confluence.total_score}/{confluence.max_score} (min required: {MIN_SCORE}/{MAX_SCORE}).",
+        "message": f"[{cfg['label']}] No setup for {symbol} — Score: {confluence.total_score}/{confluence.max_score} (min: {mode_min_score}/{MAX_SCORE}). Timeframe: {entry_tf}.",
     }
 
 
 @router.post("/generate/all", dependencies=[Depends(require_api_key)])
 async def generate_all_setups(
     timeframe: str = Query("1h"),
+    trading_mode: str = Query(DEFAULT_MODE, description="Trading mode: scalping | day_trading | swing_trading"),
 ):
     """
-    Trigger signal generation for ALL dynamic symbols from Binance.
+    Trigger signal generation for ALL dynamic symbols using the selected trading mode.
+    - scalping     → entry TF: 5m,  min score: 10
+    - day_trading  → entry TF: 1h,  min score: 16
+    - swing_trading→ entry TF: 4h,  min score: 20
     Each symbol gets its own DB session to avoid SQLAlchemy concurrent-write conflicts.
-    Uses concurrency limit (semaphore) to avoid overwhelming system resources.
     """
     import asyncio
     from app.database import SessionLocal
-    
+
+    cfg = MODE_CONFIG.get(trading_mode, MODE_CONFIG[DEFAULT_MODE])
+    # Use provided timeframe, else fall back to mode entry TF
+    resolved_tf = timeframe if timeframe != "1h" or trading_mode == "day_trading" else cfg["entry_tf"]
+
     # 1. Fetch dynamic symbols
     all_syms = await data_engine.fetch_symbols()
     symbols = [s["symbol"] for s in all_syms]
-    
+
     if not symbols:
         return {"message": "No symbols found to generate setups for."}
 
     # 2. Process in batches — each symbol gets its own fresh DB session
     semaphore = asyncio.Semaphore(10)  # max 10 parallel scans at a time
-    
+
     async def process_symbol(symbol):
         async with semaphore:
-            # Create an isolated session per symbol to prevent session conflicts
             local_db = SessionLocal()
             try:
-                result = await generate_setup(symbol, timeframe, local_db)
+                result = await generate_setup(symbol, resolved_tf, trading_mode, local_db)
                 local_db.commit()
                 return result
             except Exception as e:
@@ -250,13 +292,16 @@ async def generate_all_setups(
 
     tasks = [process_symbol(s) for s in symbols]
     results = await asyncio.gather(*tasks)
-    
+
     generated_count = sum(1 for r in results if isinstance(r, dict) and r.get("setup") is not None)
-    
+
     return {
         "total_symbols": len(symbols),
         "generated_count": generated_count,
-        "message": f"Processed {len(symbols)} symbols. Generated {generated_count} new setups.",
+        "trading_mode": trading_mode,
+        "entry_timeframe": resolved_tf,
+        "mode_min_score": cfg["min_score"],
+        "message": f"[{cfg['label']}] Processed {len(symbols)} symbols on {resolved_tf}. Generated {generated_count} setups (min score ≥ {cfg['min_score']}).",
     }
 
 
