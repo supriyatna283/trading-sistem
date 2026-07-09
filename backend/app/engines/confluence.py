@@ -479,11 +479,24 @@ class ConfluenceEngine:
     # Helpers
     # ------------------------------------------------------------------
     def _check_htf_alignment(self, htf_biases: Dict[str, str]) -> bool:
-        """Check if higher TF biases agree and are NOT sideways."""
+        """Check if higher TF biases are at least partially aligned (not fully opposing).
+        
+        V2: Allow signal if AT LEAST ONE HTF agrees (not all sideways/opposite).
+        Previously required BOTH 1D and 4H to match, which was too strict.
+        """
         biases = list(htf_biases.values())
-        if len(biases) < 2:
+        if len(biases) == 0:
             return False
-        return len(set(biases)) == 1 and biases[0] != "SIDEWAYS"
+        if len(biases) == 1:
+            return biases[0] != "SIDEWAYS"  # Single TF: accept if not sideways
+        # 2 TFs: accept if at least one is directional AND they're not opposing
+        non_sideways = [b for b in biases if b != "SIDEWAYS"]
+        if len(non_sideways) == 0:
+            return False  # Both sideways → no clear direction
+        if len(non_sideways) == 1:
+            return True  # 1 directional + 1 sideways = still tradeable
+        # Both directional: must agree
+        return len(set(non_sideways)) == 1
 
     def _price_in_valid_order_block(
         self, df: pd.DataFrame, obs: list, bias: str
@@ -520,8 +533,9 @@ class ConfluenceEngine:
     def _check_volume_confirmation(self, df: pd.DataFrame, symbol: str = "") -> bool:
         """
         Check if recent candle has above-average volume.
-        - BTC/ETH (Majors): 1.5x threshold (high liquidity makes 2.0x rare)
-        - Alts: 2.0x threshold
+        - BTC/ETH/BNB (Majors): 1.3x threshold (very liquid, 2x is extremely rare)
+        - Tier2 large caps (SOL/XRP/ADA): 1.5x threshold
+        - Alts: 1.8x threshold
         """
         if df.empty or len(df) < 20 or "volume" not in df.columns:
             return False
@@ -530,9 +544,14 @@ class ConfluenceEngine:
         avg_vol = np.mean(volumes[-20:])
         last_vol = volumes[-1]
         
-        # Major caps have high liquidity; 1.5x is already a significant footprint
-        majors = {"BTCUSDT", "ETHUSDT", "BNBUSDT"}
-        threshold_multiplier = 1.5 if symbol.upper() in majors else 2.0
+        tier1 = {"BTCUSDT", "ETHUSDT", "BNBUSDT"}
+        tier2 = {"SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT"}
+        if symbol.upper() in tier1:
+            threshold_multiplier = 1.3
+        elif symbol.upper() in tier2:
+            threshold_multiplier = 1.5
+        else:
+            threshold_multiplier = 1.8
         
         return last_vol > avg_vol * threshold_multiplier
 
@@ -611,17 +630,18 @@ class ConfluenceEngine:
     def _check_rsi_aligned(self, rsi_value: Optional[float], bias: str) -> bool:
         """
         Check if RSI supports the trade with meaningful thresholds.
-        For BUY: RSI between 30-65 (momentum present, not overbought).
-        For SELL: RSI between 35-70 (momentum present, not oversold).
-        Extreme RSI zones (< 30 or > 70) indicate overextension — risky entries.
+        V2 Relaxed:
+        For BUY: RSI between 25-70 (wider range; trending assets stay 50-70)
+        For SELL: RSI between 30-75
+        Extreme RSI zones (< 20 or > 80) indicate extreme overextension.
         """
         if rsi_value is None:
-            return False  # Can't reliably confirm without RSI
+            return True  # Don't penalize if RSI unavailable
 
         if bias == "BULLISH":
-            return 30.0 < rsi_value < 65.0
+            return 25.0 < rsi_value < 70.0  # Wider to accommodate trending BTC/ETH
         elif bias == "BEARISH":
-            return 35.0 < rsi_value < 70.0
+            return 30.0 < rsi_value < 75.0
         return False
 
     def _check_ema_aligned(self, df: pd.DataFrame, ema_value: Optional[float], bias: str) -> bool:
@@ -676,31 +696,32 @@ class ConfluenceEngine:
 
     def _check_stoch_rsi_aligned(self, k: Optional[float], d: Optional[float], bias: str) -> bool:
         """
-        Stochastic RSI alignment for intraday momentum entries:
-        - BUY: %K < 40 (coming from oversold) AND %K > %D (bullish crossover signal)
-        - SELL: %K > 60 (coming from overbought) AND %K < %D (bearish crossover signal)
+        Stochastic RSI alignment — V2 Relaxed for trending markets:
+        - BUY: %K < 50 (not overbought) AND %K >= %D (bullish momentum direction)
+        - SELL: %K > 50 (not oversold) AND %K <= %D (bearish momentum direction)
+        Previously used strict 40/60 zones, which excluded trending big caps.
         """
         if k is None or d is None:
-            return False
+            return True  # Don't penalize if Stoch RSI unavailable
         
         if bias == "BULLISH":
-            # Oversold zone with bullish momentum crossover
-            return k < 40 and k >= d
+            # Not overbought, with bullish momentum crossover
+            return k < 60 and k >= d
         elif bias == "BEARISH":
-            # Overbought zone with bearish momentum crossover
-            return k > 60 and k <= d
+            # Not oversold, with bearish momentum crossover
+            return k > 40 and k <= d
         return False
 
     def _get_recommendation(
         self, score: int, entry_bias: str, htf_biases: Dict[str, str]
     ) -> str:
-        """Map score to recommendation — V4 thresholds adjusted for 24-point scale."""
-        if score >= 18: # ~66%
+        """Map score to recommendation — V4.1 thresholds adjusted for wider acceptance."""
+        if score >= 16:  # ~48% of max score
             if entry_bias == "BULLISH":
                 return "STRONG_BUY"
             elif entry_bias == "BEARISH":
                 return "STRONG_SELL"
-        if score >= 14: # ~50%
+        if score >= 12:  # ~36% of max score 
             if entry_bias == "BULLISH":
                 return "BUY"
             elif entry_bias == "BEARISH":

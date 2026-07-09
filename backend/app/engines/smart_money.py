@@ -22,12 +22,12 @@ class SmartMoneyConceptsEngine:
 
     def __init__(
         self,
-        ob_lookback: int = 10,
+        ob_lookback: int = 15,          # Increased: keep more recent OBs
         eq_tolerance: float = 0.001,
-        ob_impulse_multiplier: float = 1.7,
-        ob_min_body_ratio: float = 0.5,
-        ob_max_age: int = 40,
-        fvg_min_atr_ratio: float = 0.3,
+        ob_impulse_multiplier: float = 1.3,  # Relaxed: 1.3x avg body (was 1.7x)
+        ob_min_body_ratio: float = 0.4,      # Relaxed: was 0.5
+        ob_max_age: int = 60,                # Increased: was 40 candles
+        fvg_min_atr_ratio: float = 0.2,      # Relaxed: was 0.3 (find smaller FVGs too)
     ):
         self.ob_lookback = ob_lookback
         self.eq_tolerance = eq_tolerance  # 0.1 % tolerance for equal highs/lows

@@ -66,33 +66,32 @@ class SetupGenerator:
 
         direction = "BUY" if confluence.recommendation in ("BUY", "STRONG_BUY") else "SELL"
 
-        # ---- Quality Gate 3: HTF bias must agree with direction ----
+        # ---- Quality Gate 3: HTF bias must be at least partially aligned ----
+        # For big caps, require at least 1 of 2 HTF timeframes to agree.
+        # (1D+4H both opposite = skip; 1 neutral is OK for entry)
         htf_details = confluence.details.get("htf_bias", {})
-        if htf_details.get("aligned"):
-            htf_biases = htf_details.get("biases", {})
-            dominant_bias = list(htf_biases.values())[0] if htf_biases else "SIDEWAYS"
-            if direction == "BUY" and dominant_bias != "BULLISH":
-                _reject("htf_bias", f"direction=BUY but htf_bias={dominant_bias}")
-                return None
-            if direction == "SELL" and dominant_bias != "BEARISH":
-                _reject("htf_bias", f"direction=SELL but htf_bias={dominant_bias}")
+        htf_biases = htf_details.get("biases", {})  # e.g. {"1d": "BULLISH", "4h": "BEARISH"}
+        if htf_biases:
+            biases_list = list(htf_biases.values())
+            opposite = "BEARISH" if direction == "BUY" else "BULLISH"
+            # Reject ONLY if ALL HTF biases are opposite direction (not just one)
+            if all(b == opposite for b in biases_list):
+                _reject("htf_bias", f"ALL htf biases are {opposite}, direction={direction}")
                 return None
 
-        # ---- Quality Gate 4 (NEW): Mandatory Core Confluence ----
-        # At least ONE of these SMC conditions MUST be true:
+        # ---- Quality Gate 4: Need SMC edge OR structure confirmation ----
+        # (NOT both — big caps may not always be in an OB but still have valid BOS)
         has_smc_edge = (
             confluence.details.get("liquidity", {}).get("swept", False)
             or confluence.details.get("order_block", {}).get("in_zone", False)
         )
-        # Structure must be confirmed (BOS or CHOCH on entry TF)
         has_structure = confluence.details.get("structure", {}).get("confirmed", False)
+        has_fvg = confluence.details.get("fvg", {}).get("present", False)
 
-        if not has_smc_edge:
-            _reject("smc_edge", "no liquidity sweep and not in order block zone")
-            return None  # No SMC edge = no institutional footprint = skip
-        if not has_structure:
-            _reject("structure", "no BOS/CHOCH confirmed on entry TF")
-            return None  # No structure confirmation = unvalidated direction
+        # Must have at least ONE technical anchor
+        if not has_smc_edge and not has_structure and not has_fvg:
+            _reject("technical_anchor", "no OB, no liquidity sweep, no FVG, no BOS/CHOCH")
+            return None
 
         # Phase 3: Volume Delta Mandatory Filter (if order flow data is available)
         if volume_delta is not None:
@@ -117,8 +116,15 @@ class SetupGenerator:
             return None
 
         # ---- Quality Gate 5: Stop loss sanity check ----
-        major_pairs = {"BTCUSDT", "ETHUSDT", "BNBUSDT"}
-        max_sl_pct = 3.0 if symbol.upper() in major_pairs else 5.0
+        # Big caps are naturally more volatile; allow wider SL to avoid premature rejection
+        tier1_pairs = {"BTCUSDT", "ETHUSDT"}          # Top 2: allow up to 5%
+        tier2_pairs = {"BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "AVAXUSDT"}
+        if symbol.upper() in tier1_pairs:
+            max_sl_pct = 5.0
+        elif symbol.upper() in tier2_pairs:
+            max_sl_pct = 4.0
+        else:
+            max_sl_pct = 6.0  # Alts can have wider swings
         sl_distance_pct = abs(sl - last_price) / last_price * 100
         if sl_distance_pct > max_sl_pct:
             _reject("sl_distance", f"sl_pct={sl_distance_pct:.2f}% > max={max_sl_pct}%")

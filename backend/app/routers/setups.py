@@ -20,9 +20,9 @@ from app.schemas.trade_setup import SetupStatusUpdate
 
 router = APIRouter(prefix="/api/v1/setups", tags=["Trading Setups"])
 
-# Phase 3: min score = 16 (threshold recalibrated for max_score=36)
-MIN_SCORE = 16
-setup_gen = SetupGenerator(min_confluence_score=MIN_SCORE, min_rr=1.8)
+# Phase 3: min score = 12 (adjusted for wider big-cap signal generation; max_score=36)
+MIN_SCORE = 12
+setup_gen = SetupGenerator(min_confluence_score=MIN_SCORE, min_rr=1.5)
 confluence_engine = ConfluenceEngine(min_confluence_score=MIN_SCORE)
 smc_engine = SmartMoneyConceptsEngine()
 structure_analyzer = MarketStructureAnalyzer()
