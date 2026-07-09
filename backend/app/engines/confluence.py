@@ -122,9 +122,19 @@ class ConfluenceEngine:
                 symbol=symbol, total_score=0, max_score=MAX_SCORE,
                 details=details, recommendation="NEUTRAL",
             )
-
+        # 2.b. Analyze entry TF structure (needed for SMC)
         smc = self.smc_engine.analyze(entry_df, symbol, entry_timeframe)
         structure = self.structure_analyzer.analyze(entry_df, symbol, entry_timeframe)
+
+        # Determine DOMINANT bias for scoring momentum indicators
+        # Priority: 1D+4H agreement > entry TF structure
+        # Rationale: If 1D+4H are both BULLISH but 1H pulls back, we still want
+        # to BUY on the 1H pullback — that’s a valid HTF-aligned entry.
+        htf_non_sw = [b for b in htf_biases.values() if b != "SIDEWAYS"]
+        if len(htf_non_sw) >= 1 and len(set(htf_non_sw)) == 1:
+            dominant_bias = htf_non_sw[0]  # HTF agree → use HTF direction
+        else:
+            dominant_bias = structure.bias  # HTF conflict → use entry TF structure
 
         # 3. Liquidity sweep — price must have swept a level recently
         swept_levels = self.smc_engine.check_liquidity_sweep(entry_df, smc.liquidity_levels)
@@ -137,8 +147,8 @@ class ConfluenceEngine:
             "score": SCORE_WEIGHTS["liquidity_swept"] if liquidity_swept else 0,
         }
 
-        # 4. Order Block zone — price must be inside an UNMITIGATED OB
-        in_ob, ob_direction = self._price_in_valid_order_block(entry_df, smc.order_blocks, structure.bias)
+        # 4. Order Block zone — price inside an UNMITIGATED OB aligned with DOMINANT bias
+        in_ob, ob_direction = self._price_in_valid_order_block(entry_df, smc.order_blocks, dominant_bias)
         if in_ob:
             total_score += SCORE_WEIGHTS["order_block_zone"]
         details["order_block"] = {
@@ -148,8 +158,9 @@ class ConfluenceEngine:
             "score": SCORE_WEIGHTS["order_block_zone"] if in_ob else 0,
         }
 
-        # 5. FVG present, aligned with bias, and UNFILLED
-        aligned_fvgs = self._get_aligned_fvgs(smc.fvgs, structure.bias)
+
+        # 5. FVG present, aligned with DOMINANT bias, and UNFILLED
+        aligned_fvgs = self._get_aligned_fvgs(smc.fvgs, dominant_bias)
         fvg_present = len(aligned_fvgs) > 0
         if fvg_present:
             total_score += SCORE_WEIGHTS["fvg_present"]
@@ -172,8 +183,8 @@ class ConfluenceEngine:
             "score": SCORE_WEIGHTS["structure_confirmed"] if structure_confirmed else 0,
         }
 
-        # 7. Premium/Discount zone — BUY in discount, SELL in premium
-        in_correct_zone = self._check_premium_discount(entry_df, smc.premium_discount_mid, structure.bias)
+        # 7. Premium/Discount zone — BUY in discount, SELL in premium (use dominant bias)
+        in_correct_zone = self._check_premium_discount(entry_df, smc.premium_discount_mid, dominant_bias)
         if in_correct_zone:
             total_score += SCORE_WEIGHTS["premium_discount"]
         details["premium_discount"] = {
@@ -182,8 +193,8 @@ class ConfluenceEngine:
             "score": SCORE_WEIGHTS["premium_discount"] if in_correct_zone else 0,
         }
 
-        # 8. Volume confirmation — above-average volume (2.0x threshold)
-        volume_confirmed = self._check_volume_confirmation(entry_df)
+        # 8. Volume confirmation — above-average volume (symbol-aware threshold)
+        volume_confirmed = self._check_volume_confirmation(entry_df, symbol)
         if volume_confirmed:
             total_score += SCORE_WEIGHTS["volume_confirmation"]
         details["volume"] = {
@@ -227,8 +238,8 @@ class ConfluenceEngine:
             "score": SCORE_WEIGHTS["news_clear"] if news_clear else 0,
         }
 
-        # 12. Sentiment alignment — macro sentiment supports direction
-        sentiment_ok = self._check_sentiment_aligned(sentiment_data, structure.bias)
+        # 12. Sentiment alignment — macro sentiment supports dominant direction
+        sentiment_ok = self._check_sentiment_aligned(sentiment_data, dominant_bias)
         if sentiment_ok:
             total_score += SCORE_WEIGHTS["sentiment_aligned"]
         details["sentiment"] = {
@@ -236,9 +247,9 @@ class ConfluenceEngine:
             "score": SCORE_WEIGHTS["sentiment_aligned"] if sentiment_ok else 0,
         }
 
-        # 13. RSI alignment — not overbought for buys, not oversold for sells
+        # 13. RSI alignment — use dominant bias (HTF-driven)
         rsi_value = calculate_rsi(entry_df)
-        rsi_ok = self._check_rsi_aligned(rsi_value, structure.bias)
+        rsi_ok = self._check_rsi_aligned(rsi_value, dominant_bias)
         if rsi_ok:
             total_score += SCORE_WEIGHTS["rsi_aligned"]
         details["rsi"] = {
@@ -247,9 +258,9 @@ class ConfluenceEngine:
             "score": SCORE_WEIGHTS["rsi_aligned"] if rsi_ok else 0,
         }
 
-        # 14. Trend Alignment (200 EMA)
+        # 14. Trend Alignment (200 EMA) — use dominant bias
         ema_value = calculate_ema(entry_df, 200)
-        ema_ok = self._check_ema_aligned(entry_df, ema_value, structure.bias)
+        ema_ok = self._check_ema_aligned(entry_df, ema_value, dominant_bias)
         if ema_ok:
             total_score += SCORE_WEIGHTS["ema_aligned"]
         details["ema"] = {
@@ -258,9 +269,9 @@ class ConfluenceEngine:
             "score": SCORE_WEIGHTS["ema_aligned"] if ema_ok else 0,
         }
 
-        # 15. Momentum Alignment (MACD)
+        # 15. Momentum Alignment (MACD) — use dominant bias
         macd_line, signal_line, hist = calculate_macd(entry_df)
-        macd_ok = self._check_macd_aligned(hist, structure.bias)
+        macd_ok = self._check_macd_aligned(hist, dominant_bias)
         if macd_ok:
             total_score += SCORE_WEIGHTS["macd_aligned"]
         details["macd"] = {
@@ -269,9 +280,9 @@ class ConfluenceEngine:
             "score": SCORE_WEIGHTS["macd_aligned"] if macd_ok else 0,
         }
 
-        # 16. Bollinger Bands Position (Intraday)
+        # 16. Bollinger Bands Position — use dominant bias
         bb_upper, bb_mid, bb_lower, bb_bw = calculate_bollinger_bands(entry_df)
-        bb_ok = self._check_bb_position(entry_df, bb_upper, bb_lower, bb_mid, structure.bias)
+        bb_ok = self._check_bb_position(entry_df, bb_upper, bb_lower, bb_mid, dominant_bias)
         if bb_ok:
             total_score += SCORE_WEIGHTS["bb_position"]
         details["bollinger_bands"] = {
@@ -283,9 +294,9 @@ class ConfluenceEngine:
             "score": SCORE_WEIGHTS["bb_position"] if bb_ok else 0,
         }
 
-        # 17. Stochastic RSI (Intraday Momentum Timing)
+        # 17. Stochastic RSI — use dominant bias
         stoch_k, stoch_d = calculate_stoch_rsi(entry_df)
-        stoch_ok = self._check_stoch_rsi_aligned(stoch_k, stoch_d, structure.bias)
+        stoch_ok = self._check_stoch_rsi_aligned(stoch_k, stoch_d, dominant_bias)
         if stoch_ok:
             total_score += SCORE_WEIGHTS["stoch_rsi_aligned"]
         details["stoch_rsi"] = {
@@ -303,7 +314,7 @@ class ConfluenceEngine:
 
         # 16. BTC Dominance alignment
         btc_dom_ok = self._check_btc_dominance_aligned(
-            market_intel_data.get("btc_dominance", {}), symbol, structure.bias
+            market_intel_data.get("btc_dominance", {}), symbol, dominant_bias
         )
         if btc_dom_ok:
             total_score += SCORE_WEIGHTS["btc_dominance_aligned"]
@@ -315,7 +326,7 @@ class ConfluenceEngine:
 
         # 17. Order Book Depth alignment
         ob_ok = self._check_orderbook_aligned(
-            market_intel_data.get("orderbook", {}), structure.bias
+            market_intel_data.get("orderbook", {}), dominant_bias
         )
         if ob_ok:
             total_score += SCORE_WEIGHTS["orderbook_depth_aligned"]
@@ -327,7 +338,7 @@ class ConfluenceEngine:
 
         # 18. Liquidation Magnet
         liq_ok = self._check_liquidation_magnet(
-            market_intel_data.get("liquidation", {}), entry_df, structure.bias
+            market_intel_data.get("liquidation", {}), entry_df, dominant_bias
         )
         if liq_ok:
             total_score += SCORE_WEIGHTS["liquidation_magnet"]
@@ -350,7 +361,7 @@ class ConfluenceEngine:
 
         # 20. Support/Resistance alignment
         sr_ok = self._check_support_resistance_aligned(
-            market_intel_data.get("support_resistance", {}), structure.bias
+            market_intel_data.get("support_resistance", {}), dominant_bias
         )
         if sr_ok:
             total_score += SCORE_WEIGHTS["support_resistance_aligned"]
@@ -369,9 +380,9 @@ class ConfluenceEngine:
         vwap_data = calculate_vwap(entry_df)
         vwap_ok = False
         if vwap_data["position"] is not None:
-            if structure.bias == "BULLISH" and vwap_data["position"] == "above":
+            if dominant_bias == "BULLISH" and vwap_data["position"] == "above":
                 vwap_ok = True
-            elif structure.bias == "BEARISH" and vwap_data["position"] == "below":
+            elif dominant_bias == "BEARISH" and vwap_data["position"] == "below":
                 vwap_ok = True
         if vwap_ok:
             total_score += SCORE_WEIGHTS["vwap_aligned"]
@@ -406,8 +417,8 @@ class ConfluenceEngine:
         div_data = detect_divergence(entry_df)
         div_type = div_data.get("type", "none")
         rsi_div_ok = div_data["rsi_divergence"] and (
-            (structure.bias == "BULLISH" and div_type == "bullish") or
-            (structure.bias == "BEARISH" and div_type == "bearish")
+            (dominant_bias == "BULLISH" and div_type == "bullish") or
+            (dominant_bias == "BEARISH" and div_type == "bearish")
         )
         macd_div_ok = div_data["macd_divergence"] and rsi_div_ok
         if rsi_div_ok:
@@ -439,8 +450,8 @@ class ConfluenceEngine:
         # T6. Candle Pattern Confirmation
         pattern_data = detect_candle_pattern(entry_df)
         pattern_ok = pattern_data["pattern"] is not None and (
-            (structure.bias == "BULLISH" and pattern_data["bullish"]) or
-            (structure.bias == "BEARISH" and not pattern_data["bullish"])
+            (dominant_bias == "BULLISH" and pattern_data["bullish"]) or
+            (dominant_bias == "BEARISH" and not pattern_data["bullish"])
         )
         if pattern_ok:
             total_score += SCORE_WEIGHTS["candle_pattern_aligned"]
@@ -464,8 +475,8 @@ class ConfluenceEngine:
             "score": SCORE_WEIGHTS["open_interest_increasing"] if oi_ok else 0,
         }
 
-        # Determine recommendation
-        recommendation = self._get_recommendation(total_score, structure.bias, htf_biases)
+        # Determine recommendation based on dominant bias
+        recommendation = self._get_recommendation(total_score, dominant_bias, htf_biases)
 
         return ConfluenceResult(
             symbol=symbol,
