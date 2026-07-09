@@ -546,114 +546,170 @@ export default function TradingViewChart({
     });
   }, [indicators]);
 
+  // Symbols traded on Binance spot (major pairs)
+  // Others (HYPE, etc.) are futures-only or OKX-only → try futures then backend poll
+  const BINANCE_SPOT_ONLY = new Set<string>(); // keep empty: we auto-detect via WS error
+
   const setupWebSocket = useCallback((sym: string, tf: string) => {
     if (wsReconnectRef.current) { clearTimeout(wsReconnectRef.current); wsReconnectRef.current = null; }
     if (wsRef.current) { wsRef.current.onclose = null; wsRef.current.close(); }
     if (wsDestroyedRef.current) return;
 
-    try {
-      setWsStatus("connecting");
-      const bnSymbol = sym.toLowerCase().replace("-", "");
-      const wsUrl = `wss://stream.binance.com:9443/ws/${bnSymbol}@kline_${tf}`;
+    const bnSymbol = sym.toLowerCase().replace("-", "");
 
-      const ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
+    const tryConnect = (wsUrl: string, fallbackFn?: () => void) => {
+      try {
+        setWsStatus("connecting");
+        const ws = new WebSocket(wsUrl);
+        wsRef.current = ws;
+        let connected = false;
 
-      ws.onopen = () => setWsStatus("live");
-
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          const k = msg?.k;
-          if (!k) return;
-
-          const tick: CandlestickData<Time> = {
-            time: (Math.floor(k.t / 1000)) as Time,
-            open: parseFloat(k.o),
-            high: parseFloat(k.h),
-            low: parseFloat(k.l),
-            close: parseFloat(k.c),
-          };
-          const volValue = parseFloat(k.v);
-
-          seriesRef.current?.update(tick);
-          lineSeriesRef.current?.update({ time: tick.time, value: tick.close });
-          areaSeriesRef.current?.update({ time: tick.time, value: tick.close });
-          volumeSeriesRef.current?.update({
-            time: tick.time,
-            value: volValue,
-            color:
-              chartStyleRef.current !== "candlestick"
-                ? tick.close >= tick.open ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)"
-                : tick.close >= tick.open ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)",
-          });
-
-          // ── Realtime indicator recalculation ──
-          const currentData = chartDataRef.current;
-          if (!currentData.length) return;
-          // Update last candle in chartDataRef
-          const lastIdx = currentData.length - 1;
-          if ((currentData[lastIdx].time as number) === (tick.time as number)) {
-            currentData[lastIdx] = { ...currentData[lastIdx], ...tick };
-          } else {
-            currentData.push({ ...tick, volume: volValue });
+        // If Binance closes immediately (symbol not found), fall back
+        const failTimeout = setTimeout(() => {
+          if (!connected && fallbackFn) {
+            ws.onclose = null;
+            ws.close();
+            fallbackFn();
           }
+        }, 5000);
 
-          // Recalc EMAs
-          if (ema20SeriesRef.current && indicators.ema20) {
-            const d = calculateEMA(currentData, 20);
-            if (d.length) ema20SeriesRef.current.update(d[d.length - 1]);
-          }
-          if (ema50SeriesRef.current && indicators.ema50) {
-            const d = calculateEMA(currentData, 50);
-            if (d.length) ema50SeriesRef.current.update(d[d.length - 1]);
-          }
-          if (ema200SeriesRef.current && indicators.ema200) {
-            const d = calculateEMA(currentData, 200);
-            if (d.length) ema200SeriesRef.current.update(d[d.length - 1]);
-          }
+        ws.onopen = () => {
+          connected = true;
+          clearTimeout(failTimeout);
+          setWsStatus("live");
+        };
 
-          // Recalc BB
-          if (indicators.bollingerBands) {
-            const bb = calculateBollingerBands(currentData);
-            if (bb.upper.length) {
-              bbUpperRef.current?.update(bb.upper[bb.upper.length - 1]);
-              bbMiddleRef.current?.update(bb.middle[bb.middle.length - 1]);
-              bbLowerRef.current?.update(bb.lower[bb.lower.length - 1]);
+        ws.onmessage = (event) => {
+          try {
+            const msg = JSON.parse(event.data);
+            const k = msg?.k;
+            if (!k) return;
+
+            const tick: CandlestickData<Time> = {
+              time: (Math.floor(k.t / 1000)) as Time,
+              open: parseFloat(k.o),
+              high: parseFloat(k.h),
+              low: parseFloat(k.l),
+              close: parseFloat(k.c),
+            };
+            const volValue = parseFloat(k.v);
+
+            seriesRef.current?.update(tick);
+            lineSeriesRef.current?.update({ time: tick.time, value: tick.close });
+            areaSeriesRef.current?.update({ time: tick.time, value: tick.close });
+            volumeSeriesRef.current?.update({
+              time: tick.time,
+              value: volValue,
+              color:
+                chartStyleRef.current !== "candlestick"
+                  ? tick.close >= tick.open ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)"
+                  : tick.close >= tick.open ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)",
+            });
+
+            // ── Realtime indicator recalculation ──
+            const currentData = chartDataRef.current;
+            if (!currentData.length) return;
+            const lastIdx = currentData.length - 1;
+            if ((currentData[lastIdx].time as number) === (tick.time as number)) {
+              currentData[lastIdx] = { ...currentData[lastIdx], ...tick };
+            } else {
+              currentData.push({ ...tick, volume: volValue });
             }
-          }
 
-          // Recalc RSI
-          if (rsiSeriesRef.current && indicators.rsi) {
-            const rsiD = calculateRSI(currentData, 14);
-            if (rsiD.length) rsiSeriesRef.current.update(rsiD[rsiD.length - 1]);
-          }
+            if (ema20SeriesRef.current && indicators.ema20) {
+              const d = calculateEMA(currentData, 20);
+              if (d.length) ema20SeriesRef.current.update(d[d.length - 1]);
+            }
+            if (ema50SeriesRef.current && indicators.ema50) {
+              const d = calculateEMA(currentData, 50);
+              if (d.length) ema50SeriesRef.current.update(d[d.length - 1]);
+            }
+            if (ema200SeriesRef.current && indicators.ema200) {
+              const d = calculateEMA(currentData, 200);
+              if (d.length) ema200SeriesRef.current.update(d[d.length - 1]);
+            }
+            if (indicators.bollingerBands) {
+              const bb = calculateBollingerBands(currentData);
+              if (bb.upper.length) {
+                bbUpperRef.current?.update(bb.upper[bb.upper.length - 1]);
+                bbMiddleRef.current?.update(bb.middle[bb.middle.length - 1]);
+                bbLowerRef.current?.update(bb.lower[bb.lower.length - 1]);
+              }
+            }
+            if (rsiSeriesRef.current && indicators.rsi) {
+              const rsiD = calculateRSI(currentData, 14);
+              if (rsiD.length) rsiSeriesRef.current.update(rsiD[rsiD.length - 1]);
+            }
+            if (stochRsiKRef.current && stochRsiDRef.current && indicators.stochRsi) {
+              const stoch = calculateStochRSI(currentData, 14, 3, 3);
+              if (stoch.kLine.length) stochRsiKRef.current.update(stoch.kLine[stoch.kLine.length - 1]);
+              if (stoch.dLine.length) stochRsiDRef.current.update(stoch.dLine[stoch.dLine.length - 1]);
+            }
+            if (macdHistRef.current && macdLineRef.current && macdSignalRef.current && indicators.macd) {
+              const m = calculateMACD(currentData);
+              if (m.histogram.length) macdHistRef.current.update(m.histogram[m.histogram.length - 1]);
+              if (m.macdLine.length) macdLineRef.current.update(m.macdLine[m.macdLine.length - 1]);
+              if (m.signalLine.length) macdSignalRef.current.update(m.signalLine[m.signalLine.length - 1]);
+            }
+          } catch (e) { console.warn("WS message parse error:", e); }
+        };
 
-          // Recalc Stoch RSI
-          if (stochRsiKRef.current && stochRsiDRef.current && indicators.stochRsi) {
-            const stoch = calculateStochRSI(currentData, 14, 3, 3);
-            if (stoch.kLine.length) stochRsiKRef.current.update(stoch.kLine[stoch.kLine.length - 1]);
-            if (stoch.dLine.length) stochRsiDRef.current.update(stoch.dLine[stoch.dLine.length - 1]);
+        ws.onerror = () => { setWsStatus("disconnected"); };
+        ws.onclose = () => {
+          clearTimeout(failTimeout);
+          setWsStatus("disconnected");
+          if (!connected && fallbackFn) {
+            // Closed before open → symbol not on this exchange, try fallback
+            fallbackFn();
+          } else if (!wsDestroyedRef.current) {
+            wsReconnectRef.current = setTimeout(() => tryConnect(wsUrl, fallbackFn), WS_RECONNECT_DELAY);
           }
+        };
+      } catch (err) { console.error("WS init failed:", err); setWsStatus("disconnected"); }
+    };
 
-          // Recalc MACD
-          if (macdHistRef.current && macdLineRef.current && macdSignalRef.current && indicators.macd) {
-            const m = calculateMACD(currentData);
-            if (m.histogram.length) macdHistRef.current.update(m.histogram[m.histogram.length - 1]);
-            if (m.macdLine.length) macdLineRef.current.update(m.macdLine[m.macdLine.length - 1]);
-            if (m.signalLine.length) macdSignalRef.current.update(m.signalLine[m.signalLine.length - 1]);
+    // Start polling backend as last-resort live update (for OKX-only tokens)
+    const startBackendPolling = () => {
+      setWsStatus("live"); // treat polling as "live" for UX
+      const poll = async () => {
+        if (wsDestroyedRef.current) return;
+        try {
+          const res = await fetch(`${API_URL}/api/v1/market/candles/${sym}?timeframe=${tf}&limit=2`);
+          const json = await res.json();
+          const candles = json.candles ?? [];
+          if (candles.length > 0) {
+            const last = candles[candles.length - 1];
+            const tick: CandlestickData<Time> = {
+              time: (new Date(last.open_time).getTime() / 1000) as Time,
+              open: parseFloat(last.open),
+              high: parseFloat(last.high),
+              low: parseFloat(last.low),
+              close: parseFloat(last.close),
+            };
+            seriesRef.current?.update(tick);
+            lineSeriesRef.current?.update({ time: tick.time, value: tick.close });
+            areaSeriesRef.current?.update({ time: tick.time, value: tick.close });
           }
-        } catch (e) { console.warn("WS message parse error:", e); }
-      };
-
-      ws.onerror = (e) => { console.warn("Binance WS error:", e); setWsStatus("disconnected"); };
-      ws.onclose = () => {
-        setWsStatus("disconnected");
+        } catch (_) {}
         if (!wsDestroyedRef.current) {
-          wsReconnectRef.current = setTimeout(() => setupWebSocket(sym, tf), WS_RECONNECT_DELAY);
+          wsReconnectRef.current = setTimeout(poll, 10000); // poll every 10s
         }
       };
-    } catch (err) { console.error("WS init failed:", err); setWsStatus("disconnected"); }
+      poll();
+    };
+
+    // Try: Binance Spot WS -> Binance Futures WS -> Backend Polling
+    const spotUrl = `wss://stream.binance.com:9443/ws/${bnSymbol}@kline_${tf}`;
+    const futuresUrl = `wss://fstream.binance.com/ws/${bnSymbol}@kline_${tf}`;
+
+    tryConnect(spotUrl, () => {
+      // Spot failed, try futures
+      tryConnect(futuresUrl, () => {
+        // Both Binance WS failed, use backend polling for OKX symbols (HYPE etc.)
+        console.info(`[Chart] ${sym} not on Binance WS - using backend polling for live updates`);
+        startBackendPolling();
+      });
+    });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
