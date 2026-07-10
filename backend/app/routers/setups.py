@@ -215,28 +215,50 @@ async def generate_setup(
 @router.post("/generate/all", dependencies=[Depends(require_api_key)])
 async def generate_all_setups(
     timeframe: str = Query("1h"),
+    tier: str = Query("all", description="Tier filter: 'top' (T1+T2 only) or 'all' (T1+T2+T3)"),
 ):
     """
-    Trigger signal generation for ALL dynamic symbols from Binance.
-    Each symbol gets its own DB session to avoid SQLAlchemy concurrent-write conflicts.
-    Uses concurrency limit (semaphore) to avoid overwhelming system resources.
+    Trigger signal generation for a curated list of LIQUID pairs only.
+    Pairs are grouped into tiers by liquidity / market cap.
+    Only pairs with consistently high volume and tight spreads are included.
     """
     import asyncio
     from app.database import SessionLocal
-    
-    # 1. Fetch dynamic symbols
-    all_syms = await data_engine.fetch_symbols()
-    symbols = [s["symbol"] for s in all_syms]
-    
-    if not symbols:
-        return {"message": "No symbols found to generate setups for."}
 
-    # 2. Process in batches — each symbol gets its own fresh DB session
-    semaphore = asyncio.Semaphore(10)  # max 10 parallel scans at a time
-    
+    # ----------------------------------------------------------------
+    # CURATED LIQUID PAIRS — Tiered by liquidity
+    # ----------------------------------------------------------------
+    # Tier 1: Mega-cap — highest liquidity, always included
+    TIER_1 = [
+        "BTCUSDT", "ETHUSDT",
+    ]
+
+    # Tier 2: Large-cap — consistently top-20 by volume on major exchanges
+    TIER_2 = [
+        "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT",
+        "AVAXUSDT", "LINKUSDT", "DOTUSDT", "UNIUSDT", "NEARUSDT",
+        "LTCUSDT", "ATOMUSDT", "APTUSDT", "ARBUSDT", "OPUSDT",
+        "SUIUSDT", "SEIUSDT", "TIAUSDT", "INJUSDT",
+    ]
+
+    # Tier 3: Mid-cap — good volume, well-known projects
+    TIER_3 = [
+        "HYPEUSDT", "EIGENUSDT", "ENAUSDT", "JUPUSDT", "WIFUSDT",
+        "FETUSDT", "RENDERUSDT", "STRKUSDT", "ONDOUSDT", "PYTHUSDT",
+        "PENDLEUSDT", "AAVEUSDT", "MKRUSDT", "COMPUSDT", "GRTUSDT",
+        "FLOKIUSDT", "BONKUSDT", "PEPEUSDT", "TRUMPUSDT",
+    ]
+
+    if tier == "top":
+        symbols = TIER_1 + TIER_2
+    else:
+        symbols = TIER_1 + TIER_2 + TIER_3
+
+    # Process in batches — each symbol gets its own fresh DB session
+    semaphore = asyncio.Semaphore(8)  # max 8 parallel scans
+
     async def process_symbol(symbol):
         async with semaphore:
-            # Create an isolated session per symbol to prevent session conflicts
             local_db = SessionLocal()
             try:
                 result = await generate_setup(symbol, timeframe, local_db)
@@ -250,13 +272,16 @@ async def generate_all_setups(
 
     tasks = [process_symbol(s) for s in symbols]
     results = await asyncio.gather(*tasks)
-    
+
     generated_count = sum(1 for r in results if isinstance(r, dict) and r.get("setup") is not None)
-    
+    tier_label = "T1+T2" if tier == "top" else "T1+T2+T3"
+
     return {
         "total_symbols": len(symbols),
         "generated_count": generated_count,
-        "message": f"Processed {len(symbols)} symbols. Generated {generated_count} new setups.",
+        "tier": tier_label,
+        "symbols_scanned": symbols,
+        "message": f"Scanned {len(symbols)} liquid pairs ({tier_label}). Generated {generated_count} new setups.",
     }
 
 
