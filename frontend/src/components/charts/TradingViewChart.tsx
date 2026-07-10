@@ -976,7 +976,10 @@ export default function TradingViewChart({
             open: parseFloat(c.open), high: parseFloat(c.high),
             low: parseFloat(c.low), close: parseFloat(c.close),
             volume: parseFloat(c.volume || 0),
-          })).sort((a, b) => (a.time as number) - (b.time as number));
+          }))
+            .sort((a, b) => (a.time as number) - (b.time as number))
+            // Deduplicate: keep last occurrence of each timestamp
+            .filter((d, i, arr) => i === arr.length - 1 || (d.time as number) !== (arr[i + 1].time as number));
         } else {
           try {
             const controller = new AbortController();
@@ -992,7 +995,10 @@ export default function TradingViewChart({
                 open: parseFloat(c.open), high: parseFloat(c.high),
                 low: parseFloat(c.low), close: parseFloat(c.close),
                 volume: parseFloat(c.volume || 0),
-              })).sort((a: any, b: any) => a.time - b.time);
+              }))
+                .sort((a: any, b: any) => a.time - b.time)
+                // Deduplicate: keep last occurrence of each timestamp
+                .filter((d: any, i: number, arr: any[]) => i === arr.length - 1 || (d.time as number) !== (arr[i + 1].time as number));
             }
           } catch (e: any) {
             if (e.name !== "AbortError") {
