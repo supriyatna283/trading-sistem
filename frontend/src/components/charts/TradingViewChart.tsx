@@ -563,20 +563,32 @@ export default function TradingViewChart({
         const ws = new WebSocket(wsUrl);
         wsRef.current = ws;
         let connected = false;
+        let receivedData = false;
+        let failTimeout: NodeJS.Timeout;
 
-        // If Binance closes immediately (symbol not found), fall back
-        const failTimeout = setTimeout(() => {
+        // If WebSocket doesn't even open within 4s, fallback
+        const connectionTimeout = setTimeout(() => {
           if (!connected && fallbackFn) {
             ws.onclose = null;
             ws.close();
             fallbackFn();
           }
-        }, 5000);
+        }, 4000);
 
         ws.onopen = () => {
           connected = true;
-          clearTimeout(failTimeout);
-          setWsStatus("live");
+          clearTimeout(connectionTimeout);
+          
+          // Binance accepts subscriptions for invalid symbols but sends no data.
+          // Fall back if no message is received within 4s of connecting.
+          failTimeout = setTimeout(() => {
+            if (!receivedData && fallbackFn) {
+              console.warn(`[Chart] No data received from ${wsUrl}, falling back...`);
+              ws.onclose = null;
+              ws.close();
+              fallbackFn();
+            }
+          }, 4000);
         };
 
         ws.onmessage = (event) => {
@@ -584,6 +596,12 @@ export default function TradingViewChart({
             const msg = JSON.parse(event.data);
             const k = msg?.k;
             if (!k) return;
+
+            if (!receivedData) {
+              receivedData = true;
+              clearTimeout(failTimeout);
+              setWsStatus("live");
+            }
 
             const tick: CandlestickData<Time> = {
               time: (Math.floor(k.t / 1000)) as Time,
