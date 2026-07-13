@@ -106,13 +106,27 @@ class ConfluenceEngine:
                 bias = self.structure_analyzer.analyze(candles_by_tf[tf], symbol, tf)
                 htf_biases[tf] = bias.bias
 
+        # HTF alignment scoring:
+        #  - Both agree (BULLISH+BULLISH or BEARISH+BEARISH) → full 4 pts
+        #  - 4H agrees with entry TF but 1D conflicts → partial 2 pts (4H more relevant to 1H entry)
+        #  - Both disagree or both SIDEWAYS → 0 pts
+        htf_biases_vals = list(htf_biases.values())
+        htf_1d = htf_biases.get("1d", "SIDEWAYS")
+        htf_4h = htf_biases.get("4h", "SIDEWAYS")
         htf_aligned = self._check_htf_alignment(htf_biases)
+        htf_score = 0
         if htf_aligned:
-            total_score += SCORE_WEIGHTS["htf_bias_aligned"]
+            # Full credit: all HTF TFs agree
+            htf_score = SCORE_WEIGHTS["htf_bias_aligned"]
+        elif htf_4h != "SIDEWAYS" and htf_1d != "SIDEWAYS" and htf_4h != htf_1d:
+            # Partial credit: 4H disagrees with 1D — award half (1D is the conflict)
+            # We'll use the 4H bias as the more relevant near-HTF
+            htf_score = SCORE_WEIGHTS["htf_bias_aligned"] // 2  # 2 pts of 4
+        total_score += htf_score
         details["htf_bias"] = {
             "aligned": htf_aligned,
             "biases": htf_biases,
-            "score": SCORE_WEIGHTS["htf_bias_aligned"] if htf_aligned else 0,
+            "score": htf_score,
         }
 
         # 2. Entry timeframe analysis
@@ -438,13 +452,18 @@ class ConfluenceEngine:
         }
 
         # T5. ADX Trend Strength Filter
+        # Threshold: 14 for alts (volatile, ADX moves faster), 20 for majors
         adx_val = calculate_adx(entry_df)
-        if adx_val is not None and adx_val < 20:
+        is_major = symbol.upper() in {"BTCUSDT", "ETHUSDT", "BNBUSDT"}
+        adx_threshold = 20 if is_major else 14  # alts get a more lenient threshold
+        adx_penalty = adx_val is not None and adx_val < adx_threshold
+        if adx_penalty:
             # Soft penalty for ranging market
             total_score = max(0, total_score - 2)
         details["adx"] = {
             "value": adx_val,
-            "penalty": -2 if (adx_val is not None and adx_val < 20) else 0
+            "penalty": -2 if adx_penalty else 0,
+            "threshold": adx_threshold,
         }
 
         # T6. Candle Pattern Confirmation
@@ -656,15 +675,24 @@ class ConfluenceEngine:
         return False
 
     def _check_ema_aligned(self, df: pd.DataFrame, ema_value: Optional[float], bias: str) -> bool:
-        """Check if price is on the correct side of the 200 EMA for trend alignment."""
+        """
+        Check if price is on the correct side of the 200 EMA for trend alignment.
+        Allows up to 8% pullback through the EMA for altcoins in trending markets.
+        This handles the common scenario: alt coin pulls back through EMA200
+        during a broader bullish trend — still a valid HTF-aligned entry.
+        """
         if ema_value is None or df.empty:
             return False
-            
+
         last_close = float(df.iloc[-1]["close"])
+        ema_distance_pct = (last_close - ema_value) / ema_value * 100  # + = above EMA
+
         if bias == "BULLISH":
-            return last_close > ema_value
+            # Price above EMA OR within 8% below EMA (deep pullback allowed)
+            return ema_distance_pct > -8.0
         elif bias == "BEARISH":
-            return last_close < ema_value
+            # Price below EMA OR within 8% above EMA
+            return ema_distance_pct < 8.0
         return False
 
     def _check_macd_aligned(self, hist: Optional[float], bias: str) -> bool:
