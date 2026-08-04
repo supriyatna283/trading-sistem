@@ -1,18 +1,20 @@
 """
-AI Chart Analysis Router — NVIDIA Nemotron SSE Streaming (V3 — Ultimate)
+AI Chart Analysis Router — NVIDIA Nemotron SSE Streaming (V4 — Ultimate)
 =========================================================================
 Architecture:
   MarketDataEngine → Technical Indicators → Confluence Engine → Signal Engine
-  + NewsCalendarEngine (berita Forex) + CryptoNewsEngine (berita kripto)
-  + MarketIntelEngine (BTC.D) + SentimentEngine (F&G, Funding Rate) + DXY
-  → Full Market Summary → NVIDIA Nemotron → SSE stream
+  + NewsCalendarEngine (berita Forex) + CryptoNewsEngine (berita kripto + DXY)
+  + MarketIntelEngine (BTC.D) + SentimentEngine (F&G, Funding Rate, L/S Ratio)
+  + QuickAnalyticsEngine (Order Flow Delta, Quick Win Rate) [V4 NEW]
+  → Full Market Summary → NVIDIA Nemotron (system+user split) → SSE stream
 
-V3 Upgrades:
-  - Integrasi berita kripto real-time dari CryptoPanic
-  - Analisis DXY (US Dollar Index) dari Yahoo Finance
-  - BTC Dominance, Fear & Greed, Funding Rate, Open Interest masuk ke prompt
-  - Endpoint baru: POST /api/v1/ai/chat (chat interaktif lanjutan)
-  - Macro context dikirim ke frontend sebagai event terpisah
+V4 Upgrades:
+  - Order Flow Delta: buy vs sell pressure dari Binance agg trades (no auth)
+  - Quick Win Rate: estimasi win rate historis dari data candle lokal
+  - Signal Grade (A+/A/B/C) berdasarkan confluence score percentile
+  - Long/Short Ratio dari Binance Futures
+  - System/User message split untuk konsistensi persona AI
+  - Self-Critique section: AI wajib tantang analisisnya sendiri
 """
 
 import asyncio
@@ -35,6 +37,7 @@ from app.engines.news_calendar import NewsCalendarEngine
 from app.engines.market_intel import MarketIntelEngine
 from app.engines.sentiment import SentimentEngine
 from app.engines.crypto_news import CryptoNewsEngine
+from app.engines.quick_analytics import QuickAnalyticsEngine
 from app.utils.indicators import (
     calculate_rsi, calculate_ema, calculate_macd,
     calculate_bollinger_bands, calculate_stoch_rsi,
@@ -50,7 +53,7 @@ router = APIRouter(prefix="/api/v1/ai", tags=["AI Analysis"])
 # In-Memory Cache (90s TTL)
 # ──────────────────────────────────────────────────────────────
 _AI_CACHE: dict[str, dict] = {}
-_AI_CACHE_TTL = 90  # seconds
+_AI_CACHE_TTL = 300  # 5 minutes (raised from 90s — order flow refresh = 2min, so 5min is safe)
 
 
 def _cache_key(symbol: str, timeframe: str) -> str:
@@ -81,6 +84,7 @@ _news_engine = NewsCalendarEngine()
 _intel_engine = MarketIntelEngine()
 _sentiment_engine = SentimentEngine()
 _crypto_news_engine = CryptoNewsEngine()
+_quick_analytics = QuickAnalyticsEngine()
 
 
 # ──────────────────────────────────────────────────────────────
@@ -271,6 +275,7 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
         funding_raw,
         dxy_raw,
         ls_ratio_raw,
+        order_flow_raw,
     ) = await asyncio.gather(
         *[_data_engine.get_candles(symbol.upper(), tf, 200) for tf in HTF_TIMEFRAMES],
         _news_engine.get_events(),
@@ -280,6 +285,7 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
         _sentiment_engine.get_funding_rates([symbol]),
         _crypto_news_engine.get_dxy(),
         _sentiment_engine.get_long_short_ratio(symbol),
+        _quick_analytics.get_order_flow_delta(symbol),
         return_exceptions=True,
     )
     results = candle_results
@@ -301,6 +307,7 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
     funding_list = funding_raw if isinstance(funding_raw, list) else []
     dxy = dxy_raw if isinstance(dxy_raw, dict) else {}
     ls_ratio = ls_ratio_raw if isinstance(ls_ratio_raw, dict) else {}
+    order_flow = order_flow_raw if isinstance(order_flow_raw, dict) else {}
     funding_data = funding_list[0] if funding_list else {}
 
     # Filter: only high-impact Forex news (next 24h)
@@ -591,7 +598,25 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
                 for n in crypto_news_list[:5]
             ],
         },
+        # ── V4: Order Flow & Win Rate ─────────────────────────────
+        "order_flow": order_flow,
     }
+
+    # Compute win rate using local candle data (no extra API call)
+    atr_for_wr = ctx.get("atr") or ctx["indicators"].get("atr") or 0
+    rr_for_wr = 2.0
+    if atr_for_wr and atr_for_wr > 0:
+        win_rate_data = _quick_analytics.estimate_win_rate(
+            df=entry_df,
+            signal=ctx["signal"],
+            atr=float(atr_for_wr),
+            risk_reward=rr_for_wr,
+            lookback=60,
+        )
+    else:
+        win_rate_data = _quick_analytics._empty_wr()
+
+    ctx["win_rate"] = win_rate_data
 
     return ctx
 
@@ -725,6 +750,27 @@ def _build_prompt(ctx: dict, setup: dict) -> str:
     ls_ratio_val = macro.get("ls_ratio")
     ls_str = f"{ls_ratio_val} ({ls_interpretation})" if ls_ratio_val else f"N/A ({ls_interpretation})"
 
+    # Order Flow Delta
+    of_data = ctx.get("order_flow", {})
+    of_buy_pct = of_data.get("buy_pct")
+    of_sell_pct = of_data.get("sell_pct")
+    of_delta_usd = of_data.get("delta_usd")
+    of_whale_buy = of_data.get("whale_buy_count", 0)
+    of_whale_sell = of_data.get("whale_sell_count", 0)
+    of_interp = of_data.get("interpretation", "Data tidak tersedia")
+    of_str = (
+        f"Buy {of_buy_pct}% / Sell {of_sell_pct}% | Delta USD: {'+' if of_delta_usd and of_delta_usd >= 0 else ''}"
+        f"{of_delta_usd:,.0f} | Whale: {of_whale_buy}B/{of_whale_sell}S (>$50k)"
+        if of_buy_pct else "Data tidak tersedia"
+    )
+
+    # Win Rate Estimate
+    wr_data = ctx.get("win_rate", {})
+    wr_val = wr_data.get("win_rate")
+    wr_total = wr_data.get("total_trades", 0)
+    wr_verdict = wr_data.get("verdict", "N/A")
+    wr_str = f"{wr_val}% ({wr_data.get('wins',0)}W/{wr_data.get('losses',0)}L dari {wr_total} setup)" if wr_val is not None else "N/A"
+
     # ── SYSTEM MESSAGE (persona) ──────────────────────────────
     system_msg = """Kamu adalah AI Analyst Trading Senior yang ahli dalam:
 - Smart Money Concepts (SMC/ICT): Order Blocks, FVG, BOS/CHOCH, Liquidity Sweep
@@ -802,6 +848,14 @@ HTF Alignment:     {aligned_count}/{total_htf} timeframes aligned with {signal}
   Fear & Greed:    {fng_val}/100 — {fng_lbl}{fng_trend}
   Funding Rate:    {fund_rate:+.6f} → {fund_lbl}
   L/S Ratio:       {ls_str}
+
+─── ORDER FLOW DELTA (Binance Agg Trades) ──
+  Tekanan:         {of_str}
+  Analisis:        {of_interp}
+
+─── ESTIMASI WIN RATE HISTORIS ─────────────
+  Win Rate:        {wr_str}
+  Kesimpulan:      {wr_verdict}
 
 ─── BERITA HIGH IMPACT FOREX (24 JAM) ──────
 {fx_lines}
