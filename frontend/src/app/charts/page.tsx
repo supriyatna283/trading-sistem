@@ -2,6 +2,7 @@
 
 import MainLayout from "@/components/layout/MainLayout";
 import TradingViewChart, { SetupOverlay } from "@/components/charts/TradingViewChart";
+import AIAnalysisPanel from "@/components/charts/AIAnalysisPanel";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { api } from "@/lib/api";
 import { API_URL, debounce } from "@/lib/utils";
@@ -63,6 +64,7 @@ export default function ChartsPage() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [showSearch, setShowSearch] = useState(false);
   const [activeTimeframe, setActiveTimeframe] = useState("1h");
+  const [showAIPanel, setShowAIPanel] = useState(false);
   const pageRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const mtfAbortRef = useRef<AbortController | null>(null);
@@ -267,6 +269,14 @@ export default function ChartsPage() {
               title="Fullscreen"
             >
               {isFullscreen ? "⊡" : "⛶"}
+            </button>
+            <button
+              onClick={() => setShowAIPanel(v => !v)}
+              className={`icon-btn${showAIPanel ? " icon-btn-active-purple" : ""}`}
+              title="AI Analysis (auto-triggers on symbol/TF change)"
+              id="ai-toggle-btn"
+            >
+              <span style={{ fontSize: "0.8rem" }}>🤖</span> AI
             </button>
           </div>
         </div>
@@ -497,6 +507,14 @@ export default function ChartsPage() {
               </div>
             </div>
           )}
+
+          {/* AI Analysis Panel */}
+          <AIAnalysisPanel
+            symbol={selectedSymbol}
+            timeframe={activeTimeframe}
+            isOpen={showAIPanel}
+            onClose={() => setShowAIPanel(false)}
+          />
         </div>
 
         <style>{`

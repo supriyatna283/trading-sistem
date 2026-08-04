@@ -32,6 +32,7 @@ from app.routers import (
     trading,
     portfolio,
     order_flow,
+    ai_analysis,
 )
 from app.services.auto_scheduler import run_scheduler, stop_scheduler, scheduler_state
 from app.security import require_api_key
@@ -159,6 +160,7 @@ app.include_router(market_intel.router)
 app.include_router(trading.router)
 app.include_router(portfolio.router)
 app.include_router(order_flow.router)
+app.include_router(ai_analysis.router)
 
 
 @app.get("/")

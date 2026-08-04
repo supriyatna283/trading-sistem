@@ -17,3 +17,4 @@ python-jose==3.3.0
 passlib==1.7.4
 apscheduler==3.10.4
 python-binance==1.0.19
+openai>=1.40.0

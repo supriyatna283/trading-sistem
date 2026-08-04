@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     BINANCE_API_KEY: str = ""
     BINANCE_API_SECRET: str = ""
 
+    # NVIDIA AI (Nemotron)
+    NVIDIA_API_KEY: str = "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"
+
     # Telegram
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_CHAT_ID: str = ""
