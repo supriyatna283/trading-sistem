@@ -604,40 +604,40 @@ HTF Alignment:     {aligned_count}/{total_htf} timeframes aligned with {signal}
 TASK: WRITE YOUR ANALYSIS
 ═══════════════════════════════════════════
 
-Using ALL the data above as your foundation, provide an expert-level trading analysis. Be specific, precise, and reference actual price levels and indicator values.
+Using ALL the data above as your foundation, provide an expert-level trading analysis IN INDONESIAN (Bahasa Indonesia). Be specific, precise, and reference actual price levels and indicator values.
 
 ---
 
-### 1. 📊 Market Narrative
-In 3–4 sentences, describe the current market structure. Reference the SMC sequence (liquidity sweep → displacement → OB formation → BOS/CHOCH). Use specific price levels from the data above.
+### 1. 📊 Narasi Pasar
+In 3–4 sentences, describe the current market structure in Indonesian. Reference the SMC sequence (liquidity sweep → displacement → OB formation → BOS/CHOCH). Use specific price levels from the data above.
 
-### 2. 🎯 Signal Justification
-Explain the **{signal}** signal in depth. Which 3–4 confluence factors carry the most weight? How do they reinforce each other? What is the institutional narrative behind this setup?
+### 2. 🎯 Justifikasi Sinyal
+Explain the **{signal}** signal in depth in Indonesian. Which 3–4 confluence factors carry the most weight? How do they reinforce each other? What is the institutional narrative behind this setup?
 
-### 3. 📐 Trade Setup (Refined)
-Confirm or refine the engine-calculated levels. Be explicit:
+### 3. 📐 Setup Trading
+Confirm or refine the engine-calculated levels. Be explicit in Indonesian:
 - **Bias:** {signal}
-- **Entry Zone:** [price range — be specific]
+- **Area Entry:** [price range — be specific]
 - **Stop Loss:** [level] — [reason: below OB / below swing low / beyond invalidation level]
 - **TP1:** [level] — [reason: liquidity target / FVG fill / resistance]
 - **TP2:** [level] — [reason]
 - **TP3:** [level] — [reason: major liquidity / HTF target]
 - **R:R Ratio:** [ratio]
-- **Position Sizing Note:** [how much risk given {conf['pct']}% confidence]
+- **Manajemen Risiko:** [how much risk given {conf['pct']}% confidence]
 
-### 4. ⚠️ Risk Assessment
-List 3 concrete price levels or events that would INVALIDATE this setup:
+### 4. ⚠️ Risiko & Pembatalan
+List 3 concrete price levels or events that would INVALIDATE this setup in Indonesian:
 1. [specific level + reason]
 2. [specific level + reason]  
 3. [specific level + reason]
 
-### 5. ⏰ Timing & Execution
-- **Best entry timing:** Based on the {session} session and current structure
-- **Confirmation needed:** What should traders see before entering? (candle close, volume, retest?)
-- **Setup expiry:** When does this setup become invalid?
+### 5. ⏰ Waktu & Eksekusi
+- **Waktu terbaik:** Based on the {session} session and current structure
+- **Konfirmasi:** What should traders see before entering? (candle close, volume, retest?)
+- **Kadaluarsa Setup:** When does this setup become invalid?
 
-### 6. 🔑 Final Verdict
-One powerful sentence summarizing the setup: signal, conviction level, and key condition to watch.
+### 6. 🔑 Kesimpulan
+One powerful sentence summarizing the setup in Indonesian: signal, conviction level, and key condition to watch.
 
 ---
 END_OF_ANALYSIS"""
