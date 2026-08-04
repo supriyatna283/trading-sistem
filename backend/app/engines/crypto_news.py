@@ -76,20 +76,19 @@ class CryptoNewsEngine:
             # Base coin symbol (e.g. BTCUSDT → BTC)
             base_coin = symbol.upper().replace("USDT", "").replace("BUSD", "")
 
-            # CryptoPanic free endpoint — public=true means no auth needed
+            # CryptoPanic free endpoint — public=true means no auth, no filter param needed
             resp = await self.client.get(
                 self.CRYPTOPANIC_URL,
                 params={
                     "public": "true",
                     "kind": "news",
-                    "filter": "important",
                 },
                 timeout=10.0,
             )
 
             if resp.status_code != 200:
-                logger.warning(f"CryptoPanic returned {resp.status_code}")
-                return self._fallback_news(symbol)
+                logger.warning(f"CryptoPanic returned {resp.status_code} — trying fallback")
+                return await self._fetch_coindesk_fallback(symbol, limit)
 
             raw = resp.json()
             results = raw.get("results", [])
@@ -142,7 +141,7 @@ class CryptoNewsEngine:
 
         except Exception as e:
             logger.warning(f"CryptoPanic fetch error: {e}")
-            return self._fallback_news(symbol)
+            return await self._fetch_coindesk_fallback(symbol, limit)
 
     def _filter_by_symbol(
         self, news: List[Dict], symbol: str, limit: int
@@ -155,8 +154,51 @@ class CryptoNewsEngine:
         return combined[:limit]
 
     def _fallback_news(self, symbol: str) -> List[Dict]:
-        """Return empty list if CryptoPanic is unavailable."""
+        """Return empty list if all sources are unavailable."""
         return []
+
+    async def _fetch_coindesk_fallback(self, symbol: str, limit: int = 5) -> List[Dict]:
+        """
+        Fallback: Fetch crypto news from CoinDesk RSS feed (no auth needed).
+        Used when CryptoPanic is unavailable.
+        """
+        try:
+            base_coin = symbol.upper().replace("USDT", "").replace("BUSD", "")
+            resp = await self.client.get(
+                "https://www.coindesk.com/arc/outboundfeeds/rss/",
+                timeout=8.0,
+                headers={"Accept": "application/rss+xml, application/xml, text/xml"},
+            )
+            if resp.status_code != 200:
+                logger.warning(f"CoinDesk RSS returned {resp.status_code}")
+                return []
+
+            # Parse basic RSS XML (no external lib needed)
+            content = resp.text
+            items = []
+            import re
+            titles = re.findall(r"<title><!\[CDATA\[(.*?)\]\]></title>", content)
+            # Skip channel title (first item)
+            titles = titles[1:limit + 1] if len(titles) > 1 else []
+
+            for title in titles:
+                is_relevant = base_coin.lower() in title.lower() or "bitcoin" in title.lower() if base_coin == "BTC" else base_coin.lower() in title.lower()
+                items.append({
+                    "title": title,
+                    "url": "",
+                    "published_at": "",
+                    "currencies": [base_coin] if is_relevant else [],
+                    "sentiment": "NETRAL",
+                    "is_relevant": is_relevant,
+                    "source": "CoinDesk",
+                })
+
+            logger.info(f"CoinDesk RSS fallback: fetched {len(items)} items")
+            return items[:limit]
+
+        except Exception as e:
+            logger.warning(f"CoinDesk RSS fallback error: {e}")
+            return []
 
     # ─────────────────────────────────────────────────────────────
     # 2. DXY (US Dollar Index) from Yahoo Finance

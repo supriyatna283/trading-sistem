@@ -138,5 +138,54 @@ class SentimentEngine:
             "timestamp": datetime.now().isoformat()
         }
 
+    async def get_long_short_ratio(self, symbol: str, period: str = "1h") -> Dict[str, Any]:
+        """
+        Fetch Global Long/Short Account Ratio from Binance Futures.
+        Endpoint: /futures/data/globalLongShortAccountRatio
+        period: 5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d
+        Returns the most recent ratio with interpretation.
+        """
+        try:
+            url = f"{self.binance_futures_base}/futures/data/globalLongShortAccountRatio"
+            resp = await self.client.get(url, params={
+                "symbol": symbol.upper(),
+                "period": period,
+                "limit": 2,
+            })
+            resp.raise_for_status()
+            data = resp.json()
+            if data and len(data) > 0:
+                latest = data[0]
+                ratio = float(latest.get("longShortRatio", 1.0))
+                long_pct = float(latest.get("longAccount", 0.5)) * 100
+                short_pct = float(latest.get("shortAccount", 0.5)) * 100
+
+                # Contrarian interpretation: extreme longs = bearish signal
+                if ratio > 2.0:
+                    interpretation = f"Longs sangat dominan ({long_pct:.1f}%) → potensi short squeeze / bearish reversal"
+                elif ratio > 1.3:
+                    interpretation = f"Longs lebih dominan ({long_pct:.1f}%)"
+                elif ratio < 0.5:
+                    interpretation = f"Shorts sangat dominan ({short_pct:.1f}%) → potensi long squeeze / bullish reversal"
+                elif ratio < 0.77:
+                    interpretation = f"Shorts lebih dominan ({short_pct:.1f}%)"
+                else:
+                    interpretation = f"Seimbang (Long {long_pct:.1f}% / Short {short_pct:.1f}%)"
+
+                return {
+                    "ratio": round(ratio, 3),
+                    "long_pct": round(long_pct, 1),
+                    "short_pct": round(short_pct, 1),
+                    "interpretation": interpretation,
+                }
+        except Exception as e:
+            logger.debug(f"Long/Short ratio fetch failed for {symbol}: {e}")
+        return {
+            "ratio": None,
+            "long_pct": None,
+            "short_pct": None,
+            "interpretation": "Data tidak tersedia",
+        }
+
     async def close(self):
         await self.client.aclose()

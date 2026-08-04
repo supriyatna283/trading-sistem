@@ -112,6 +112,20 @@ def _safe_float(v, decimals=4) -> Optional[float]:
         return None
 
 
+def _signal_grade(score: int, max_score: int) -> str:
+    """Grade a signal A+/A/B/C based on confluence score percentile."""
+    if max_score <= 0:
+        return "C"
+    pct = (score / max_score) * 100
+    if pct >= 80:
+        return "A+"
+    elif pct >= 65:
+        return "A"
+    elif pct >= 45:
+        return "B"
+    return "C"
+
+
 def _detect_session() -> str:
     """Return current trading session name based on UTC hour."""
     from datetime import datetime, timezone
@@ -256,6 +270,7 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
         fng_raw,
         funding_raw,
         dxy_raw,
+        ls_ratio_raw,
     ) = await asyncio.gather(
         *[_data_engine.get_candles(symbol.upper(), tf, 200) for tf in HTF_TIMEFRAMES],
         _news_engine.get_events(),
@@ -264,6 +279,7 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
         _sentiment_engine.get_fear_and_greed(),
         _sentiment_engine.get_funding_rates([symbol]),
         _crypto_news_engine.get_dxy(),
+        _sentiment_engine.get_long_short_ratio(symbol),
         return_exceptions=True,
     )
     results = candle_results
@@ -284,6 +300,7 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
     fng = fng_raw if isinstance(fng_raw, dict) else {}
     funding_list = funding_raw if isinstance(funding_raw, list) else []
     dxy = dxy_raw if isinstance(dxy_raw, dict) else {}
+    ls_ratio = ls_ratio_raw if isinstance(ls_ratio_raw, dict) else {}
     funding_data = funding_list[0] if funding_list else {}
 
     # Filter: only high-impact Forex news (next 24h)
@@ -557,6 +574,11 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
             "dxy_change_1d": dxy.get("change_pct_1d"),
             "dxy_trend_5d": dxy.get("trend_5d"),
             "dxy_crypto_impact": dxy.get("crypto_impact"),
+            # ── V4: Long/Short Ratio ──────────────────────────────
+            "ls_ratio": ls_ratio.get("ratio"),
+            "ls_long_pct": ls_ratio.get("long_pct"),
+            "ls_short_pct": ls_ratio.get("short_pct"),
+            "ls_interpretation": ls_ratio.get("interpretation", "N/A"),
         },
         "news": {
             "high_impact_forex": high_impact_forex[:5],
@@ -689,7 +711,36 @@ def _build_prompt(ctx: dict, setup: dict) -> str:
     vol_chg = ctx["price"].get("volume_change_pct", 0)
     vol_label = f"{'+' if vol_chg >= 0 else ''}{vol_chg}% vs previous candle"
 
-    prompt = f"""You are a senior institutional trading analyst specializing in Smart Money Concepts (SMC/ICT), multi-timeframe analysis, and quantitative technical analysis. Your role is to provide a professional, actionable trade analysis — not to replace the signal engine, but to explain, contextualize, and add depth to it.
+    # Signal grade
+    grade = _signal_grade(conf["score"], conf["max_score"])
+    grade_desc = {
+        "A+": "Sangat Tinggi — setup premium, confidence maksimal",
+        "A":  "Tinggi — setup solid, layak untuk masuk",
+        "B":  "Menengah — setup ada, tapi perlu konfirmasi tambahan",
+        "C":  "Rendah — terlalu banyak noise, sebaiknya tunggu",
+    }.get(grade, "")
+
+    # L/S ratio section
+    ls_interpretation = macro.get("ls_interpretation", "N/A")
+    ls_ratio_val = macro.get("ls_ratio")
+    ls_str = f"{ls_ratio_val} ({ls_interpretation})" if ls_ratio_val else f"N/A ({ls_interpretation})"
+
+    # ── SYSTEM MESSAGE (persona) ──────────────────────────────
+    system_msg = """Kamu adalah AI Analyst Trading Senior yang ahli dalam:
+- Smart Money Concepts (SMC/ICT): Order Blocks, FVG, BOS/CHOCH, Liquidity Sweep
+- Analisis Multi-Timeframe (HTF bias → LTF entry)
+- Analisis Makro: BTC Dominance, DXY, Fear & Greed, Funding Rate, Long/Short Ratio
+- Manajemen Risiko Institusional
+
+PRINSIP UTAMA:
+1. Kamu MENJELASKAN keputusan engine, BUKAN menggantikannya
+2. Selalu referensikan level harga yang SPESIFIK dari data yang diberikan
+3. Jawab dalam Bahasa Indonesia yang profesional dan tajam
+4. Akui jika ada ketidakpastian — jangan over-confident
+5. Sebelum kesimpulan, tantang sendiri analisismu dengan 2 skenario risiko"""
+
+    # ── USER MESSAGE (data + task) ────────────────────────────
+    user_msg = f"""Analisis trading berikut dan berikan pandangan expert-mu:
 
 ═══════════════════════════════════════════
 MARKET SNAPSHOT — {sym} / {tf.upper()}
@@ -697,6 +748,7 @@ MARKET SNAPSHOT — {sym} / {tf.upper()}
 Current Price:     {price}
 Session:           {session}
 Engine Signal:     {signal}
+Signal Grade:      {grade} — {grade_desc}
 Confluence Score:  {conf['score']}/{conf['max_score']} ({conf['pct']}%) — {conf['recommendation']}
 HTF Alignment:     {aligned_count}/{total_htf} timeframes aligned with {signal}
 
@@ -749,6 +801,7 @@ HTF Alignment:     {aligned_count}/{total_htf} timeframes aligned with {signal}
   DXY Impact:      {dxy_impact}
   Fear & Greed:    {fng_val}/100 — {fng_lbl}{fng_trend}
   Funding Rate:    {fund_rate:+.6f} → {fund_lbl}
+  L/S Ratio:       {ls_str}
 
 ─── BERITA HIGH IMPACT FOREX (24 JAM) ──────
 {fx_lines}
@@ -798,13 +851,19 @@ List 3 concrete price levels or events that would INVALIDATE this setup in Indon
 - **Konfirmasi:** What should traders see before entering? (candle close, volume, retest?)
 - **Kadaluarsa Setup:** When does this setup become invalid?
 
-### 6. 🔑 Kesimpulan
-One powerful sentence summarizing the setup in Indonesian: signal, conviction level, and key condition to watch.
+### 6. 🧠 Self-Critique — Devil's Advocate
+Sebelum kesimpulan, hadapi dirimu sendiri: apa 2 alasan TERKUAT mengapa setup ini bisa GAGAL?
+1. [skenario risiko spesifik 1 — dengan level harga yang konkret]
+2. [skenario risiko spesifik 2 — faktor makro atau teknikal yang berlawanan]
+Kemudian nyatakan apakah kedua risiko tersebut mengubah atau mempertegas rekomendasimu.
+
+### 7. 🔑 Kesimpulan
+Satu kalimat powerful yang merangkum setup dalam Bahasa Indonesia: sinyal, tingkat keyakinan (grade {grade}), dan kondisi utama yang harus dipenuhi sebelum masuk.
 
 ---
 END_OF_ANALYSIS"""
 
-    return prompt
+    return system_msg, user_msg
 
 
 # ──────────────────────────────────────────────────────────────
@@ -916,7 +975,7 @@ async def _stream_ai_analysis(
     yield sse("status", "ai_thinking")
 
     settings = get_settings()
-    prompt = _build_prompt(ctx, setup_levels)
+    system_msg, user_msg = _build_prompt(ctx, setup_levels)
     full_reasoning = ""
     full_answer = ""
 
@@ -929,7 +988,10 @@ async def _stream_ai_analysis(
 
         stream = await client.chat.completions.create(
             model="nvidia/nemotron-3-ultra-550b-a55b",
-            messages=[{"role": "user", "content": prompt}],
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
             temperature=0.5,
             top_p=0.85,
             max_tokens=6144,
