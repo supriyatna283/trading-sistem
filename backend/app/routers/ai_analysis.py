@@ -93,7 +93,7 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
         if not isinstance(df, Exception) and not df.empty:
             candles_by_tf[HTF_TIMEFRAMES[i]] = df
 
-    entry_df = candles_by_tf.get(entry_tf) or candles_by_tf.get("1h")
+    entry_df = candles_by_tf.get(entry_tf) if entry_tf in candles_by_tf else candles_by_tf.get("1h")
     if entry_df is None or entry_df.empty:
         return {"error": "No candle data available"}
 
@@ -184,17 +184,17 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
 
     # Confluence score details (human-readable subset)
     confluence_highlights = {
-        "htf_bias_aligned": conf_details.get("htf_bias", {}).get("aligned", False),
-        "liquidity_swept": conf_details.get("liquidity", {}).get("swept", False),
-        "in_order_block": conf_details.get("order_block", {}).get("in_zone", False),
-        "fvg_present": conf_details.get("fvg", {}).get("present", False),
-        "bos_choch_confirmed": conf_details.get("structure", {}).get("confirmed", False),
-        "rsi_aligned": conf_details.get("rsi", {}).get("aligned", False),
-        "ema_aligned": conf_details.get("ema", {}).get("aligned", False),
-        "macd_aligned": conf_details.get("macd", {}).get("aligned", False),
-        "stoch_rsi_aligned": conf_details.get("stoch_rsi", {}).get("aligned", False),
-        "volume_confirmed": conf_details.get("volume", {}).get("confirmed", False),
-        "vwap_aligned": conf_details.get("vwap", {}).get("aligned", False),
+        "htf_bias_aligned": bool(conf_details.get("htf_bias", {}).get("aligned", False)),
+        "liquidity_swept": bool(conf_details.get("liquidity", {}).get("swept", False)),
+        "in_order_block": bool(conf_details.get("order_block", {}).get("in_zone", False)),
+        "fvg_present": bool(conf_details.get("fvg", {}).get("present", False)),
+        "bos_choch_confirmed": bool(conf_details.get("structure", {}).get("confirmed", False)),
+        "rsi_aligned": bool(conf_details.get("rsi", {}).get("aligned", False)),
+        "ema_aligned": bool(conf_details.get("ema", {}).get("aligned", False)),
+        "macd_aligned": bool(conf_details.get("macd", {}).get("aligned", False)),
+        "stoch_rsi_aligned": bool(conf_details.get("stoch_rsi", {}).get("aligned", False)),
+        "volume_confirmed": bool(conf_details.get("volume", {}).get("confirmed", False)),
+        "vwap_aligned": bool(conf_details.get("vwap", {}).get("aligned", False)),
     }
 
     def _fmt(v, decimals=4):
