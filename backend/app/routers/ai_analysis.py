@@ -439,7 +439,7 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
             "vwap_position": vwap_data.get("position") if vwap_data else None,
             "rsi_divergence": str(rsi_div) if rsi_div else None,
             "macd_divergence": str(macd_div) if macd_div else None,
-            "candle_pattern": str(candle_pattern) if candle_pattern else None,
+            "candle_pattern": candle_pattern.get("pattern") if isinstance(candle_pattern, dict) and candle_pattern.get("pattern") else None,
             "volume_profile_poc": poc,
             "va_high": va_high,
             "va_low": va_low,

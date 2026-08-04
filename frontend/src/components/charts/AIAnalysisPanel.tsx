@@ -402,7 +402,7 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
                   { label: "VWAP", val: ind.vwap_position ? (ind.vwap_position === "above" ? "▲ Above" : "▼ Below") : "—", color: ind.vwap_position === "above" ? "#22c55e" : "#ef4444" },
                   { label: "StochRSI K", val: ind.stoch_k != null ? ind.stoch_k.toFixed(1) : "—" },
                   { label: "BB Width", val: ind.bb_bandwidth != null ? ind.bb_bandwidth.toFixed(2) : "—" },
-                  { label: "Pattern", val: ind.candle_pattern ? (typeof ind.candle_pattern === "string" && ind.candle_pattern.includes("pattern") ? JSON.parse(ind.candle_pattern.replace(/'/g, '"'))?.pattern || "—" : ind.candle_pattern) : "None" },
+                  { label: "Pattern", val: ind.candle_pattern && ind.candle_pattern !== "None" ? ind.candle_pattern : "None" },
                   { label: "RSI Div", val: ind.rsi_divergence || "None" },
                 ].map(({ label, val, color }) => (
                   <div key={label} className="ind-cell">
