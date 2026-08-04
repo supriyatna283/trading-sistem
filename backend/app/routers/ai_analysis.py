@@ -1,22 +1,18 @@
 """
-AI Chart Analysis Router — NVIDIA Nemotron SSE Streaming (V2 — Powerful)
+AI Chart Analysis Router — NVIDIA Nemotron SSE Streaming (V3 — Ultimate)
 =========================================================================
-Architecture (as approved):
+Architecture:
   MarketDataEngine → Technical Indicators → Confluence Engine → Signal Engine
-  → Market Summary (no raw candles sent to AI) → NVIDIA Nemotron → SSE stream
+  + NewsCalendarEngine (berita Forex) + CryptoNewsEngine (berita kripto)
+  + MarketIntelEngine (BTC.D) + SentimentEngine (F&G, Funding Rate) + DXY
+  → Full Market Summary → NVIDIA Nemotron → SSE stream
 
-The engine determines BUY / SELL / WAIT.
-The AI explains WHY using the computed market context.
-
-V2 Upgrades (MORE POWERFUL):
-  - SetupGenerator integrated: uses engine-calculated price levels (not AI guesses)
-  - Richer SMC context: actual OB/FVG price zones with type sent to AI
-  - ATR-based setup levels: SL behind swing, TP at liquidity levels
-  - Smarter prompt: session awareness, divergence, candle patterns
-  - Dual-phase stream: "market_data" event first, then AI analysis
-  - Cache TTL raised to 90s with symbol+timeframe+signal key
-  - Parallel HTF candle fetch and structure analysis
-  - 15-section AI prompt covering every institutional concept
+V3 Upgrades:
+  - Integrasi berita kripto real-time dari CryptoPanic
+  - Analisis DXY (US Dollar Index) dari Yahoo Finance
+  - BTC Dominance, Fear & Greed, Funding Rate, Open Interest masuk ke prompt
+  - Endpoint baru: POST /api/v1/ai/chat (chat interaktif lanjutan)
+  - Macro context dikirim ke frontend sebagai event terpisah
 """
 
 import asyncio
@@ -26,14 +22,19 @@ import time
 import re
 from typing import AsyncGenerator, Optional, List
 
-from fastapi import APIRouter, Request, Query
+from fastapi import APIRouter, Request, Query, Body
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 from app.config import get_settings
 from app.engines.market_data import MarketDataEngine
 from app.engines.market_structure import MarketStructureAnalyzer
 from app.engines.smart_money import SmartMoneyConceptsEngine
 from app.engines.confluence import ConfluenceEngine
+from app.engines.news_calendar import NewsCalendarEngine
+from app.engines.market_intel import MarketIntelEngine
+from app.engines.sentiment import SentimentEngine
+from app.engines.crypto_news import CryptoNewsEngine
 from app.utils.indicators import (
     calculate_rsi, calculate_ema, calculate_macd,
     calculate_bollinger_bands, calculate_stoch_rsi,
@@ -76,6 +77,26 @@ _data_engine = MarketDataEngine()
 _structure_engine = MarketStructureAnalyzer()
 _smc_engine = SmartMoneyConceptsEngine()
 _confluence_engine = ConfluenceEngine()
+_news_engine = NewsCalendarEngine()
+_intel_engine = MarketIntelEngine()
+_sentiment_engine = SentimentEngine()
+_crypto_news_engine = CryptoNewsEngine()
+
+
+# ──────────────────────────────────────────────────────────────
+# Pydantic models for Chat endpoint
+# ──────────────────────────────────────────────────────────────
+class ChatMessage(BaseModel):
+    role: str  # "user" or "assistant"
+    content: str
+
+
+class ChatRequest(BaseModel):
+    symbol: str = "BTCUSDT"
+    timeframe: str = "1h"
+    question: str
+    history: List[ChatMessage] = []
+    market_context: Optional[dict] = None  # ctx snapshot from /analyze
 
 
 # ──────────────────────────────────────────────────────────────
@@ -217,16 +238,35 @@ def _calculate_setup_levels(ctx: dict) -> dict:
 # ──────────────────────────────────────────────────────────────
 async def _build_market_context(symbol: str, timeframe: str) -> dict:
     """
-    V2: Runs the full engine pipeline.
+    V3: Runs the full engine pipeline + macro/news data.
     Returns a rich structured market summary.
     Raw candles are NOT sent to the AI.
     """
-    # 1. Fetch multi-timeframe candles (parallel)
+    # 1. Fetch multi-timeframe candles + macro data (all parallel)
     HTF_TIMEFRAMES = ["1d", "4h", "1h", "15m"]
     entry_tf = timeframe if timeframe in HTF_TIMEFRAMES else "1h"
 
-    tasks = [_data_engine.get_candles(symbol.upper(), tf, 200) for tf in HTF_TIMEFRAMES]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    # Parallel fetch: candles + macro + news
+    base_coin = symbol.upper().replace("USDT", "").replace("BUSD", "")
+    (
+        *candle_results,
+        forex_news_raw,
+        crypto_news_raw,
+        btc_dom_raw,
+        fng_raw,
+        funding_raw,
+        dxy_raw,
+    ) = await asyncio.gather(
+        *[_data_engine.get_candles(symbol.upper(), tf, 200) for tf in HTF_TIMEFRAMES],
+        _news_engine.get_events(),
+        _crypto_news_engine.get_crypto_news(symbol, limit=5),
+        _intel_engine.get_btc_dominance(),
+        _sentiment_engine.get_fear_and_greed(),
+        _sentiment_engine.get_funding_rates([symbol]),
+        _crypto_news_engine.get_dxy(),
+        return_exceptions=True,
+    )
+    results = candle_results
 
     candles_by_tf: dict = {}
     for i, df in enumerate(results):
@@ -236,6 +276,49 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
     entry_df = candles_by_tf.get(entry_tf) if entry_tf in candles_by_tf else candles_by_tf.get("1h")
     if entry_df is None or entry_df.empty:
         return {"error": "No candle data available"}
+
+    # 1b. Process macro data (graceful fallback if any failed)
+    forex_news_list = forex_news_raw if isinstance(forex_news_raw, list) else []
+    crypto_news_list = crypto_news_raw if isinstance(crypto_news_raw, list) else []
+    btc_dom = btc_dom_raw if isinstance(btc_dom_raw, dict) else {}
+    fng = fng_raw if isinstance(fng_raw, dict) else {}
+    funding_list = funding_raw if isinstance(funding_raw, list) else []
+    dxy = dxy_raw if isinstance(dxy_raw, dict) else {}
+    funding_data = funding_list[0] if funding_list else {}
+
+    # Filter: only high-impact Forex news (next 24h)
+    from datetime import datetime, timezone, timedelta
+    now_utc = datetime.now(timezone.utc)
+    high_impact_forex = []
+    for ev in forex_news_list:
+        if ev.get("impact_level", 0) >= 3 and ev.get("relevant_to_crypto"):
+            try:
+                evt = datetime.fromisoformat(ev["date"])
+                if evt.tzinfo is None:
+                    evt = evt.replace(tzinfo=timezone.utc)
+                if now_utc - timedelta(hours=2) <= evt <= now_utc + timedelta(hours=24):
+                    high_impact_forex.append({
+                        "title": ev["title"],
+                        "currency": ev["currency"],
+                        "time": ev.get("time_formatted", ""),
+                        "forecast": ev.get("forecast", ""),
+                        "previous": ev.get("previous", ""),
+                    })
+            except Exception:
+                pass
+
+    # Funding rate interpretation
+    funding_rate = _safe_float(funding_data.get("funding_rate", 0), 6) or 0
+    if funding_rate > 0.0005:
+        funding_label = "POSITIF TINGGI → risiko long squeeze"
+    elif funding_rate < -0.0005:
+        funding_label = "NEGATIF → risiko short squeeze"
+    else:
+        funding_label = "NETRAL"
+
+    # Fear & Greed interpretation
+    fng_value = fng.get("value", 50)
+    fng_class = fng.get("classification", "Neutral")
 
     # 2. Market structure analysis (all HTFs, parallel)
     structure_tasks = []
@@ -459,6 +542,33 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
             "liquidity_prices": [p for p in liq_prices if p is not None],
         },
         "atr": _safe_float(atr_val),
+        # ── V3: Macro & Fundamental data ──────────────────────────
+        "macro": {
+            "btc_dominance": _safe_float(btc_dom.get("btc_dominance"), 2),
+            "eth_dominance": _safe_float(btc_dom.get("eth_dominance"), 2),
+            "total_market_cap_b": _safe_float((btc_dom.get("total_market_cap_usd") or 0) / 1e9, 1),
+            "market_cap_change_24h": _safe_float(btc_dom.get("market_cap_change_24h_pct"), 2),
+            "fear_greed_value": fng_value,
+            "fear_greed_label": fng_class,
+            "fear_greed_prev": fng.get("previous_value"),
+            "funding_rate": funding_rate,
+            "funding_label": funding_label,
+            "dxy_value": dxy.get("value"),
+            "dxy_change_1d": dxy.get("change_pct_1d"),
+            "dxy_trend_5d": dxy.get("trend_5d"),
+            "dxy_crypto_impact": dxy.get("crypto_impact"),
+        },
+        "news": {
+            "high_impact_forex": high_impact_forex[:5],
+            "crypto_news": [
+                {
+                    "title": n["title"],
+                    "sentiment": n["sentiment"],
+                    "source": n.get("source", ""),
+                }
+                for n in crypto_news_list[:5]
+            ],
+        },
     }
 
     return ctx
@@ -509,6 +619,44 @@ def _build_prompt(ctx: dict, setup: dict) -> str:
 
     # Format liquidity
     liq_str = ", ".join([str(l) for l in liq_prices[:5]]) if liq_prices else "N/A"
+
+    # Format macro data
+    macro = ctx.get("macro", {})
+    news_data = ctx.get("news", {})
+    btc_d = macro.get("btc_dominance")
+    fng_val = macro.get("fear_greed_value")
+    fng_lbl = macro.get("fear_greed_label", "N/A")
+    fng_prev = macro.get("fear_greed_prev")
+    fund_rate = macro.get("funding_rate", 0)
+    fund_lbl = macro.get("funding_label", "N/A")
+    dxy_val = macro.get("dxy_value")
+    dxy_chg = macro.get("dxy_change_1d")
+    dxy_impact = macro.get("dxy_crypto_impact", "N/A")
+    total_mcap = macro.get("total_market_cap_b")
+    mcap_chg = macro.get("market_cap_change_24h")
+
+    fng_trend = ""
+    if fng_prev and fng_val:
+        diff = fng_val - fng_prev
+        fng_trend = f" ({'↑' if diff > 0 else '↓'}{abs(diff)} dari kemarin)"
+
+    # Format forex news
+    if news_data.get("high_impact_forex"):
+        fx_lines = "\n".join([
+            f"  ⚠️ [{n['currency']}] {n['title']} | {n.get('time','?')} | Forecast: {n.get('forecast','N/A')} | Prev: {n.get('previous','N/A')}"
+            for n in news_data["high_impact_forex"]
+        ])
+    else:
+        fx_lines = "  Tidak ada berita High Impact Forex dalam 24 jam ke depan"
+
+    # Format crypto news
+    if news_data.get("crypto_news"):
+        crypto_lines = "\n".join([
+            f"  {'🟢' if n['sentiment']=='POSITIF' else '🔴' if n['sentiment']=='NEGATIF' else '⚪'} [{n['sentiment']}] {n['title']} — {n.get('source','')}"
+            for n in news_data["crypto_news"]
+        ])
+    else:
+        crypto_lines = "  Data berita kripto tidak tersedia"
 
     # Format setup levels
     if signal != "WAIT":
@@ -593,6 +741,20 @@ HTF Alignment:     {aligned_count}/{total_htf} timeframes aligned with {signal}
   RSI Divergence:  {ind.get('rsi_divergence', 'None detected')}
   MACD Divergence: {ind.get('macd_divergence', 'None detected')}
   Candle Pattern:  {ind.get('candle_pattern', 'None detected')}
+
+─── ANALISIS MAKRO & CROSS-ASSET ───────────
+  BTC Dominance:   {btc_d}% {"(tinggi, altcoin tertekan)" if btc_d and btc_d > 52 else "(rendah, altcoin season)" if btc_d and btc_d < 45 else ""}
+  Total Market Cap:{total_mcap}B USD ({f"+{mcap_chg}%" if mcap_chg and mcap_chg > 0 else f"{mcap_chg}%" if mcap_chg else "N/A"} 24h)
+  DXY:             {f"{dxy_val} ({'+' if dxy_chg and dxy_chg > 0 else ''}{dxy_chg}% 1d, tren 5d: {dxy.get('trend_5d','N/A')})" if dxy_val else "N/A"}
+  DXY Impact:      {dxy_impact}
+  Fear & Greed:    {fng_val}/100 — {fng_lbl}{fng_trend}
+  Funding Rate:    {fund_rate:+.6f} → {fund_lbl}
+
+─── BERITA HIGH IMPACT FOREX (24 JAM) ──────
+{fx_lines}
+
+─── BERITA KRIPTO TERKINI ──────────────────
+{crypto_lines}
 
 ─── CONFLUENCE CHECKLIST ───────────────────
 {hi_str}
@@ -705,6 +867,8 @@ async def _stream_ai_analysis(
         "session": ctx.get("session"),
         "indicators": ctx["indicators"],
         "smc": ctx["smc"],
+        "macro": ctx.get("macro", {}),
+        "news": ctx.get("news", {}),
     }
     yield sse("context", json.dumps(context_snapshot))
 
@@ -823,12 +987,12 @@ async def analyze_chart(
     """
     Stream AI chart analysis via Server-Sent Events.
 
-    V2: Engine-calculated setup levels are emitted BEFORE the AI analysis,
-    so the UI shows trade levels instantly while AI streams in the background.
+    V3: Full macro + news context included in analysis.
+    Engine-calculated setup levels are emitted BEFORE the AI analysis.
 
     Events emitted:
       status      — pipeline progress
-      context     — computed indicators snapshot (JSON)
+      context     — computed indicators + macro + news snapshot (JSON)
       setup_data  — engine trade levels (JSON) — emitted BEFORE AI
       reasoning   — AI thinking tokens (streaming)
       token       — AI analysis tokens (streaming)
@@ -865,3 +1029,111 @@ async def cache_status():
         age = round(now - entry["ts"])
         entries.append({"key": key, "age_seconds": age, "ttl_remaining": max(0, _AI_CACHE_TTL - age)})
     return {"cache_entries": entries, "ttl_seconds": _AI_CACHE_TTL}
+
+
+# ──────────────────────────────────────────────────────────────
+# Chat Interaktif Endpoint (V3)
+# ──────────────────────────────────────────────────────────────
+async def _stream_chat(req: ChatRequest) -> AsyncGenerator[str, None]:
+    """SSE generator for interactive AI chat with market context."""
+
+    def sse(event: str, data: str) -> str:
+        escaped = data.replace("\n", "\\n")
+        return f"event: {event}\ndata: {escaped}\n\n"
+
+    settings = get_settings()
+
+    # Build system context from market context
+    ctx = req.market_context or {}
+    macro = ctx.get("macro", {})
+    indicators = ctx.get("indicators", {})
+    smc = ctx.get("smc", {})
+    signal = ctx.get("signal", "UNKNOWN")
+    score = ctx.get("confluence_score", 0)
+    max_score = ctx.get("max_score", 33)
+
+    system_prompt = f"""Kamu adalah AI Analyst trading kripto senior yang sedang dalam sesi tanya jawab dengan seorang trader.
+
+Kamu baru saja selesai menganalisis {req.symbol.upper()} / {req.timeframe.upper()} dan memberikan rekomendasi {signal} dengan skor konfluensi {score}/{max_score}.
+
+KONTEKS PASAR SAAT INI:
+- Sinyal: {signal}
+- HTF Bias: {ctx.get('htf_biases', {})}
+- RSI: {indicators.get('rsi', 'N/A')} | MACD: {indicators.get('macd_histogram', 'N/A')} | ADX: {indicators.get('adx', 'N/A')}
+- Order Blocks aktif: {smc.get('unmitigated_ob_count', 0)} | FVG: {smc.get('unfilled_fvg_count', 0)}
+- BTC Dominance: {macro.get('btc_dominance', 'N/A')}%
+- Fear & Greed: {macro.get('fear_greed_value', 'N/A')}/100 ({macro.get('fear_greed_label', 'N/A')})
+- Funding Rate: {macro.get('funding_rate', 'N/A')} ({macro.get('funding_label', 'N/A')})
+- Session: {ctx.get('session', 'N/A')}
+
+Jawab pertanyaan trader dengan BAHASA INDONESIA yang jelas, ringkas, dan profesional. Fokus pada pertanyaannya saja. Maksimal 3-4 paragraf."""
+
+    # Build messages array (max 10 turns of history)
+    messages = [{"role": "system", "content": system_prompt}]
+    for msg in req.history[-10:]:  # max 10 messages history
+        messages.append({"role": msg.role, "content": msg.content})
+    messages.append({"role": "user", "content": req.question})
+
+    yield sse("status", "thinking")
+
+    try:
+        from openai import AsyncOpenAI
+        client = AsyncOpenAI(
+            base_url="https://integrate.api.nvidia.com/v1",
+            api_key=settings.NVIDIA_API_KEY,
+        )
+
+        stream = await client.chat.completions.create(
+            model="nvidia/nemotron-3-ultra-550b-a55b",
+            messages=messages,
+            temperature=0.6,
+            top_p=0.9,
+            max_tokens=1024,
+            extra_body={
+                "chat_template_kwargs": {"enable_thinking": True},
+                "reasoning_budget": 1024,
+            },
+            stream=True,
+        )
+
+        async for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            # Skip reasoning tokens for chat (too verbose)
+            if delta.content:
+                yield sse("token", delta.content)
+
+    except Exception as e:
+        logger.error(f"Chat AI error: {e}")
+        yield sse("error", f"AI error: {str(e)[:200]}")
+        return
+
+    yield sse("done", "complete")
+
+
+@router.post("/chat")
+async def chat_with_ai(req: ChatRequest):
+    """
+    Interactive chat endpoint — continue conversation after /analyze.
+    
+    Request body:
+      symbol, timeframe — trading pair and timeframe
+      question — trader's question (in any language, AI answers in Indonesian)
+      history — previous chat messages (max 10)
+      market_context — context snapshot from the /analyze response
+    
+    Returns SSE stream with events: status, token, done, error
+    """
+    headers = {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+        "Access-Control-Allow-Origin": "*",
+    }
+    return StreamingResponse(
+        _stream_chat(req),
+        media_type="text/event-stream",
+        headers=headers,
+    )

@@ -31,6 +31,11 @@ interface SetupData {
   highlights?: Record<string, boolean>;
 }
 
+interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
 interface Props {
   symbol: string;
   timeframe: string;
@@ -129,21 +134,30 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
   const [context, setContext] = useState<any>(null);
   const [setup, setSetup] = useState<SetupData | null>(null);
   const [error, setError] = useState("");
-  const [tab, setTab] = useState<"setup" | "confluence" | "analysis">("setup");
+  const [tab, setTab] = useState<"setup" | "macro" | "confluence" | "analysis">("setup");
   const [showRawReasoning, setShowRawReasoning] = useState(false);
 
+  // Chat State
+  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [isChatting, setIsChatting] = useState(false);
+
   const esRef = useRef<EventSource | null>(null);
+  const chatEsRef = useRef<EventSource | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const answerRef = useRef<HTMLDivElement>(null);
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
   const cancelStream = useCallback(() => {
     if (esRef.current) { esRef.current.close(); esRef.current = null; }
+    if (chatEsRef.current) { chatEsRef.current.close(); chatEsRef.current = null; }
   }, []);
 
   const startAnalysis = useCallback((sym: string, tf: string) => {
     cancelStream();
     setStatus("computing");
     setReasoning(""); setAnswer(""); setError(""); setSetup(null); setContext(null);
+    setChatHistory([]); setChatInput(""); setIsChatting(false);
 
     const url = `${API_URL}/api/v1/ai/analyze?symbol=${sym}&timeframe=${tf}`;
     const es = new EventSource(url);
@@ -192,6 +206,64 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
     };
   }, [cancelStream, status]);
 
+  // Chat Submission
+  const submitChat = useCallback(async () => {
+    if (!chatInput.trim() || isChatting || status !== "done") return;
+    const msg = chatInput.trim();
+    setChatInput("");
+    setIsChatting(true);
+    setChatHistory(prev => [...prev, { role: "user", content: msg }]);
+
+    try {
+      const response = await fetch(`${API_URL}/api/v1/ai/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          symbol,
+          timeframe,
+          question: msg,
+          history: chatHistory.slice(-10),
+          market_context: context
+        })
+      });
+
+      if (!response.body) throw new Error("No response body");
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let assistantMsg = "";
+      setChatHistory(prev => [...prev, { role: "assistant", content: "" }]);
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value);
+        const lines = chunk.split("\n");
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const data = line.slice(6).replace(/\\n/g, "\n");
+            if (line.includes("event: error")) {
+              console.error("Chat error:", data);
+              break;
+            }
+            if (!line.includes("event: done") && !line.includes("event: status")) {
+              assistantMsg += data;
+              setChatHistory(prev => {
+                const newH = [...prev];
+                newH[newH.length - 1].content = assistantMsg;
+                return newH;
+              });
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.error(e);
+      setChatHistory(prev => [...prev, { role: "assistant", content: "⚠️ Maaf, terjadi kesalahan saat menyambung ke server." }]);
+    } finally {
+      setIsChatting(false);
+    }
+  }, [chatInput, isChatting, status, symbol, timeframe, chatHistory, context]);
+
   // Auto-trigger with 2.5s debounce
   useEffect(() => {
     if (!isOpen) return;
@@ -204,8 +276,12 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
   useEffect(() => { if (!isOpen) cancelStream(); }, [isOpen, cancelStream]);
 
   useEffect(() => {
-    if (answerRef.current) answerRef.current.scrollTop = answerRef.current.scrollHeight;
-  }, [answer]);
+    if (answerRef.current && tab === "analysis") answerRef.current.scrollTop = answerRef.current.scrollHeight;
+  }, [answer, tab]);
+
+  useEffect(() => {
+    if (chatEndRef.current && tab === "analysis") chatEndRef.current.scrollIntoView({ behavior: "smooth" });
+  }, [chatHistory, isChatting, tab]);
 
   if (!isOpen) return null;
 
@@ -224,6 +300,8 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
   const htfCtx = context?.htf_biases || setup?.htf_biases || {};
   const ind = setup?.indicators || context?.indicators || {};
   const smc = setup?.smc || context?.smc || {};
+  const macro = context?.macro || {};
+  const news = context?.news || {};
   const highlights = setup?.highlights || {};
 
   const rsiColor = (rsi: number) => rsi > 70 ? "#ef4444" : rsi < 30 ? "#22c55e" : "var(--text-primary)";
@@ -261,7 +339,7 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
         <span id="ai-status-text">{statusLabel[status]}</span>
         {setup && (
           <span style={{ marginLeft: "auto", fontSize: "0.6rem", color: "var(--text-muted)" }}>
-            ⚡ {setup.confluence_score}/{setup.max_score} pts · ATR: {fmt(setup.atr, 2)}
+            ⚡ {setup.confluence_score}/{setup.max_score} pts
           </span>
         )}
       </div>
@@ -287,8 +365,9 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
       {(setup || answer) && (
         <div id="ai-tabs">
           <button className={`ai-tab${tab === "setup" ? " ai-tab-active" : ""}`} onClick={() => setTab("setup")}>📐 Setup</button>
+          <button className={`ai-tab${tab === "macro" ? " ai-tab-active" : ""}`} onClick={() => setTab("macro")}>🌐 Makro</button>
           <button className={`ai-tab${tab === "confluence" ? " ai-tab-active" : ""}`} onClick={() => setTab("confluence")}>⚡ Score</button>
-          <button className={`ai-tab${tab === "analysis" ? " ai-tab-active" : ""}`} onClick={() => setTab("analysis")}>🧠 Analysis</button>
+          <button className={`ai-tab${tab === "analysis" ? " ai-tab-active" : ""}`} onClick={() => setTab("analysis")}>🧠 Analisis</button>
         </div>
       )}
 
@@ -301,26 +380,6 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
               <div id="ai-signal-card">
                 <SignalBadge signal={setup.signal} />
                 <ConfidenceBadge conf={setup.confidence} />
-              </div>
-
-              {/* Confluence bar */}
-              <div style={{ padding: "0 12px 8px" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.63rem", color: "var(--text-muted)", marginBottom: 4 }}>
-                  <span>Confluence Score</span>
-                  <span style={{ fontWeight: 700, color: setup.confluence_pct >= 60 ? "#22c55e" : setup.confluence_pct >= 35 ? "#f59e0b" : "#ef4444" }}>
-                    {setup.confluence_score}/{setup.max_score} ({setup.confluence_pct}%)
-                  </span>
-                </div>
-                <div id="conf-bar-bg">
-                  <div id="conf-bar-fill" style={{
-                    width: `${setup.confluence_pct}%`,
-                    background: setup.confluence_pct >= 60
-                      ? "linear-gradient(90deg, #22c55e, #16a34a)"
-                      : setup.confluence_pct >= 35
-                      ? "linear-gradient(90deg, #f59e0b, #d97706)"
-                      : "linear-gradient(90deg, #ef4444, #dc2626)",
-                  }} />
-                </div>
               </div>
 
               {/* Price levels */}
@@ -423,6 +482,91 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
         </div>
       )}
 
+      {/* ── MACRO TAB ── */}
+      {tab === "macro" && (
+        <div id="ai-macro-tab" style={{ flex: 1, overflowY: "auto", padding: "8px 12px" }}>
+          {macro && Object.keys(macro).length > 0 ? (
+            <>
+              {/* Macro stats grid */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 12 }}>
+                <div className="macro-card">
+                  <span className="macro-label">BTC Dominance</span>
+                  <span className="macro-val" style={{ color: macro.btc_dominance > 52 ? "#ef4444" : macro.btc_dominance < 45 ? "#22c55e" : "var(--text-primary)" }}>
+                    {macro.btc_dominance ? `${macro.btc_dominance}%` : "N/A"}
+                  </span>
+                </div>
+                <div className="macro-card">
+                  <span className="macro-label">Fear & Greed</span>
+                  <span className="macro-val" style={{ color: macro.fear_greed_value > 75 ? "#ef4444" : macro.fear_greed_value < 30 ? "#22c55e" : "#f59e0b" }}>
+                    {macro.fear_greed_value ?? "N/A"} <span style={{ fontSize: "0.55rem", fontWeight: 600 }}>{macro.fear_greed_label}</span>
+                  </span>
+                </div>
+                <div className="macro-card">
+                  <span className="macro-label">DXY (US Dollar)</span>
+                  <span className="macro-val">
+                    {macro.dxy_value ?? "N/A"} <span style={{ fontSize: "0.6rem", color: (macro.dxy_change_1d||0) > 0 ? "#ef4444" : "#22c55e" }}>
+                      {macro.dxy_change_1d ? `${macro.dxy_change_1d > 0 ? '+' : ''}${macro.dxy_change_1d}%` : ""}
+                    </span>
+                  </span>
+                </div>
+                <div className="macro-card">
+                  <span className="macro-label">Funding Rate</span>
+                  <span className="macro-val" style={{ color: macro.funding_rate > 0.0005 ? "#ef4444" : macro.funding_rate < -0.0005 ? "#22c55e" : "var(--text-primary)" }}>
+                    {macro.funding_rate ? `${(macro.funding_rate * 100).toFixed(4)}%` : "N/A"}
+                  </span>
+                </div>
+              </div>
+
+              {/* News Section */}
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: "0.65rem", fontWeight: 800, color: "var(--text-secondary)", marginBottom: 8, letterSpacing: "0.05em", textTransform: "uppercase" }}>
+                  Berita Forex High Impact
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {news.high_impact_forex?.length > 0 ? news.high_impact_forex.map((n: any, i: number) => (
+                    <div key={i} className="news-item">
+                      <span className="news-badge fx-badge">{n.currency}</span>
+                      <div className="news-content">
+                        <div className="news-title">{n.title}</div>
+                        <div className="news-time">{n.time}</div>
+                      </div>
+                    </div>
+                  )) : (
+                    <div className="news-empty">Tidak ada event penting dalam 24 jam.</div>
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <div style={{ fontSize: "0.65rem", fontWeight: 800, color: "var(--text-secondary)", marginBottom: 8, letterSpacing: "0.05em", textTransform: "uppercase" }}>
+                  Berita Kripto Terkini
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {news.crypto_news?.length > 0 ? news.crypto_news.map((n: any, i: number) => (
+                    <div key={i} className="news-item">
+                      <span className={`news-badge ${n.sentiment === 'POSITIF' ? 'bg-green' : n.sentiment === 'NEGATIF' ? 'bg-red' : 'bg-gray'}`}>
+                        {n.sentiment === 'POSITIF' ? '↑' : n.sentiment === 'NEGATIF' ? '↓' : '–'}
+                      </span>
+                      <div className="news-content">
+                        <div className="news-title">{n.title}</div>
+                        <div className="news-time">{n.source}</div>
+                      </div>
+                    </div>
+                  )) : (
+                    <div className="news-empty">Tidak ada berita relevan.</div>
+                  )}
+                </div>
+              </div>
+            </>
+          ) : (
+             <div id="ai-loading-state">
+              <div className="ai-spinner" />
+              <span style={{ color: "var(--text-muted)", fontSize: "0.8rem" }}>Memuat data makro…</span>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ── CONFLUENCE TAB ── */}
       {tab === "confluence" && (
         <div id="ai-confluence-tab">
@@ -467,27 +611,21 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
         </div>
       )}
 
-      {/* ── ANALYSIS TAB ── */}
+      {/* ── ANALYSIS TAB (with Chat) ── */}
       {tab === "analysis" && (
-        <div id="ai-reasoning-tab">
-          {reasoning && (
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 12px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
-              <span style={{ fontSize: "0.6rem", color: "#a78bfa", fontWeight: 700 }}>🧠 DEEP REASONING</span>
-              <button onClick={() => setShowRawReasoning(v => !v)} style={{ fontSize: "0.6rem", color: "var(--text-muted)", background: "none", border: "none", cursor: "pointer" }}>
-                {showRawReasoning ? "Hide" : "Show"}
-              </button>
-            </div>
-          )}
-          {showRawReasoning && reasoning && (
-            <div id="ai-reasoning-box">
-              <pre style={{ whiteSpace: "pre-wrap", margin: 0, fontSize: "0.62rem", lineHeight: 1.5, color: "#a78bfa" }}>{reasoning}</pre>
-            </div>
-          )}
-          <div id="ai-answer-box" ref={answerRef}>
+        <div id="ai-reasoning-tab" style={{ display: "flex", flexDirection: "column", flex: 1, overflow: "hidden" }}>
+          
+          {/* Scrollable Area */}
+          <div id="ai-answer-box" ref={answerRef} style={{ flex: 1, overflowY: "auto", padding: "10px 12px", display: "flex", flexDirection: "column" }}>
+            
+            {/* Initial Analysis Result */}
             {answer ? (
-              <div id="ai-answer-text">
-                {answer}
-                {status === "streaming" && <span id="ai-cursor">▌</span>}
+              <div className="chat-bubble assistant-bubble">
+                <div className="bubble-header">🤖 AI Analyst</div>
+                <div className="bubble-content">
+                  {answer}
+                  {status === "streaming" && <span id="ai-cursor">▌</span>}
+                </div>
               </div>
             ) : isPulsing ? (
               <div id="ai-thinking-indicator">
@@ -497,14 +635,42 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
                 </span>
               </div>
             ) : null}
+
+            {/* Chat History */}
+            {chatHistory.map((msg, idx) => (
+              <div key={idx} className={`chat-bubble ${msg.role === "user" ? "user-bubble" : "assistant-bubble"}`}>
+                <div className="bubble-header">{msg.role === "user" ? "👤 Anda" : "🤖 AI Analyst"}</div>
+                <div className="bubble-content">{msg.content || <span className="ai-cursor">▌</span>}</div>
+              </div>
+            ))}
+            
+            <div ref={chatEndRef} />
           </div>
+
+          {/* Chat Input Bar (only shown when initial analysis is done) */}
+          {status === "done" && (
+            <div id="ai-chat-input-area">
+              <input
+                type="text"
+                placeholder="Tanya lebih lanjut tentang setup ini..."
+                value={chatInput}
+                onChange={e => setChatInput(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") submitChat(); }}
+                disabled={isChatting}
+                className="ai-chat-input"
+              />
+              <button onClick={submitChat} disabled={isChatting || !chatInput.trim()} className="ai-chat-send-btn">
+                {isChatting ? "..." : "➤"}
+              </button>
+            </div>
+          )}
         </div>
       )}
 
       {/* ── Styles ── */}
       <style>{`
         #ai-panel {
-          width: 310px;
+          width: 330px;
           flex-shrink: 0;
           display: flex;
           flex-direction: column;
@@ -564,9 +730,9 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
 
         #ai-tabs { display: flex; border-bottom: 1px solid var(--border); flex-shrink: 0; }
         .ai-tab {
-          flex: 1; padding: 7px 4px; font-size: 0.67rem; font-weight: 700; border: none;
+          flex: 1; padding: 7px 2px; font-size: 0.65rem; font-weight: 700; border: none;
           background: transparent; color: var(--text-muted); cursor: pointer; transition: all 0.15s;
-          border-bottom: 2px solid transparent;
+          border-bottom: 2px solid transparent; text-align: center;
         }
         .ai-tab:hover { color: var(--text-primary); background: rgba(255,255,255,0.02); }
         .ai-tab-active { color: #a78bfa; border-bottom-color: #a78bfa; background: rgba(139,92,246,0.05); }
@@ -574,9 +740,7 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
         /* Setup Tab */
         #ai-setup-tab { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
         #ai-signal-card { display: flex; align-items: center; gap: 8px; padding: 12px 12px 8px; flex-wrap: wrap; }
-        #conf-bar-bg { width: 100%; height: 5px; border-radius: 3px; background: var(--border); overflow: hidden; }
-        #conf-bar-fill { height: 100%; border-radius: 3px; transition: width 0.6s ease; }
-
+        
         #ai-price-table {
           display: flex; flex-direction: column; gap: 4px;
           padding: 8px 10px; margin: 4px 8px 4px;
@@ -624,18 +788,47 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
         }
         @keyframes spin { to { transform: rotate(360deg); } }
 
-        /* Confluence Tab */
-        #ai-confluence-tab { flex: 1; display: flex; flex-direction: column; overflow-y: auto; min-height: 0; }
+        /* Macro Tab */
+        .macro-card { background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 4px; }
+        .macro-label { font-size: 0.58rem; color: var(--text-muted); font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
+        .macro-val { font-size: 0.9rem; font-weight: 800; font-family: 'JetBrains Mono', monospace; }
+        
+        .news-item { background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; display: flex; gap: 8px; align-items: flex-start; }
+        .news-badge { flex-shrink: 0; padding: 2px 4px; border-radius: 4px; font-size: 0.55rem; font-weight: 800; color: #fff; }
+        .fx-badge { background: #a78bfa; }
+        .bg-green { background: rgba(34,197,94,0.3); color: #4ade80; }
+        .bg-red { background: rgba(239,68,68,0.3); color: #f87171; }
+        .bg-gray { background: rgba(161,161,170,0.3); color: #a1a1aa; }
+        .news-content { display: flex; flex-direction: column; gap: 2px; }
+        .news-title { font-size: 0.65rem; color: var(--text-primary); line-height: 1.3; }
+        .news-time { font-size: 0.55rem; color: var(--text-muted); }
+        .news-empty { font-size: 0.65rem; color: var(--text-muted); font-style: italic; padding: 8px; text-align: center; border: 1px dashed var(--border); border-radius: 6px; }
 
-        /* Analysis Tab */
-        #ai-reasoning-tab { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
-        #ai-reasoning-box {
-          max-height: 120px; overflow-y: auto; padding: 8px 12px;
-          background: rgba(167,139,250,0.05); border-bottom: 1px solid var(--border); flex-shrink: 0;
+        /* Chat UI */
+        .chat-bubble { padding: 8px 12px; border-radius: 8px; margin-bottom: 12px; font-size: 0.72rem; line-height: 1.6; word-break: break-word; }
+        .assistant-bubble { background: rgba(167,139,250,0.08); border: 1px solid rgba(167,139,250,0.2); color: var(--text-secondary); }
+        .user-bubble { background: rgba(255,255,255,0.05); border: 1px solid var(--border); color: var(--text-primary); align-self: flex-end; margin-left: 20px; }
+        .bubble-header { font-size: 0.6rem; font-weight: 700; margin-bottom: 4px; color: var(--text-muted); }
+        .bubble-content { white-space: pre-wrap; }
+        
+        #ai-chat-input-area {
+          display: flex; gap: 8px; padding: 10px 12px;
+          border-top: 1px solid var(--border); background: rgba(0,0,0,0.2); flex-shrink: 0;
         }
-        #ai-answer-box { flex: 1; overflow-y: auto; padding: 10px 12px; min-height: 0; }
-        #ai-answer-text { font-size: 0.71rem; line-height: 1.75; color: var(--text-secondary); white-space: pre-wrap; word-break: break-word; }
-        #ai-cursor { display: inline-block; color: #a78bfa; animation: blink 1s step-end infinite; }
+        .ai-chat-input {
+          flex: 1; background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: 20px;
+          padding: 8px 14px; color: var(--text-primary); font-size: 0.7rem; outline: none; transition: border-color 0.2s;
+        }
+        .ai-chat-input:focus { border-color: #a78bfa; }
+        .ai-chat-send-btn {
+          width: 32px; height: 32px; border-radius: 50%; background: #a78bfa; color: #fff;
+          border: none; cursor: pointer; display: flex; align-items: center; justify-content: center;
+          font-size: 0.8rem; transition: transform 0.1s, opacity 0.2s; flex-shrink: 0;
+        }
+        .ai-chat-send-btn:hover:not(:disabled) { transform: scale(1.05); }
+        .ai-chat-send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        #ai-cursor, .ai-cursor { display: inline-block; color: #a78bfa; animation: blink 1s step-end infinite; }
         @keyframes blink { 50% { opacity: 0; } }
         #ai-thinking-indicator {
           flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 30px;
