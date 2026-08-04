@@ -745,7 +745,7 @@ HTF Alignment:     {aligned_count}/{total_htf} timeframes aligned with {signal}
 ─── ANALISIS MAKRO & CROSS-ASSET ───────────
   BTC Dominance:   {btc_d}% {"(tinggi, altcoin tertekan)" if btc_d and btc_d > 52 else "(rendah, altcoin season)" if btc_d and btc_d < 45 else ""}
   Total Market Cap:{total_mcap}B USD ({f"+{mcap_chg}%" if mcap_chg and mcap_chg > 0 else f"{mcap_chg}%" if mcap_chg else "N/A"} 24h)
-  DXY:             {f"{dxy_val} ({'+' if dxy_chg and dxy_chg > 0 else ''}{dxy_chg}% 1d, tren 5d: {dxy.get('trend_5d','N/A')})" if dxy_val else "N/A"}
+  DXY:             {f"{dxy_val} ({'+' if dxy_chg and dxy_chg > 0 else ''}{dxy_chg}% 1d, tren 5d: {macro.get('dxy_trend_5d','N/A')})" if dxy_val else "N/A"}
   DXY Impact:      {dxy_impact}
   Fear & Greed:    {fng_val}/100 — {fng_lbl}{fng_trend}
   Funding Rate:    {fund_rate:+.6f} → {fund_lbl}
