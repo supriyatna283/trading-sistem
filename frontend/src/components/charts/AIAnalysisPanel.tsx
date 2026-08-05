@@ -328,7 +328,23 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
 
   useEffect(() => {
     if (!isOpen) return;
-    if (  const macro = context?.macro || {};
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => startAnalysis(symbol, timeframe), 2500);
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [symbol, timeframe, isOpen]);
+
+  useEffect(() => { if (!isOpen) cancelStream(); }, [isOpen, cancelStream]);
+  useEffect(() => { if (answerRef.current && tab === "analysis") answerRef.current.scrollTop = answerRef.current.scrollHeight; }, [answer, tab]);
+  useEffect(() => { if (chatEndRef.current && tab === "analysis") chatEndRef.current.scrollIntoView({ behavior: "smooth" }); }, [chatHistory, isChatting, tab]);
+
+  if (!isOpen) return null;
+
+  const isPulsing = status === "computing" || status === "thinking" || status === "streaming";
+  const htfCtx = context?.htf_biases || setup?.htf_biases || {};
+  const ind = setup?.indicators || context?.indicators || {};
+  const smc = setup?.smc || context?.smc || {};
+  const macro = context?.macro || {};
   const news = context?.news || {};
   const orderFlow = context?.order_flow || {};
   const highlights = setup?.highlights || {};
