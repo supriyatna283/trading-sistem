@@ -51,8 +51,9 @@ class QuickAnalyticsEngine:
         self, symbol: str, limit: int = 500
     ) -> Dict[str, Any]:
         """
-        Fetch the last `limit` aggregate trades from Binance Futures (public endpoint,
-        no API key required) and compute delta (buy vol - sell vol).
+        Fetch the last `limit` aggregate trades from Binance.
+        Strategy: Try Futures first (fapi), fallback to Spot (api) if fails.
+        Both are public endpoints — no API key needed.
         """
         cache_key = symbol.upper()
         now = time.time()
@@ -60,23 +61,44 @@ class QuickAnalyticsEngine:
         if cached and (now - cached.get("ts", 0)) < _DELTA_CACHE_TTL:
             return cached["data"]
 
-        try:
-            resp = await self.client.get(
-                f"{self.binance_base}/fapi/v1/aggTrades",
-                params={"symbol": symbol.upper(), "limit": limit},
-            )
-            if resp.status_code != 200:
-                logger.warning(f"AggTrades returned {resp.status_code} for {symbol}")
-                return self._empty_delta()
+        endpoints = [
+            f"https://fapi.binance.com/fapi/v1/aggTrades",   # Futures
+            f"https://api.binance.com/api/v3/aggTrades",     # Spot fallback
+        ]
 
-            trades = resp.json()
+        trades = None
+        for endpoint in endpoints:
+            try:
+                resp = await self.client.get(
+                    endpoint,
+                    params={"symbol": symbol.upper(), "limit": limit},
+                )
+                if resp.status_code == 200:
+                    trades = resp.json()
+                    if trades:
+                        logger.debug(f"OrderFlow {symbol}: using {endpoint}")
+                        break
+                    trades = None
+                else:
+                    logger.debug(f"AggTrades {endpoint} → {resp.status_code} for {symbol}, trying next")
+            except Exception as e:
+                logger.debug(f"AggTrades {endpoint} error for {symbol}: {e}, trying next")
+
+        if not trades:
+            logger.warning(f"OrderFlow: all endpoints failed for {symbol}")
+            return self._empty_delta()
+
+        try:
             buy_vol = 0.0
             sell_vol = 0.0
             buy_usd = 0.0
             sell_usd = 0.0
             whale_buy = 0
             whale_sell = 0
-            WHALE_USD = 50_000
+            shark_buy = 0
+            shark_sell = 0
+            WHALE_USD = 50_000   # >$50k = whale
+            SHARK_USD = 10_000   # >$10k = shark
 
             for t in trades:
                 price = float(t["p"])
@@ -89,11 +111,15 @@ class QuickAnalyticsEngine:
                     sell_usd += notional
                     if notional >= WHALE_USD:
                         whale_sell += 1
+                    elif notional >= SHARK_USD:
+                        shark_sell += 1
                 else:
                     buy_vol += qty
                     buy_usd += notional
                     if notional >= WHALE_USD:
                         whale_buy += 1
+                    elif notional >= SHARK_USD:
+                        shark_buy += 1
 
             total_vol = buy_vol + sell_vol
             delta = buy_vol - sell_vol
@@ -113,7 +139,9 @@ class QuickAnalyticsEngine:
                 interp = f"Tekanan seimbang (Buy {buy_pct}% / Sell {sell_pct}%) — konsolidasi"
 
             if whale_buy > 0 or whale_sell > 0:
-                interp += f" | Transaksi Besar: {whale_buy} beli / {whale_sell} jual (>$50k)"
+                interp += f" | 🐋 Whale: {whale_buy} beli / {whale_sell} jual (>$50k)"
+            if shark_buy > 0 or shark_sell > 0:
+                interp += f" | 🦈 Shark: {shark_buy} beli / {shark_sell} jual (>$10k)"
 
             result = {
                 "buy_vol": round(buy_vol, 4),
@@ -121,23 +149,28 @@ class QuickAnalyticsEngine:
                 "buy_usd": round(buy_usd, 2),
                 "sell_usd": round(sell_usd, 2),
                 "cumulative_delta": round(delta, 4),
+                "delta": round(delta, 4),
                 "delta_usd": round(delta_usd, 2),
                 "buy_pct": buy_pct,
                 "sell_pct": sell_pct,
                 "whale_buy_count": whale_buy,
                 "whale_sell_count": whale_sell,
+                "shark_buy_count": shark_buy,
+                "shark_sell_count": shark_sell,
                 "dominance": dominance,
                 "interpretation": interp,
                 "trade_count": len(trades),
             }
 
             _delta_cache[cache_key] = {"ts": now, "data": result}
-            logger.info(f"OrderFlow {symbol}: {dominance} buy={buy_pct}% whales={whale_buy}B/{whale_sell}S")
+            logger.info(f"OrderFlow {symbol}: {dominance} buy={buy_pct}% whales={whale_buy}B/{whale_sell}S sharks={shark_buy}B/{shark_sell}S")
             return result
 
         except Exception as e:
-            logger.warning(f"OrderFlow delta error for {symbol}: {e}")
+            logger.warning(f"OrderFlow processing error for {symbol}: {e}")
             return self._empty_delta()
+
+
 
     def _empty_delta(self) -> Dict[str, Any]:
         return {

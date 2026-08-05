@@ -601,45 +601,80 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
         <div id="ai-macro-tab">
           {macro && Object.keys(macro).length > 0 ? (
             <>
-              {/* SMART MONEY (Whales) Strip */}
-              {orderFlow && orderFlow.buy_pct && (
-                <div style={{ 
-                  margin: "0 0 12px 0", padding: "10px", 
-                  background: orderFlow.dominance === "BUY" ? "linear-gradient(90deg, rgba(34,197,94,0.1), rgba(21,128,61,0.05))" : 
-                              orderFlow.dominance === "SELL" ? "linear-gradient(90deg, rgba(239,68,68,0.1), rgba(153,27,27,0.05))" : 
-                              "rgba(255,255,255,0.03)", 
-                  border: `1px solid ${orderFlow.dominance === "BUY" ? "rgba(34,197,94,0.3)" : orderFlow.dominance === "SELL" ? "rgba(239,68,68,0.3)" : "var(--border)"}`,
-                  borderRadius: 8, display: "flex", flexDirection: "column", gap: 6 
-                }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span style={{ fontSize: "0.6rem", fontWeight: 800, letterSpacing: "0.05em", color: "var(--text-primary)" }}>🐋 SMART MONEY FLOW (Binance)</span>
-                    <span style={{ 
-                      fontSize: "0.65rem", fontWeight: 900, 
-                      color: orderFlow.dominance === "BUY" ? "#4ade80" : orderFlow.dominance === "SELL" ? "#f87171" : "var(--text-muted)" 
-                    }}>{orderFlow.dominance} DOMINANCE</span>
-                  </div>
-                  <div style={{ display: "flex", gap: 12 }}>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: "0.55rem", color: "var(--text-muted)" }}>Total Volume Delta</div>
-                      <div style={{ fontSize: "0.9rem", fontWeight: 800, fontFamily: "monospace", color: orderFlow.delta_usd > 0 ? "#4ade80" : "#f87171" }}>
-                        {orderFlow.delta_usd > 0 ? "+" : ""}{orderFlow.delta_usd.toLocaleString('en-US', {maximumFractionDigits:0})} USD
-                      </div>
+              {/* SMART MONEY (Whales) Strip — always visible */}
+              {(() => {
+                const hasData = orderFlow && orderFlow.buy_pct != null;
+                const dom = hasData ? orderFlow.dominance : "NEUTRAL";
+                const domColor = dom === "BUY" ? "#4ade80" : dom === "SELL" ? "#f87171" : "var(--text-muted)";
+                const stripBg = dom === "BUY"
+                  ? "linear-gradient(90deg, rgba(34,197,94,0.1), rgba(21,128,61,0.05))"
+                  : dom === "SELL"
+                  ? "linear-gradient(90deg, rgba(239,68,68,0.1), rgba(153,27,27,0.05))"
+                  : "rgba(255,255,255,0.03)";
+                const stripBorder = dom === "BUY"
+                  ? "rgba(34,197,94,0.3)"
+                  : dom === "SELL"
+                  ? "rgba(239,68,68,0.3)"
+                  : "var(--border)";
+
+                return (
+                  <div style={{
+                    margin: "0 0 12px 0", padding: "10px",
+                    background: stripBg,
+                    border: `1px solid ${stripBorder}`,
+                    borderRadius: 8, display: "flex", flexDirection: "column", gap: 6
+                  }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span style={{ fontSize: "0.6rem", fontWeight: 800, letterSpacing: "0.05em", color: "var(--text-primary)" }}>
+                        🐋 SMART MONEY FLOW (Binance)
+                      </span>
+                      <span style={{ fontSize: "0.65rem", fontWeight: 900, color: domColor }}>
+                        {hasData ? `${dom} DOMINANCE` : "LOADING…"}
+                      </span>
                     </div>
-                    <div style={{ flex: 1, borderLeft: "1px solid rgba(255,255,255,0.1)", paddingLeft: 12 }}>
-                      <div style={{ fontSize: "0.55rem", color: "var(--text-muted)" }}>Whale Orders (&gt;$50k)</div>
-                      <div style={{ fontSize: "0.85rem", fontWeight: 800, display: "flex", gap: 4 }}>
-                        <span style={{ color: "#4ade80" }}>{orderFlow.whale_buy_count}B</span>
-                        <span style={{ color: "var(--text-muted)" }}>/</span>
-                        <span style={{ color: "#f87171" }}>{orderFlow.whale_sell_count}S</span>
+
+                    {hasData ? (
+                      <>
+                        <div style={{ display: "flex", gap: 12 }}>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontSize: "0.55rem", color: "var(--text-muted)" }}>Total Volume Delta</div>
+                            <div style={{ fontSize: "0.9rem", fontWeight: 800, fontFamily: "monospace", color: orderFlow.delta_usd > 0 ? "#4ade80" : "#f87171" }}>
+                              {orderFlow.delta_usd > 0 ? "+" : ""}{(orderFlow.delta_usd ?? 0).toLocaleString("en-US", { maximumFractionDigits: 0 })} USD
+                            </div>
+                          </div>
+                          <div style={{ flex: 1, borderLeft: "1px solid rgba(255,255,255,0.1)", paddingLeft: 12 }}>
+                            <div style={{ fontSize: "0.55rem", color: "var(--text-muted)" }}>Whale (&gt;$50k) / Shark (&gt;$10k)</div>
+                            <div style={{ fontSize: "0.85rem", fontWeight: 800, display: "flex", gap: 6 }}>
+                              <span>🐋</span>
+                              <span style={{ color: "#4ade80" }}>{orderFlow.whale_buy_count ?? 0}B</span>
+                              <span style={{ color: "#f87171" }}>{orderFlow.whale_sell_count ?? 0}S</span>
+                              <span style={{ color: "var(--text-muted)", fontSize: "0.7rem" }}>|</span>
+                              <span>🦈</span>
+                              <span style={{ color: "#4ade80" }}>{orderFlow.shark_buy_count ?? 0}B</span>
+                              <span style={{ color: "#f87171" }}>{orderFlow.shark_sell_count ?? 0}S</span>
+                            </div>
+                          </div>
+                        </div>
+                        {/* Buy/Sell pressure bar */}
+                        <div style={{ height: 4, borderRadius: 2, display: "flex", overflow: "hidden", marginTop: 2 }}>
+                          <div style={{ width: `${orderFlow.buy_pct ?? 50}%`, background: "#22c55e", transition: "width 0.8s ease" }} />
+                          <div style={{ width: `${orderFlow.sell_pct ?? 50}%`, background: "#ef4444", transition: "width 0.8s ease" }} />
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between" }}>
+                          <span style={{ fontSize: "0.55rem", color: "#4ade80" }}>BUY {orderFlow.buy_pct ?? 50}%</span>
+                          <span style={{ fontSize: "0.55rem", color: "#f87171" }}>SELL {orderFlow.sell_pct ?? 50}%</span>
+                        </div>
+                      </>
+                    ) : (
+                      <div style={{ fontSize: "0.65rem", color: "var(--text-muted)", fontStyle: "italic" }}>
+                        Memuat data aliran smart money dari Binance…
                       </div>
-                    </div>
+                    )}
                   </div>
-                  <div style={{ height: 4, borderRadius: 2, display: "flex", overflow: "hidden", marginTop: 2 }}>
-                    <div style={{ width: `${orderFlow.buy_pct}%`, background: "#22c55e" }} />
-                    <div style={{ width: `${orderFlow.sell_pct}%`, background: "#ef4444" }} />
-                  </div>
-                </div>
-              )}
+                );
+              })()}
+
+
 
               {/* Macro cards */}
               <div id="ai-macro-grid">
