@@ -31,22 +31,48 @@ SPOT_BASE    = "https://api.binance.com"
 
 
 # ─────────────────────────────────────────────────────────────────
-# Helper: fetch aggTrades (Futures first → Spot fallback)
+# Helper: fetch exact 1h buy/sell pressure using klines
 # ─────────────────────────────────────────────────────────────────
-async def _fetch_agg_trades(symbol: str, limit: int = 1000) -> list:
+async def _fetch_kline_pressure(symbol: str, interval: str = "15m", limit: int = 4) -> dict:
     for url in [
-        f"{FUTURES_BASE}/fapi/v1/aggTrades",
-        f"{SPOT_BASE}/api/v3/aggTrades",
+        f"{FUTURES_BASE}/fapi/v1/klines",
+        f"{SPOT_BASE}/api/v3/klines",
     ]:
         try:
-            r = await _http.get(url, params={"symbol": symbol.upper(), "limit": limit})
+            r = await _http.get(url, params={"symbol": symbol.upper(), "interval": interval, "limit": limit})
             if r.status_code == 200:
-                data = r.json()
-                if data:
-                    return data
-        except Exception as e:
-            logger.debug(f"aggTrades {url} error: {e}")
-    return []
+                klines = r.json()
+                if not klines: continue
+                total_vol = 0.0; buy_vol = 0.0; sell_vol = 0.0
+                total_usd = 0.0; buy_usd = 0.0; sell_usd = 0.0
+                for k in klines:
+                    v_base = float(k[5])
+                    taker_buy_base = float(k[9])
+                    v_quote = float(k[7])
+                    taker_buy_quote = float(k[10])
+                    
+                    total_vol += v_base
+                    buy_vol += taker_buy_base
+                    sell_vol += (v_base - taker_buy_base)
+                    
+                    total_usd += v_quote
+                    buy_usd += taker_buy_quote
+                    sell_usd += (v_quote - taker_buy_quote)
+                
+                return {
+                    "total_vol": total_vol,
+                    "buy_vol": buy_vol,
+                    "sell_vol": sell_vol,
+                    "buy_usd": buy_usd,
+                    "sell_usd": sell_usd,
+                    "delta_usd": buy_usd - sell_usd,
+                    "buy_pct": (buy_vol / total_vol * 100) if total_vol > 0 else 50,
+                    "sell_pct": (sell_vol / total_vol * 100) if total_vol > 0 else 50,
+                    "available": True
+                }
+        except Exception:
+            pass
+    return {"available": False}
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -134,53 +160,30 @@ async def get_whale_intel(symbol: str):
     sym = symbol.upper()
 
     # ── 1. Fetch all 4 signals in parallel ──
-    trades_raw, funding, ls_ratio, oi = await asyncio.gather(
-        _fetch_agg_trades(sym, limit=1000),
+    pressure, funding, ls_ratio, oi = await asyncio.gather(
+        _fetch_kline_pressure(sym, interval="15m", limit=4), # Last 1 hour volume
         _fetch_funding(sym),
         _fetch_ls_ratio(sym),
         _fetch_open_interest(sym),
         return_exceptions=True,
     )
-    if isinstance(trades_raw, Exception): trades_raw = []
+    if isinstance(pressure, Exception): pressure = {"available": False}
     if isinstance(funding, Exception): funding = {"funding_rate": 0.0, "mark_price": 0.0}
     if isinstance(ls_ratio, Exception): ls_ratio = {"available": False}
     if isinstance(oi, Exception): oi = {"available": False}
 
-    # ── 2. Process AggTrades ──
-    buy_vol = sell_vol = buy_usd = sell_usd = 0.0
-    whale_buys = whale_sells = []
-    shark_buys = shark_sells = []
-    WHALE_USD = 50_000
-    SHARK_USD = 10_000
+    # ── 2. Process Whale & Pressure Data ──
+    buy_pct = round(pressure.get("buy_pct", 50.0), 1)
+    sell_pct = round(pressure.get("sell_pct", 50.0), 1)
+    delta_usd = round(pressure.get("delta_usd", 0.0), 0)
 
-    for t in trades_raw:
-        try:
-            price = float(t["p"])
-            qty   = float(t["q"])
-            notional = price * qty
-            is_sell = t["m"]  # maker = sell aggressor
+    # Get whales from the live websocket cache (much wider net than 1000 aggTrades)
+    cached_whales = order_flow_engine.get_cached_whales(sym)
+    whale_buys = [w for w in cached_whales if w.get("tier") == "WHALE" and w.get("side") == "BUY"]
+    whale_sells = [w for w in cached_whales if w.get("tier") == "WHALE" and w.get("side") == "SELL"]
+    shark_buys = [w for w in cached_whales if w.get("tier") == "SHARK" and w.get("side") == "BUY"]
+    shark_sells = [w for w in cached_whales if w.get("tier") == "SHARK" and w.get("side") == "SELL"]
 
-            if is_sell:
-                sell_vol += qty
-                sell_usd += notional
-                if notional >= WHALE_USD:
-                    whale_sells.append({"notional": round(notional, 0), "price": price, "qty": qty})
-                elif notional >= SHARK_USD:
-                    shark_sells.append({"notional": round(notional, 0), "price": price, "qty": qty})
-            else:
-                buy_vol += qty
-                buy_usd += notional
-                if notional >= WHALE_USD:
-                    whale_buys.append({"notional": round(notional, 0), "price": price, "qty": qty})
-                elif notional >= SHARK_USD:
-                    shark_buys.append({"notional": round(notional, 0), "price": price, "qty": qty})
-        except Exception:
-            continue
-
-    total_vol = buy_vol + sell_vol
-    buy_pct   = round(buy_vol / total_vol * 100, 1) if total_vol > 0 else 50.0
-    sell_pct  = round(100 - buy_pct, 1)
-    delta_usd = round(buy_usd - sell_usd, 0)
     whale_delta = len(whale_buys) - len(whale_sells)
     shark_delta = len(shark_buys) - len(shark_sells)
 
@@ -294,13 +297,13 @@ async def get_whale_intel(symbol: str):
             "buy_pct": buy_pct,
             "sell_pct": sell_pct,
             "delta_usd": delta_usd,
-            "total_trades": len(trades_raw),
+            "total_trades": "1h volume",
             "whale_buy_count": len(whale_buys),
             "whale_sell_count": len(whale_sells),
             "shark_buy_count": len(shark_buys),
             "shark_sell_count": len(shark_sells),
-            "top_whale_buys": sorted(whale_buys, key=lambda x: x["notional"], reverse=True)[:3],
-            "top_whale_sells": sorted(whale_sells, key=lambda x: x["notional"], reverse=True)[:3],
+            "top_whale_buys": sorted(whale_buys, key=lambda x: x.get("notional", 0), reverse=True)[:3],
+            "top_whale_sells": sorted(whale_sells, key=lambda x: x.get("notional", 0), reverse=True)[:3],
         },
         # Supporting data
         "ls_ratio": ls_ratio,
@@ -308,7 +311,7 @@ async def get_whale_intel(symbol: str):
         "mark_price": funding.get("mark_price", 0),
         "open_interest": oi.get("open_interest", 0) if isinstance(oi, dict) else 0,
         "data_sources": {
-            "agg_trades": len(trades_raw) > 0,
+            "1h_klines": pressure.get("available", False),
             "ls_ratio": ls_ratio.get("available", False),
             "funding": fr != 0.0,
             "open_interest": oi.get("available", False) if isinstance(oi, dict) else False,
