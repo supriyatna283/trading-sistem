@@ -242,6 +242,8 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
   const [answer, setAnswer] = useState("");
   const [context, setContext] = useState<any>(null);
   const [setup, setSetup] = useState<SetupData | null>(null);
+  const [whaleIntel, setWhaleIntel] = useState<any>(null);
+  const [whaleLoading, setWhaleLoading] = useState(false);
   const [error, setError] = useState("");
   const [tab, setTab] = useState<"setup" | "macro" | "score" | "analysis">("setup");
 
@@ -333,6 +335,28 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbol, timeframe, isOpen]);
+
+  // ── Whale Intel: fetch independently from SSE pipeline ──
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    const fetchWhale = async () => {
+      setWhaleLoading(true);
+      try {
+        const r = await fetch(`${API_URL}/api/v1/orderflow/whale-intel/${symbol}`);
+        if (!cancelled && r.ok) {
+          const data = await r.json();
+          setWhaleIntel(data);
+        }
+      } catch (_) {} finally {
+        if (!cancelled) setWhaleLoading(false);
+      }
+    };
+    fetchWhale();
+    const interval = setInterval(fetchWhale, 60_000); // refresh every 60s
+    return () => { cancelled = true; clearInterval(interval); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [symbol, isOpen]);
 
   useEffect(() => { if (!isOpen) cancelStream(); }, [isOpen, cancelStream]);
   useEffect(() => { if (answerRef.current && tab === "analysis") answerRef.current.scrollTop = answerRef.current.scrollHeight; }, [answer, tab]);
@@ -601,73 +625,141 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
         <div id="ai-macro-tab">
           {macro && Object.keys(macro).length > 0 ? (
             <>
-              {/* SMART MONEY (Whales) Strip — always visible */}
+              {/* ─── WHALE INTEL PANEL (independent fetch) ─── */}
               {(() => {
-                const hasData = orderFlow && orderFlow.buy_pct != null;
-                const dom = hasData ? orderFlow.dominance : "NEUTRAL";
-                const domColor = dom === "BUY" ? "#4ade80" : dom === "SELL" ? "#f87171" : "var(--text-muted)";
-                const stripBg = dom === "BUY"
-                  ? "linear-gradient(90deg, rgba(34,197,94,0.1), rgba(21,128,61,0.05))"
-                  : dom === "SELL"
-                  ? "linear-gradient(90deg, rgba(239,68,68,0.1), rgba(153,27,27,0.05))"
+                const wi = whaleIntel;
+                const dp = wi?.dominant_position ?? "";
+                const isBull = dp.includes("LONG");
+                const isBear = dp.includes("SHORT");
+                const dpColor = isBull ? "#4ade80" : isBear ? "#f87171" : "#94a3b8";
+                const panelBg = isBull
+                  ? "linear-gradient(135deg, rgba(34,197,94,0.08), rgba(16,185,129,0.03))"
+                  : isBear
+                  ? "linear-gradient(135deg, rgba(239,68,68,0.08), rgba(220,38,38,0.03))"
                   : "rgba(255,255,255,0.03)";
-                const stripBorder = dom === "BUY"
-                  ? "rgba(34,197,94,0.3)"
-                  : dom === "SELL"
-                  ? "rgba(239,68,68,0.3)"
-                  : "var(--border)";
+                const panelBorder = isBull ? "rgba(34,197,94,0.3)" : isBear ? "rgba(239,68,68,0.3)" : "var(--border)";
+                const of = wi?.order_flow ?? {};
+                const signals: any[] = wi?.signals ?? [];
 
                 return (
                   <div style={{
-                    margin: "0 0 12px 0", padding: "10px",
-                    background: stripBg,
-                    border: `1px solid ${stripBorder}`,
-                    borderRadius: 8, display: "flex", flexDirection: "column", gap: 6
+                    marginBottom: 12, borderRadius: 10,
+                    background: panelBg, border: `1px solid ${panelBorder}`,
+                    overflow: "hidden",
                   }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <span style={{ fontSize: "0.6rem", fontWeight: 800, letterSpacing: "0.05em", color: "var(--text-primary)" }}>
-                        🐋 SMART MONEY FLOW (Binance)
-                      </span>
-                      <span style={{ fontSize: "0.65rem", fontWeight: 900, color: domColor }}>
-                        {hasData ? `${dom} DOMINANCE` : "LOADING…"}
-                      </span>
+                    {/* Header row */}
+                    <div style={{ padding: "9px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                      <span style={{ fontSize: "0.62rem", fontWeight: 800, letterSpacing: "0.06em", color: "var(--text-primary)" }}>🐋 WHALE POSITION DETECTOR</span>
+                      {whaleLoading && !wi && (
+                        <span style={{ fontSize: "0.55rem", color: "var(--text-muted)", animation: "pulse 1.5s infinite" }}>⟳ Fetching Binance…</span>
+                      )}
+                      {wi && (
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <span style={{ fontSize: "0.7rem", fontWeight: 900, color: dpColor, letterSpacing: "0.04em" }}>{dp || "NEUTRAL"}</span>
+                          <div style={{
+                            background: `${dpColor}22`, border: `1px solid ${dpColor}66`,
+                            borderRadius: 4, padding: "1px 6px", fontSize: "0.58rem", fontWeight: 800, color: dpColor,
+                          }}>{wi.confidence_pct}%</div>
+                        </div>
+                      )}
                     </div>
 
-                    {hasData ? (
-                      <>
-                        <div style={{ display: "flex", gap: 12 }}>
-                          <div style={{ flex: 1 }}>
-                            <div style={{ fontSize: "0.55rem", color: "var(--text-muted)" }}>Total Volume Delta</div>
-                            <div style={{ fontSize: "0.9rem", fontWeight: 800, fontFamily: "monospace", color: orderFlow.delta_usd > 0 ? "#4ade80" : "#f87171" }}>
-                              {orderFlow.delta_usd > 0 ? "+" : ""}{(orderFlow.delta_usd ?? 0).toLocaleString("en-US", { maximumFractionDigits: 0 })} USD
+                    {wi ? (
+                      <div style={{ padding: "10px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
+                        {/* Score bar */}
+                        <div>
+                          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                            <span style={{ fontSize: "0.52rem", color: "var(--text-muted)", fontWeight: 700 }}>SHORT DOMINANCE</span>
+                            <span style={{ fontSize: "0.52rem", color: "var(--text-muted)", fontWeight: 700 }}>LONG DOMINANCE</span>
+                          </div>
+                          <div style={{ height: 6, borderRadius: 3, background: "rgba(255,255,255,0.07)", position: "relative", overflow: "hidden" }}>
+                            {/* Center line */}
+                            <div style={{ position: "absolute", left: "50%", top: 0, bottom: 0, width: 1, background: "rgba(255,255,255,0.2)" }} />
+                            {/* Score fill */}
+                            <div style={{
+                              position: "absolute",
+                              left: wi.score >= 0 ? "50%" : `${50 + (wi.score / wi.max_score) * 50}%`,
+                              width: `${Math.abs(wi.score) / wi.max_score * 50}%`,
+                              top: 0, bottom: 0,
+                              background: wi.score >= 0 ? "#22c55e" : "#ef4444",
+                              transition: "all 0.8s ease",
+                            }} />
+                          </div>
+                          <div style={{ textAlign: "center", fontSize: "0.55rem", color: "var(--text-muted)", marginTop: 2 }}>
+                            Score: {wi.score > 0 ? "+" : ""}{wi.score} / {wi.max_score} — {wi.long_signal_count}L vs {wi.short_signal_count}S signals
+                          </div>
+                        </div>
+
+                        {/* AggTrades row */}
+                        <div style={{ display: "flex", gap: 8 }}>
+                          <div style={{ flex: 1, background: "rgba(255,255,255,0.04)", borderRadius: 6, padding: "6px 8px" }}>
+                            <div style={{ fontSize: "0.5rem", color: "var(--text-muted)", marginBottom: 2 }}>BUY/SELL PRESSURE</div>
+                            <div style={{ height: 4, borderRadius: 2, display: "flex", overflow: "hidden", marginBottom: 3 }}>
+                              <div style={{ width: `${of.buy_pct ?? 50}%`, background: "#22c55e", transition: "width 0.8s ease" }} />
+                              <div style={{ width: `${of.sell_pct ?? 50}%`, background: "#ef4444", transition: "width 0.8s ease" }} />
+                            </div>
+                            <div style={{ display: "flex", justifyContent: "space-between" }}>
+                              <span style={{ fontSize: "0.6rem", fontWeight: 800, color: "#4ade80" }}>B {of.buy_pct ?? 50}%</span>
+                              <span style={{ fontSize: "0.6rem", fontWeight: 800, color: "#f87171" }}>S {of.sell_pct ?? 50}%</span>
                             </div>
                           </div>
-                          <div style={{ flex: 1, borderLeft: "1px solid rgba(255,255,255,0.1)", paddingLeft: 12 }}>
-                            <div style={{ fontSize: "0.55rem", color: "var(--text-muted)" }}>Whale (&gt;$50k) / Shark (&gt;$10k)</div>
-                            <div style={{ fontSize: "0.85rem", fontWeight: 800, display: "flex", gap: 6 }}>
-                              <span>🐋</span>
-                              <span style={{ color: "#4ade80" }}>{orderFlow.whale_buy_count ?? 0}B</span>
-                              <span style={{ color: "#f87171" }}>{orderFlow.whale_sell_count ?? 0}S</span>
-                              <span style={{ color: "var(--text-muted)", fontSize: "0.7rem" }}>|</span>
-                              <span>🦈</span>
-                              <span style={{ color: "#4ade80" }}>{orderFlow.shark_buy_count ?? 0}B</span>
-                              <span style={{ color: "#f87171" }}>{orderFlow.shark_sell_count ?? 0}S</span>
+                          <div style={{ flex: 1, background: "rgba(255,255,255,0.04)", borderRadius: 6, padding: "6px 8px" }}>
+                            <div style={{ fontSize: "0.5rem", color: "var(--text-muted)", marginBottom: 2 }}>VOL DELTA (USD)</div>
+                            <div style={{ fontSize: "0.82rem", fontWeight: 900, fontFamily: "monospace", color: (of.delta_usd ?? 0) >= 0 ? "#4ade80" : "#f87171" }}>
+                              {(of.delta_usd ?? 0) >= 0 ? "+" : ""}{(of.delta_usd ?? 0).toLocaleString("en-US", { maximumFractionDigits: 0 })}
                             </div>
+                            <div style={{ fontSize: "0.5rem", color: "var(--text-muted)" }}>{of.total_trades ?? 0} trades analyzed</div>
                           </div>
                         </div>
-                        {/* Buy/Sell pressure bar */}
-                        <div style={{ height: 4, borderRadius: 2, display: "flex", overflow: "hidden", marginTop: 2 }}>
-                          <div style={{ width: `${orderFlow.buy_pct ?? 50}%`, background: "#22c55e", transition: "width 0.8s ease" }} />
-                          <div style={{ width: `${orderFlow.sell_pct ?? 50}%`, background: "#ef4444", transition: "width 0.8s ease" }} />
+
+                        {/* Whale/Shark counts */}
+                        <div style={{ display: "flex", gap: 4 }}>
+                          {[
+                            { emoji: "🐋", label: "Whale (>$50k)", buy: of.whale_buy_count ?? 0, sell: of.whale_sell_count ?? 0 },
+                            { emoji: "🦈", label: "Shark (>$10k)", buy: of.shark_buy_count ?? 0, sell: of.shark_sell_count ?? 0 },
+                          ].map(({ emoji, label, buy, sell }) => (
+                            <div key={label} style={{ flex: 1, background: "rgba(255,255,255,0.04)", borderRadius: 6, padding: "5px 7px", display: "flex", flexDirection: "column", gap: 1 }}>
+                              <div style={{ fontSize: "0.5rem", color: "var(--text-muted)" }}>{emoji} {label}</div>
+                              <div style={{ display: "flex", gap: 6 }}>
+                                <span style={{ fontSize: "0.75rem", fontWeight: 800, color: buy > sell ? "#4ade80" : "var(--text-primary)" }}>↑{buy}B</span>
+                                <span style={{ fontSize: "0.75rem", fontWeight: 800, color: sell > buy ? "#f87171" : "var(--text-primary)" }}>↓{sell}S</span>
+                                <span style={{ fontSize: "0.62rem", color: buy > sell ? "#4ade80" : sell > buy ? "#f87171" : "var(--text-muted)", fontWeight: 700, marginLeft: "auto" }}>
+                                  {buy > sell ? "NET LONG" : sell > buy ? "NET SHORT" : "EVEN"}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
                         </div>
-                        <div style={{ display: "flex", justifyContent: "space-between" }}>
-                          <span style={{ fontSize: "0.55rem", color: "#4ade80" }}>BUY {orderFlow.buy_pct ?? 50}%</span>
-                          <span style={{ fontSize: "0.55rem", color: "#f87171" }}>SELL {orderFlow.sell_pct ?? 50}%</span>
+
+                        {/* Signal breakdown */}
+                        <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                          <div style={{ fontSize: "0.5rem", color: "var(--text-muted)", fontWeight: 700, letterSpacing: "0.05em" }}>SIGNAL BREAKDOWN</div>
+                          {signals.map((sig: any) => (
+                            <div key={sig.key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "3px 6px", borderRadius: 4,
+                              background: sig.direction === "LONG" ? "rgba(34,197,94,0.06)" : sig.direction === "SHORT" ? "rgba(239,68,68,0.06)" : "rgba(255,255,255,0.02)" }}>
+                              <span style={{ fontSize: "0.58rem", color: "var(--text-muted)", fontWeight: 700 }}>{sig.label}</span>
+                              <span style={{ fontSize: "0.58rem", fontWeight: 800, color: sig.direction === "LONG" ? "#4ade80" : sig.direction === "SHORT" ? "#f87171" : "#94a3b8" }}>
+                                {sig.direction !== "NEUTRAL" && (sig.direction === "LONG" ? "▲" : "▼")} {sig.value}
+                              </span>
+                            </div>
+                          ))}
                         </div>
-                      </>
+
+                        {/* Data source badges */}
+                        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                          {Object.entries(wi.data_sources ?? {}).map(([k, v]: any) => (
+                            <span key={k} style={{
+                              fontSize: "0.5rem", fontWeight: 700, padding: "1px 5px", borderRadius: 3,
+                              background: v ? "rgba(34,197,94,0.1)" : "rgba(255,255,255,0.05)",
+                              color: v ? "#4ade80" : "var(--text-muted)",
+                              border: `1px solid ${v ? "rgba(34,197,94,0.2)" : "rgba(255,255,255,0.08)"}`,
+                            }}>{v ? "✓" : "✗"} {k.replace("_", " ")}</span>
+                          ))}
+                        </div>
+                      </div>
                     ) : (
-                      <div style={{ fontSize: "0.65rem", color: "var(--text-muted)", fontStyle: "italic" }}>
-                        Memuat data aliran smart money dari Binance…
+                      <div style={{ padding: "12px", fontSize: "0.65rem", color: "var(--text-muted)", fontStyle: "italic" }}>
+                        {whaleLoading ? "Menghubungi Binance API…" : "Data tidak tersedia — pastikan backend aktif"}
                       </div>
                     )}
                   </div>
