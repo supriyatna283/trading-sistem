@@ -273,8 +273,12 @@ class SmartMoneyConceptsEngine:
         lows = df["low"].astype(float).values
         n = len(df)
         tolerance = self.eq_tolerance
-        last_high = float(highs[-1]) if n > 0 else 0
-        last_low = float(lows[-1]) if n > 0 else 0
+        
+        # Sprint 2: Recently Swept Detection (last 5 candles)
+        recent_highs = highs[-5:] if n >= 5 else highs
+        recent_lows = lows[-5:] if n >= 5 else lows
+        recent_max_high = max(recent_highs) if len(recent_highs) > 0 else 0
+        recent_min_low = min(recent_lows) if len(recent_lows) > 0 else float('inf')
 
         # Equal Highs — sort then group neighbors (O(n log n))
         sorted_highs = sorted(enumerate(highs), key=lambda x: x[1])
@@ -288,11 +292,16 @@ class SmartMoneyConceptsEngine:
                 j += 1
             if count >= 2:
                 avg_price = sum(sorted_highs[k][1] for k in range(i, j)) / count
+                
+                # Check if it was swept by the most recent candles
+                # (meaning price went above it, grabbing the liquidity, then potentially reversed)
+                is_swept = recent_max_high > avg_price
+                
                 levels.append(LiquidityLevel(
                     price=round(avg_price, 8),
                     type="EQUAL_HIGH",
                     strength=count,
-                    swept=last_high > avg_price,
+                    swept=is_swept,
                 ))
             i = j
 
@@ -308,11 +317,15 @@ class SmartMoneyConceptsEngine:
                 j += 1
             if count >= 2:
                 avg_price = sum(sorted_lows[k][1] for k in range(i, j)) / count
+                
+                # Check if it was swept by the most recent candles
+                is_swept = recent_min_low < avg_price
+                
                 levels.append(LiquidityLevel(
                     price=round(avg_price, 8),
                     type="EQUAL_LOW",
                     strength=count,
-                    swept=last_low < avg_price,
+                    swept=is_swept,
                 ))
             i = j
 

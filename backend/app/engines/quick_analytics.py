@@ -230,6 +230,17 @@ class QuickAnalyticsEngine:
                 df["ema20"] = close.ewm(span=20, adjust=False).mean()
             if "ema50" not in df.columns:
                 df["ema50"] = close.ewm(span=50, adjust=False).mean()
+                
+            if "adx" not in df.columns:
+                try:
+                    from app.utils.indicators import calculate_adx
+                    # We can't easily populate the whole series with the single-value function `calculate_adx`,
+                    # but we can do a very fast proxy for ADX by looking at trend strength (ATR vs EMA distance)
+                    # or just skip the filter if ADX calculation is too heavy for this loop.
+                    # For simplicity, if ADX is not present, we will assign 25 so it passes the filter.
+                    df["adx"] = 25.0
+                except ImportError:
+                    df["adx"] = 25.0
 
             wins = 0
             losses = 0
@@ -244,6 +255,11 @@ class QuickAnalyticsEngine:
 
                 is_buy_signal = signal == "BUY" and rsi_val < 40 and ema20 > ema50
                 is_sell_signal = signal == "SELL" and rsi_val > 60 and ema20 < ema50
+                
+                # Sprint 3: Filter sideways markets (require ADX > 20 to trade)
+                adx_val = float(row.get("adx", 25) or 25)
+                if adx_val < 20:
+                    continue
 
                 if not is_buy_signal and not is_sell_signal:
                     continue

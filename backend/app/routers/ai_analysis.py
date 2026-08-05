@@ -46,6 +46,8 @@ from app.utils.indicators import (
     calculate_vwap, calculate_adx, detect_candle_pattern,
     calculate_volume_profile, detect_divergence,
 )
+from app.routers.order_flow import _fetch_kline_pressure
+from app.engines.order_flow_engine import order_flow_engine
 
 from openai import AsyncOpenAI
 
@@ -66,7 +68,7 @@ def _get_nvidia_client() -> AsyncOpenAI:
 # In-Memory Cache (90s TTL)
 # ──────────────────────────────────────────────────────────────
 _AI_CACHE: dict[str, dict] = {}
-_AI_CACHE_TTL = 300  # 5 minutes (raised from 90s — order flow refresh = 2min, so 5min is safe)
+_AI_CACHE_TTL = 90  # 90 seconds (Sprint 3: Fast reactivity)
 
 
 def _cache_key(symbol: str, timeframe: str) -> str:
@@ -256,7 +258,7 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
         _sentiment_engine.get_funding_rates([symbol]),
         _crypto_news_engine.get_dxy(),
         _sentiment_engine.get_long_short_ratio(symbol),
-        _quick_analytics.get_order_flow_delta(symbol),
+        _fetch_kline_pressure(symbol, "15m", 4), # Sprint 1: Whale Intel 1H volume
         return_exceptions=True,
     )
     results = candle_results
@@ -281,8 +283,21 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
     funding_list = funding_raw if isinstance(funding_raw, list) else []
     dxy = dxy_raw if isinstance(dxy_raw, dict) else {}
     ls_ratio = ls_ratio_raw if isinstance(ls_ratio_raw, dict) else {}
-    order_flow = order_flow_raw if isinstance(order_flow_raw, dict) else {}
     funding_data = funding_list[0] if funding_list else {}
+
+    # Sprint 1: Inject cached whales + kline pressure
+    pressure = order_flow_raw if isinstance(order_flow_raw, dict) else {}
+    cached_whales = order_flow_engine.get_cached_whales(symbol.upper())
+    whale_buys = [w for w in cached_whales if w.get("tier") == "WHALE" and w.get("side") == "BUY"]
+    whale_sells = [w for w in cached_whales if w.get("tier") == "WHALE" and w.get("side") == "SELL"]
+    order_flow = {
+        "buy_pct": round(pressure.get("buy_pct", 50.0), 1),
+        "sell_pct": round(pressure.get("sell_pct", 50.0), 1),
+        "delta_usd": round(pressure.get("delta_usd", 0.0), 0),
+        "whale_buy_count": len(whale_buys),
+        "whale_sell_count": len(whale_sells),
+        "interpretation": "Data volume 1H akurat",
+    }
 
     # Build full_sentiment dict (same structure as SentimentEngine.get_full_sentiment())
     # so ConfluenceEngine gets the same data as SetupEngine does.
@@ -433,6 +448,35 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
     prev_volume = float(prev["volume"])
     volume_change_pct = round((last_volume - prev_volume) / prev_volume * 100, 1) if prev_volume > 0 else 0
 
+    # Sprint 2: Market Regime detection
+    market_regime = "RANGING"
+    if adx_val and adx_val > 25:
+        if ema200 and last_close > ema200:
+            market_regime = "TRENDING_BULL"
+        elif ema200 and last_close < ema200:
+            market_regime = "TRENDING_BEAR"
+    if bb_bw and bb_bw > 15: # High volatility
+        market_regime = "HIGH_VOLATILITY"
+
+    # Sprint 2: Relative Strength vs BTC (using 1d candle)
+    rs_vs_btc = "N/A"
+    try:
+        if "1d" in candles_by_tf and len(candles_by_tf["1d"]) > 1:
+            df_1d = candles_by_tf["1d"]
+            close_1d = float(df_1d.iloc[-1]["close"])
+            prev_1d = float(df_1d.iloc[-2]["close"])
+            asset_change_24h = (close_1d - prev_1d) / prev_1d * 100
+            btc_change_24h = float(btc_dom.get("market_cap_change_24h_pct") or 0)
+            diff = asset_change_24h - btc_change_24h
+            if diff > 2:
+                rs_vs_btc = f"Outperforming BTC (+{diff:.1f}%)"
+            elif diff < -2:
+                rs_vs_btc = f"Underperforming BTC ({diff:.1f}%)"
+            else:
+                rs_vs_btc = f"Neutral vs BTC ({diff:.1f}%)"
+    except Exception:
+        pass
+
     # ATR fallback
     if atr_val is None:
         atr_val = (last_high - last_low) * 2
@@ -541,6 +585,7 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
             "volume_profile_poc": poc,
             "va_high": va_high,
             "va_low": va_low,
+            "market_regime": market_regime,
         },
         "smc": {
             "unmitigated_ob_count": len(unmitigated_obs),
@@ -577,6 +622,7 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
             "ls_long_pct": ls_ratio.get("long_pct"),
             "ls_short_pct": ls_ratio.get("short_pct"),
             "ls_interpretation": ls_ratio.get("interpretation", "N/A"),
+            "rs_vs_btc": rs_vs_btc,
         },
         "news": {
             "high_impact_forex": high_impact_forex[:5],
@@ -613,6 +659,9 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
     # These are prefixed with _ to indicate they are internal/not serializable
     ctx["_smc_raw"] = smc      # SmartMoneyAnalysis object (has .order_blocks with .mitigated attr)
     ctx["_entry_df_raw"] = entry_df  # raw DataFrame
+    
+    # Store MTF result for prompt injection
+    ctx["_mtf_raw"] = mtf_result
 
     return ctx
 
@@ -815,9 +864,11 @@ HTF Alignment:     {aligned_count}/{total_htf} timeframes aligned with {signal}
   4-Hour (4H): {htf.get('4h', 'N/A')}
   1-Hour (1H): {htf.get('1h', 'N/A')}
   15-Min (15M):{htf.get('15m', 'N/A')}
+  MTF Aligned: {ctx.get('_mtf_raw', {}).get('aligned', False) if isinstance(ctx.get('_mtf_raw'), dict) else 'N/A'}
 
 ─── MARKET STRUCTURE ───────────────────────
   Market Bias:      {ctx['entry_bias']}
+  Market Regime:    {ind.get('market_regime', 'UNKNOWN')}
   Structure Labels: {struct_str}
   Premium/Discount: Price in {smc.get('pd_zone', 'N/A')} zone (mid: {smc.get('pd_mid', 'N/A')})
 
@@ -854,6 +905,7 @@ HTF Alignment:     {aligned_count}/{total_htf} timeframes aligned with {signal}
 
 ─── ANALISIS MAKRO & CROSS-ASSET ───────────
   BTC Dominance:   {btc_d}% {"(tinggi, altcoin tertekan)" if btc_d and btc_d > 52 else "(rendah, altcoin season)" if btc_d and btc_d < 45 else ""}
+  Relative Str:    {macro.get('rs_vs_btc', 'N/A')}
   Total Market Cap:{total_mcap}B USD ({f"+{mcap_chg}%" if mcap_chg and mcap_chg > 0 else f"{mcap_chg}%" if mcap_chg else "N/A"} 24h)
   DXY:             {f"{dxy_val} ({'+' if dxy_chg and dxy_chg > 0 else ''}{dxy_chg}% 1d, tren 5d: {macro.get('dxy_trend_5d','N/A')})" if dxy_val else "N/A"}
   DXY Impact:      {dxy_impact}
@@ -892,7 +944,7 @@ SINYAL ENGINE & ARAH YANG HARUS DIIKUTI
   • Stop Loss: {setup.get('stop_loss')}
   • TP1: {setup.get('tp1')} | TP2: {setup.get('tp2')} | TP3: {setup.get('tp3')}
 {active_block}
-⚠️ INSTRUKSI KOHERENSI: Arah analisismu HARUS selaras dengan sinyal engine ({signal}) kecuali ada kontradiksi teknikal yang SANGAT kuat dari data. Jika kamu berbeda pendapat, sebutkan secara eksplisit alasannya.
+⚠️ INSTRUKSI KOHERENSI: Referensikan sinyal engine ({signal}), namun kamu BOLEH menentangnya/memberikan peringatan jika confidence di bawah 45% atau ada divergensi teknikal yang parah. Berikan pandangan yang objektif.
 
 ═══════════════════════════════════════════
 TASK: WRITE YOUR ANALYSIS
@@ -909,13 +961,13 @@ In 3–4 sentences, describe the current market structure in Indonesian. Referen
 Explain the **{signal}** signal in depth in Indonesian. Which 3–4 confluence factors carry the most weight? How do they reinforce each other? What is the institutional narrative behind this setup?
 
 ### 3. 📐 Setup Trading
-Confirm or refine the engine-calculated levels. Be explicit in Indonesian:
+{'**Karena sinyal adalah WAIT**, jelaskan secara spesifik level harga mana yang harus dijebol atau dikonfirmasi agar sinyal berubah menjadi BUY atau SELL. Sebutkan kondisi teknikal yang kamu tunggu (contoh: close candle 1H di atas X).' if signal == 'WAIT' else f'''Confirm or refine the engine-calculated levels. Be explicit in Indonesian:
 - **Bias:** {signal}
 - **Area Entry:** [price range — be specific]
 - **Stop Loss:** [level] — [reason: below OB / below swing low / beyond invalidation level]
 - **TP1:** [level] — [reason: liquidity target / FVG fill / resistance]
 - **TP2:** [level] — [reason]
-- **TP3:** [level] — [reason: major liquidity / HTF target]
+- **TP3:** [level] — [reason: major liquidity / HTF target]'''}
 - **R:R Ratio:** [ratio]
 - **Manajemen Risiko:** [how much risk given {conf['pct']}% confidence]
 
