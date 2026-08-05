@@ -3,6 +3,7 @@
 import MainLayout from "@/components/layout/MainLayout";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { api } from "@/lib/api";
 import { formatPrice, timeAgo } from "@/lib/utils";
 import { Gauge, BBPanelDetail, ScoreRing } from "@/components/setups/SetupComponents";
@@ -350,6 +351,20 @@ export default function SetupsPage() {
                       <span style={{ fontSize: "0.65rem", fontWeight: 800, padding: "3px 8px", borderRadius: 6, background: s.status === "ACTIVE" ? "rgba(16,185,129,0.12)" : "rgba(255,255,255,0.05)", color: s.status === "ACTIVE" ? "#10b981" : "var(--text-muted)" }}>
                         {s.status}
                       </span>
+                      <Link 
+                        href={`/charts?symbol=${s.symbol}&tf=${s.timeframe}&ai=true`}
+                        style={{ 
+                          background: "rgba(167,139,250,0.15)", color: "#a78bfa",
+                          border: "1px solid rgba(167,139,250,0.3)", borderRadius: 6,
+                          padding: "3px 8px", fontSize: "0.6rem", fontWeight: 800, textDecoration: "none",
+                          display: "flex", alignItems: "center", gap: 4, transition: "all 0.2s"
+                        }}
+                        onMouseOver={(e) => { e.currentTarget.style.background = "rgba(167,139,250,0.25)"; e.currentTarget.style.transform = "scale(1.05)"; }}
+                        onMouseOut={(e) => { e.currentTarget.style.background = "rgba(167,139,250,0.15)"; e.currentTarget.style.transform = "scale(1)"; }}
+                        title="Run AI Analyst"
+                      >
+                        🧠
+                      </Link>
                       <button
                         onClick={() => setConfirmAction({ type: "delete_one", id: s.id, symbol: s.symbol })}
                         style={{ padding: "4px 8px", borderRadius: 6, border: "none", background: "rgba(239,68,68,0.08)", color: "#f87171", cursor: "pointer", fontSize: "0.7rem" }}
