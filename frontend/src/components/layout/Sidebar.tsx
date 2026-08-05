@@ -58,7 +58,13 @@ const EXCHANGES = [
   { name: "Binance", color: "#f0b90b", status: "data" },
 ];
 
-export default function Sidebar({ onWidthChange }: { onWidthChange?: (w: number) => void }) {
+interface SidebarProps {
+  onWidthChange?: (w: number) => void;
+  mobileOpen?: boolean;
+  onCloseMobile?: () => void;
+}
+
+export default function Sidebar({ onWidthChange, mobileOpen, onCloseMobile }: SidebarProps) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
   const [time, setTime] = useState("");
@@ -79,24 +85,21 @@ export default function Sidebar({ onWidthChange }: { onWidthChange?: (w: number)
   const w = collapsed ? 68 : 228;
 
   return (
-    <aside
-      style={{
-        width: w,
-        minHeight: "100vh",
-        background: "rgba(8, 12, 20, 0.92)",
-        backdropFilter: "blur(20px)",
-        borderRight: "1px solid rgba(255, 255, 255, 0.05)",
-        display: "flex",
-        flexDirection: "column",
-        position: "fixed",
-        top: 0,
-        left: 0,
-        zIndex: 50,
-        transition: "width 0.3s cubic-bezier(.4,0,.2,1)",
-        overflow: "hidden",
-        boxShadow: "10px 0 30px rgba(0,0,0,0.5)",
-      }}
-    >
+    <>
+      {/* Mobile Backdrop */}
+      {mobileOpen && (
+        <div 
+          onClick={onCloseMobile}
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 md:hidden transition-opacity"
+        />
+      )}
+      
+      <aside
+        className={`fixed top-0 left-0 z-50 flex flex-col h-screen border-r border-white/5 bg-[#080c14]/95 backdrop-blur-xl transition-all duration-300 ease-in-out shadow-[10px_0_30px_rgba(0,0,0,0.5)] overflow-hidden ${
+          mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
+        }`}
+        style={{ width: w }}
+      >
       {/* ── Logo ── */}
       <div
         style={{
@@ -441,5 +444,6 @@ export default function Sidebar({ onWidthChange }: { onWidthChange?: (w: number)
         </div>
       )}
     </aside>
+    </>
   );
 }

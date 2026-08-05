@@ -196,7 +196,7 @@ export default function SetupsPage() {
       />
 
       {/* ── Header ── */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 28 }}>
+      <div className="flex flex-col md:flex-row md:justify-between md:items-start mb-7 gap-4 md:gap-0">
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 6 }}>
             <span style={{ fontSize: "0.7rem", fontWeight: 800, letterSpacing: "0.14em", color: "#f59e0b", textTransform: "uppercase" }}>⚡ INTRADAY ENGINE</span>
@@ -208,7 +208,7 @@ export default function SetupsPage() {
             BB · Stoch RSI · SMC · Multi-TF Confluence — {allSymbols.length} pairs monitored
           </p>
         </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <div className="flex gap-2 flex-wrap w-full md:w-auto">
           <button
             className="btn-primary"
             onClick={generateAllSignals}
@@ -271,7 +271,7 @@ export default function SetupsPage() {
       </div>
 
       {/* ── Status Tabs + Sort ── */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap", alignItems: "center" }}>
+      <div className="flex gap-2 mb-5 flex-wrap items-center">
         {(["ALL", "ACTIVE", "TRIGGERED", "EXPIRED"] as const).map(f => (
           <button key={f} onClick={() => setFilter(f)} style={{ background: filter === f ? "rgba(59,130,246,0.12)" : "transparent", border: filter === f ? "1px solid rgba(59,130,246,0.35)" : "1px solid var(--border)", color: filter === f ? "#60a5fa" : "var(--text-muted)", padding: "6px 16px", borderRadius: 8, fontSize: "0.8rem", fontWeight: 700, cursor: "pointer" }}>
             {f}{f !== "ALL" && <span style={{ opacity: 0.5, marginLeft: 5 }}>{setups.filter(s => s.status === f).length}</span>}
@@ -279,7 +279,7 @@ export default function SetupsPage() {
         ))}
 
         {/* Sort */}
-        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
+        <div className="ml-0 mt-2 sm:mt-0 sm:ml-auto flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-start">
           <span style={{ fontSize: "0.7rem", color: "var(--text-muted)", fontWeight: 700 }}>SORT</span>
           <select
             value={sortKey}

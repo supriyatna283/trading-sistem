@@ -177,7 +177,7 @@ export default function DashboardPage() {
   return (
     <MainLayout>
       {/* ── Header ── */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 32 }}>
+      <div className="flex flex-col lg:flex-row lg:justify-between items-start gap-4 lg:gap-0 mb-8">
         <div>
           <h1 style={{ fontFamily: "'Outfit',sans-serif", fontSize: "1.8rem", fontWeight: 900, letterSpacing: "-0.04em", margin: 0,
             background: "linear-gradient(135deg, #fff 30%, #94a3b8)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
@@ -191,7 +191,7 @@ export default function DashboardPage() {
             <span>Institutional SMC V3</span>
           </p>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+        <div className="flex flex-wrap items-center gap-3">
           {EXCHANGES.map(ex => (
             <div key={ex.key} style={{ display: "flex", alignItems: "center", gap: 6, background: "rgba(255,255,255,0.03)", padding: "6px 12px", borderRadius: 10, border: "1px solid rgba(255,255,255,0.05)" }}>
               <div className="animate-pulse-dot" style={{ width: 6, height: 6, borderRadius: "50%", background: ex.color, boxShadow: `0 0 8px ${ex.color}60` }} />
@@ -202,7 +202,7 @@ export default function DashboardPage() {
       </div>
 
       {/* ── Stats ── */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 20, marginBottom: 32 }}>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
         {statCards.map(s => <StatCard key={s.label} {...s} />)}
       </div>
 
@@ -226,7 +226,7 @@ export default function DashboardPage() {
             No active signals detected. Running scanner...
           </div>
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(340px,1fr))", gap: 18 }}>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {activeSetups.slice(0, 6).map((setup: any, idx: number) => (
               <div key={setup.id || idx} style={{
                 background: "rgba(255,255,255,0.015)", border: "1px solid var(--border)", borderRadius: 16, padding: 18,
@@ -292,7 +292,7 @@ export default function DashboardPage() {
 
       {/* ── Scanner Table V7 ── */}
       <div className="glass-card" style={{ padding: 24, border: "1px solid var(--border)" }}>
-        <div className="flex-between" style={{ marginBottom: 20 }}>
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 sm:gap-0 mb-6">
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <div style={{ width: 4, height: 20, borderRadius: 99, background: "linear-gradient(180deg,#10b981,#3b82f6)" }} />
             <span style={{ fontWeight: 800, fontSize: "1rem" }}>Alpha Scanner</span>
@@ -304,18 +304,19 @@ export default function DashboardPage() {
           </button>
         </div>
 
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Pair</th>
-              <th>Live Price</th>
-              <th>24h Δ</th>
-              <th>Trend</th>
-              <th>Signal</th>
-              <th style={{ textAlign: "center" }}>Layer Breakdown</th>
-              <th>Score</th>
-            </tr>
-          </thead>
+        <div className="overflow-x-auto w-full -mx-4 sm:mx-0 px-4 sm:px-0">
+          <table className="data-table min-w-[800px]">
+            <thead>
+              <tr>
+                <th>Pair</th>
+                <th>Live Price</th>
+                <th>24h Δ</th>
+                <th>Trend</th>
+                <th>Signal</th>
+                <th style={{ textAlign: "center" }}>Layer Breakdown</th>
+                <th>Score</th>
+              </tr>
+            </thead>
           <tbody>
             {isLoading ? (
               Array.from({ length: 5 }).map((_, i) => (
@@ -412,6 +413,7 @@ export default function DashboardPage() {
             )}
           </tbody>
         </table>
+        </div>
       </div>
     </MainLayout>
   );
