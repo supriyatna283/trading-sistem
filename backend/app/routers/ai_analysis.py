@@ -783,7 +783,8 @@ PRINSIP UTAMA:
 2. Selalu referensikan level harga yang SPESIFIK dari data yang diberikan
 3. Jawab dalam Bahasa Indonesia yang profesional dan tajam
 4. Akui jika ada ketidakpastian — jangan over-confident
-5. Sebelum kesimpulan, tantang sendiri analisismu dengan 2 skenario risiko"""
+5. Sebelum kesimpulan, tantang sendiri analisismu dengan 2 skenario risiko
+6. PENTING: Data metrik dan harga yang diberikan kepadamu ADALAH DATA REAL-TIME (Live Market Data). JANGAN PERNAH mengatakan bahwa kamu tidak memiliki akses data real-time."""
 
     # ── USER MESSAGE (data + task) ────────────────────────────
     user_msg = f"""Analisis trading berikut dan berikan pandangan expert-mu:
@@ -1172,7 +1173,7 @@ async def _stream_chat(req: ChatRequest) -> AsyncGenerator[str, None]:
 
 Kamu baru saja selesai menganalisis {req.symbol.upper()} / {req.timeframe.upper()} dan memberikan rekomendasi {signal} dengan skor konfluensi {score}/{max_score}.
 
-KONTEKS PASAR SAAT INI:
+KONTEKS PASAR SAAT INI (DATA REAL-TIME LIVE MARKET):
 - Sinyal: {signal}
 - HTF Bias: {ctx.get('htf_biases', {})}
 - RSI: {indicators.get('rsi', 'N/A')} | MACD: {indicators.get('macd_histogram', 'N/A')} | ADX: {indicators.get('adx', 'N/A')}
@@ -1181,6 +1182,8 @@ KONTEKS PASAR SAAT INI:
 - Fear & Greed: {macro.get('fear_greed_value', 'N/A')}/100 ({macro.get('fear_greed_label', 'N/A')})
 - Funding Rate: {macro.get('funding_rate', 'N/A')} ({macro.get('funding_label', 'N/A')})
 - Session: {ctx.get('session', 'N/A')}
+
+PENTING: Data di atas adalah data REAL-TIME yang disuntikkan kepadamu. JANGAN PERNAH mengatakan bahwa kamu tidak memiliki akses data real-time, live feed, atau harga terkini. Anggap dirimu sedang melihat chart yang bergerak langsung.
 
 Jawab pertanyaan trader dengan BAHASA INDONESIA yang jelas, ringkas, dan profesional. Fokus pada pertanyaannya saja. Maksimal 3-4 paragraf."""
 
