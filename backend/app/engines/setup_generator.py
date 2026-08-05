@@ -21,6 +21,106 @@ from app.schemas.market_data import SmartMoneyAnalysis, MarketBias
 logger = logging.getLogger(__name__)
 
 
+def _estimate_atr(df: pd.DataFrame, period: int = 14) -> float:
+    """Estimate ATR from OHLCV data."""
+    if df.empty or len(df) < 2:
+        return 0.0
+    highs = df["high"].astype(float).values
+    lows = df["low"].astype(float).values
+    closes = df["close"].astype(float).values
+    trs = []
+    for i in range(1, len(df)):
+        tr = max(
+            highs[i] - lows[i],
+            abs(highs[i] - closes[i - 1]),
+            abs(lows[i] - closes[i - 1]),
+        )
+        trs.append(tr)
+    if not trs:
+        return 0.0
+    return sum(trs[-period:]) / min(period, len(trs))
+
+
+def _find_nearest_swing_low(df: pd.DataFrame, reference_price: float, lookback: int = 20) -> Optional[float]:
+    """Find the nearest swing low below the reference price (3-bar pivot)."""
+    if df.empty or len(df) < 5:
+        return None
+    lows = df["low"].astype(float).values[-lookback:]
+    swing_lows = [
+        lows[i] for i in range(2, len(lows) - 2)
+        if lows[i] < lows[i-1] and lows[i] < lows[i-2]
+        and lows[i] < lows[i+1] and lows[i] < lows[i+2]
+        and lows[i] < reference_price
+    ]
+    return max(swing_lows) if swing_lows else None
+
+
+def _find_nearest_swing_high(df: pd.DataFrame, reference_price: float, lookback: int = 20) -> Optional[float]:
+    """Find the nearest swing high above the reference price (3-bar pivot)."""
+    if df.empty or len(df) < 5:
+        return None
+    highs = df["high"].astype(float).values[-lookback:]
+    swing_highs = [
+        highs[i] for i in range(2, len(highs) - 2)
+        if highs[i] > highs[i-1] and highs[i] > highs[i-2]
+        and highs[i] > highs[i+1] and highs[i] > highs[i+2]
+        and highs[i] > reference_price
+    ]
+    return min(swing_highs) if swing_highs else None
+
+
+def calculate_trade_levels(direction: str, last_price: float, smc, df: pd.DataFrame) -> tuple:
+    """
+    Canonical level calculator — SHARED by Setup Engine AND AI Analysis.
+    Uses OB-based entry zones + structure-based SL + 2R/3R/4.5R TP targets.
+    Returns: (entry_low, entry_high, sl, tp1, tp2, tp3)
+    """
+    recent = df.tail(20)
+    atr = _estimate_atr(recent)
+    if atr == 0:
+        atr = float(df["high"].astype(float).values[-1] - df["low"].astype(float).values[-1]) * 2
+
+    if direction == "BUY":
+        bullish_obs = [ob for ob in smc.order_blocks if ob.type == "BULLISH" and not ob.mitigated]
+        reachable_obs = [ob for ob in bullish_obs if abs(last_price - ob.low) <= atr * 3]
+        if reachable_obs:
+            ob = reachable_obs[-1]
+            entry_low = ob.low
+            entry_high = ob.high
+        else:
+            entry_low = last_price - atr * 0.3
+            entry_high = last_price
+
+        swing_low = _find_nearest_swing_low(df, entry_low)
+        sl = (swing_low - atr * 0.15) if (swing_low is not None and swing_low < entry_low) else (entry_low - atr * 1.0)
+
+        risk = entry_low - sl
+        tp1 = entry_high + risk * 2.0
+        tp2 = entry_high + risk * 3.0
+        tp3 = entry_high + risk * 4.5
+
+    else:  # SELL
+        bearish_obs = [ob for ob in smc.order_blocks if ob.type == "BEARISH" and not ob.mitigated]
+        reachable_obs = [ob for ob in bearish_obs if abs(ob.high - last_price) <= atr * 3]
+        if reachable_obs:
+            ob = reachable_obs[-1]
+            entry_low = ob.low
+            entry_high = ob.high
+        else:
+            entry_low = last_price
+            entry_high = last_price + atr * 0.3
+
+        swing_high = _find_nearest_swing_high(df, entry_high)
+        sl = (swing_high + atr * 0.15) if (swing_high is not None and swing_high > entry_high) else (entry_high + atr * 1.0)
+
+        risk = sl - entry_high
+        tp1 = entry_low - risk * 2.0
+        tp2 = entry_low - risk * 3.0
+        tp3 = entry_low - risk * 4.5
+
+    return entry_low, entry_high, sl, tp1, tp2, tp3
+
+
 class SetupGenerator:
     """V5 — Generates actionable trading setups with hardened quality gates."""
 
@@ -164,73 +264,8 @@ class SetupGenerator:
         self, direction: str, last_price: float,
         smc: SmartMoneyAnalysis, df: pd.DataFrame
     ):
-        """
-        Calculate precise entry, SL, and TP levels using OB zones + structure.
-        V5: OB proximity check + structure-based SL placement.
-        """
-        recent = df.tail(20)
-        atr = self._estimate_atr(recent)
-
-        if direction == "BUY":
-            # Entry at the nearest REACHABLE unmitigated bullish OB
-            bullish_obs = [ob for ob in smc.order_blocks
-                          if ob.type == "BULLISH" and not ob.mitigated]
-            # Filter OBs by proximity: must be within 3 ATR of current price
-            reachable_obs = [
-                ob for ob in bullish_obs
-                if abs(last_price - ob.low) <= atr * 3
-            ]
-            if reachable_obs:
-                ob = reachable_obs[-1]
-                entry_low = ob.low
-                entry_high = ob.high
-            else:
-                entry_low = last_price - atr * 0.3
-                entry_high = last_price
-
-            # SL: Use swing low (structure-based) if available, else ATR fallback
-            swing_low = self._find_nearest_swing_low(df, entry_low)
-            if swing_low is not None and swing_low < entry_low:
-                # SL just below the nearest swing low (1-2 ticks buffer)
-                sl = swing_low - atr * 0.15
-            else:
-                # ATR fallback: 1 ATR below entry
-                sl = entry_low - atr * 1.0
-
-            # TP: Use ATR multiples for R:R-based targets
-            risk = entry_low - sl
-            tp1 = entry_high + risk * 2.0    # TP1 at 2R
-            tp2 = entry_high + risk * 3.0    # TP2 at 3R
-            tp3 = entry_high + risk * 4.5    # TP3 at 4.5R (more realistic than 5R)
-
-        else:  # SELL
-            bearish_obs = [ob for ob in smc.order_blocks
-                          if ob.type == "BEARISH" and not ob.mitigated]
-            reachable_obs = [
-                ob for ob in bearish_obs
-                if abs(ob.high - last_price) <= atr * 3
-            ]
-            if reachable_obs:
-                ob = reachable_obs[-1]
-                entry_low = ob.low
-                entry_high = ob.high
-            else:
-                entry_low = last_price
-                entry_high = last_price + atr * 0.3
-
-            # SL: Use swing high (structure-based) if available, else ATR fallback
-            swing_high = self._find_nearest_swing_high(df, entry_high)
-            if swing_high is not None and swing_high > entry_high:
-                sl = swing_high + atr * 0.15
-            else:
-                sl = entry_high + atr * 1.0
-
-            risk = sl - entry_high
-            tp1 = entry_low - risk * 2.0
-            tp2 = entry_low - risk * 3.0
-            tp3 = entry_low - risk * 4.5
-
-        return entry_low, entry_high, sl, tp1, tp2, tp3
+        """Delegate to the shared canonical level calculator."""
+        return calculate_trade_levels(direction, last_price, smc, df)
 
     @staticmethod
     def _find_nearest_swing_low(df: pd.DataFrame, reference_price: float, lookback: int = 20) -> Optional[float]:

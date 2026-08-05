@@ -38,6 +38,8 @@ from app.engines.market_intel import MarketIntelEngine
 from app.engines.sentiment import SentimentEngine
 from app.engines.crypto_news import CryptoNewsEngine
 from app.engines.quick_analytics import QuickAnalyticsEngine
+from app.engines.mtf_confirmation import MTFConfirmationEngine
+from app.engines.setup_generator import calculate_trade_levels
 from app.utils.indicators import (
     calculate_rsi, calculate_ema, calculate_macd,
     calculate_bollinger_bands, calculate_stoch_rsi,
@@ -96,6 +98,7 @@ _intel_engine = MarketIntelEngine()
 _sentiment_engine = SentimentEngine()
 _crypto_news_engine = CryptoNewsEngine()
 _quick_analytics = QuickAnalyticsEngine()
+_mtf_engine = MTFConfirmationEngine()
 
 
 # ──────────────────────────────────────────────────────────────
@@ -157,96 +160,53 @@ def _detect_session() -> str:
 
 
 # ──────────────────────────────────────────────────────────────
-# Engine-based setup level calculator (NO AI fallback needed)
+# Setup level wrapper — delegates to shared canonical function
+# from setup_generator.py to ensure AI and Setup Engine levels
+# are ALWAYS identical (single source of truth).
 # ──────────────────────────────────────────────────────────────
-def _calculate_setup_levels(ctx: dict) -> dict:
+def _calculate_setup_levels(ctx: dict, smc_obj=None, entry_df=None) -> dict:
     """
-    Calculate precise entry, SL, and TP levels using:
-    - ATR for stop distance
-    - Nearest OB zone for entry
-    - Liquidity levels for TP targets
-    - R:R ratio enforced at minimum 1.5
+    Compute trade levels using the SAME canonical algorithm as SetupEngine.
+    - smc_obj: raw SmartMoneyAnalysis object (has .order_blocks with .mitigated attr)
+    - entry_df: raw DataFrame for swing point detection
+    If neither is available, falls back to ctx-based ATR estimate.
     """
     signal = ctx["signal"]
     price = ctx["price"]["current"]
-    atr = ctx.get("atr", 0)
-    smc = ctx.get("smc_detail", {})
+    atr = ctx.get("atr") or ctx.get("indicators", {}).get("atr") or 0
 
     if signal == "WAIT":
         return {
             "entry_low": None, "entry_high": None,
             "stop_loss": None, "tp1": None, "tp2": None, "tp3": None,
-            "risk_reward": None, "atr": atr,
+            "risk_reward": None, "atr": atr, "risk_per_unit": None,
         }
 
-    # Default SL distance: 1.5× ATR (institutional stop placement)
-    sl_dist = max(atr * 1.5, price * 0.003)  # min 0.3% away
+    direction = "BUY" if signal == "BUY" else "SELL"
 
-    # Try to use OB zone as tighter entry
-    entry_low = price
-    entry_high = price
-
-    obs = smc.get("order_blocks", [])
-    if signal == "BUY" and obs:
-        bullish_obs = [ob for ob in obs if ob.get("type") == "BULLISH"]
-        if bullish_obs:
-            # Nearest bullish OB below current price
-            valid = [ob for ob in bullish_obs if ob["high"] < price]
-            if valid:
-                nearest = max(valid, key=lambda o: o["high"])
-                entry_low = nearest["low"]
-                entry_high = nearest["high"]
-                # Tighter SL: just below OB
-                sl_dist = price - nearest["low"] + atr * 0.3
-    elif signal == "SELL" and obs:
-        bearish_obs = [ob for ob in obs if ob.get("type") == "BEARISH"]
-        if bearish_obs:
-            valid = [ob for ob in bearish_obs if ob["low"] > price]
-            if valid:
-                nearest = min(valid, key=lambda o: o["low"])
-                entry_low = nearest["low"]
-                entry_high = nearest["high"]
-                sl_dist = nearest["high"] - price + atr * 0.3
-
-    # SL placement
-    if signal == "BUY":
-        sl = round(price - sl_dist, 6)
+    if smc_obj is not None and entry_df is not None and not entry_df.empty:
+        # Use canonical shared function — same as SetupEngine
+        entry_low, entry_high, sl, tp1, tp2, tp3 = calculate_trade_levels(
+            direction, price, smc_obj, entry_df
+        )
     else:
-        sl = round(price + sl_dist, 6)
-
-    risk = abs(price - sl)
-    if risk <= 0:
-        risk = atr * 0.5 or price * 0.002
-
-    # TP levels: 1.8R, 3.0R, 5.0R (using liquidity levels if available)
-    liq_levels = smc.get("liquidity_prices", [])
-
-    if signal == "BUY":
-        tp1_default = round(price + risk * 1.8, 6)
-        tp2_default = round(price + risk * 3.0, 6)
-        tp3_default = round(price + risk * 5.0, 6)
-        # Snap TP to nearest liquidity above current price
-        above_liq = [l for l in liq_levels if l > price]
-        if len(above_liq) >= 1:
-            above_liq.sort()
-            tp1 = above_liq[0] if abs(above_liq[0] - tp1_default) / price < 0.03 else tp1_default
-            tp2 = above_liq[1] if len(above_liq) >= 2 else tp2_default
-            tp3 = above_liq[2] if len(above_liq) >= 3 else tp3_default
+        # Minimal ATR fallback when SMC object not available
+        sl_dist = max(atr * 1.5, price * 0.003) if atr > 0 else price * 0.005
+        entry_low = entry_high = price
+        if direction == "BUY":
+            sl = price - sl_dist
+            risk = price - sl
+            tp1 = price + risk * 2.0
+            tp2 = price + risk * 3.0
+            tp3 = price + risk * 4.5
         else:
-            tp1, tp2, tp3 = tp1_default, tp2_default, tp3_default
-    else:  # SELL
-        tp1_default = round(price - risk * 1.8, 6)
-        tp2_default = round(price - risk * 3.0, 6)
-        tp3_default = round(price - risk * 5.0, 6)
-        below_liq = [l for l in liq_levels if l < price]
-        if len(below_liq) >= 1:
-            below_liq.sort(reverse=True)
-            tp1 = below_liq[0] if abs(below_liq[0] - tp1_default) / price < 0.03 else tp1_default
-            tp2 = below_liq[1] if len(below_liq) >= 2 else tp2_default
-            tp3 = below_liq[2] if len(below_liq) >= 3 else tp3_default
-        else:
-            tp1, tp2, tp3 = tp1_default, tp2_default, tp3_default
+            sl = price + sl_dist
+            risk = sl - price
+            tp1 = price - risk * 2.0
+            tp2 = price - risk * 3.0
+            tp3 = price - risk * 4.5
 
+    risk = abs(price - sl) if sl else 0
     rr1 = round(abs(tp1 - price) / risk, 2) if risk > 0 else None
 
     return {
@@ -324,6 +284,13 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
     order_flow = order_flow_raw if isinstance(order_flow_raw, dict) else {}
     funding_data = funding_list[0] if funding_list else {}
 
+    # Build full_sentiment dict (same structure as SentimentEngine.get_full_sentiment())
+    # so ConfluenceEngine gets the same data as SetupEngine does.
+    full_sentiment = {
+        "fear_and_greed": fng,
+        "market_metrics": funding_list,
+    }
+
     # Filter: only high-impact Forex news (next 24h)
     from datetime import datetime, timezone, timedelta
     now_utc = datetime.now(timezone.utc)
@@ -380,12 +347,22 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
         logger.warning(f"SMC error: {e}")
         smc = None
 
-    # 4. Confluence scoring
+    # 3b. MTF Confirmation (parallel structure results already done above)
+    try:
+        mtf_result = await asyncio.to_thread(_mtf_engine.analyze, candles_by_tf, symbol.upper())
+    except Exception as e:
+        logger.warning(f"[AI] MTF confirmation failed: {e}")
+        mtf_result = None
+
+    # 4. Confluence scoring — NOW uses full macro data (same as SetupEngine)
     try:
         conf = await asyncio.to_thread(
             _confluence_engine.score,
             candles_by_tf, symbol, entry_tf,
-            None, None, None, None,
+            full_sentiment,   # sentiment_data
+            forex_news_list,  # news_events
+            mtf_result,       # mtf_result
+            None,             # market_intel_data (optional, skip for speed)
         )
         confluence_score = conf.total_score if conf else 0
         max_score = conf.max_score if conf else MAX_SCORE
@@ -394,7 +371,7 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
     except Exception as e:
         logger.warning(f"Confluence scoring failed: {e}")
         confluence_score = 0
-        max_score = 33
+        max_score = MAX_SCORE
         conf_details = {}
         recommendation = "NEUTRAL"
 
@@ -632,13 +609,18 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
 
     ctx["win_rate"] = win_rate_data
 
+    # Store raw SMC object + entry_df for shared canonical level calculation
+    # These are prefixed with _ to indicate they are internal/not serializable
+    ctx["_smc_raw"] = smc      # SmartMoneyAnalysis object (has .order_blocks with .mitigated attr)
+    ctx["_entry_df_raw"] = entry_df  # raw DataFrame
+
     return ctx
 
 
 # ──────────────────────────────────────────────────────────────
 # Prompt builder (V2 — Expert, 15-section)
 # ──────────────────────────────────────────────────────────────
-def _build_prompt(ctx: dict, setup: dict) -> str:
+def _build_prompt(ctx: dict, setup: dict, active_signal: Optional[dict] = None) -> tuple:
     """Build a comprehensive expert prompt from the full market context."""
     sym = ctx["symbol"]
     tf = ctx["timeframe"]
@@ -802,6 +784,19 @@ PRINSIP UTAMA:
 5. Sebelum kesimpulan, tantang sendiri analisismu dengan 2 skenario risiko
 6. PENTING: Data metrik dan harga yang diberikan kepadamu ADALAH DATA REAL-TIME (Live Market Data). JANGAN PERNAH mengatakan bahwa kamu tidak memiliki akses data real-time."""
 
+    # ── Build active_signal block ─────────────────────────────
+    if active_signal:
+        active_block = (
+            f"\n📌 SINYAL AKTIF DI DATABASE (dibuat {active_signal.get('created_at','?')}):\n"
+            f"  Arah: {active_signal.get('direction')} | Setup: {active_signal.get('setup_type','N/A')}\n"
+            f"  Skor: {active_signal.get('score','?')}/{conf['max_score']}\n"
+            f"  Entry: {active_signal.get('entry_low')} – {active_signal.get('entry_high')}\n"
+            f"  SL: {active_signal.get('stop_loss')} | TP1: {active_signal.get('tp1')}\n"
+            f"  ⚠️ Analisismu WAJIB konsisten dengan sinyal aktif ini atau jelaskan divergensinya.\n"
+        )
+    else:
+        active_block = "  (Tidak ada sinyal aktif di database untuk pair ini)\n"
+
     # ── USER MESSAGE (data + task) ────────────────────────────
     user_msg = f"""Analisis trading berikut dan berikan pandangan expert-mu:
 
@@ -885,6 +880,19 @@ HTF Alignment:     {aligned_count}/{total_htf} timeframes aligned with {signal}
 
 ─── ENGINE-CALCULATED SETUP LEVELS ─────────
 {setup_block}
+
+═══════════════════════════════════════════
+SINYAL ENGINE & ARAH YANG HARUS DIIKUTI
+═══════════════════════════════════════════
+
+⚡ ARAH SINYAL ENGINE: **{signal}**
+⚡ KONFLUENSI: {conf['score']}/{conf['max_score']} ({conf['pct']}%)
+⚡ LEVEL CANONICAL (dihitung oleh SetupEngine, gunakan ini sebagai referensi utama):
+  • Entry: {setup.get('entry_low')} – {setup.get('entry_high')}
+  • Stop Loss: {setup.get('stop_loss')}
+  • TP1: {setup.get('tp1')} | TP2: {setup.get('tp2')} | TP3: {setup.get('tp3')}
+{active_block}
+⚠️ INSTRUKSI KOHERENSI: Arah analisismu HARUS selaras dengan sinyal engine ({signal}) kecuali ada kontradiksi teknikal yang SANGAT kuat dari data. Jika kamu berbeda pendapat, sebutkan secara eksplisit alasannya.
 
 ═══════════════════════════════════════════
 TASK: WRITE YOUR ANALYSIS
@@ -1005,8 +1013,13 @@ async def _stream_ai_analysis(
     }
     yield sse("context", json.dumps(context_snapshot))
 
-    # Calculate precise levels from engines
-    setup_levels = _calculate_setup_levels(ctx)
+    # Calculate precise levels from engines (shared canonical function)
+    # smc_raw and entry_df_raw are stored in ctx by _build_market_context
+    setup_levels = _calculate_setup_levels(
+        ctx,
+        smc_obj=ctx.get("_smc_raw"),
+        entry_df=ctx.get("_entry_df_raw"),
+    )
 
     # Merge full setup object
     conf_pct = ctx["confluence"]["pct"]
@@ -1045,11 +1058,49 @@ async def _stream_ai_analysis(
     # Emit setup data IMMEDIATELY (before AI thinks)
     yield sse("setup_data", json.dumps(full_setup))
 
-    # ── 4. Stream NVIDIA Nemotron ──
+    # ── 4. Query active DB signal to inject into prompt for coherence ──
+    active_signal_ctx = None
+    try:
+        from app.database import SessionLocal
+        from app.models.trade_setup import TradeSetup
+        from datetime import datetime, timedelta
+        _db = SessionLocal()
+        try:
+            _cutoff = datetime.utcnow() - timedelta(hours=24)
+            _active = (
+                _db.query(TradeSetup)
+                .filter(
+                    TradeSetup.symbol == symbol.upper(),
+                    TradeSetup.timeframe == timeframe,
+                    TradeSetup.status == "ACTIVE",
+                    TradeSetup.created_at >= _cutoff,
+                )
+                .order_by(TradeSetup.created_at.desc())
+                .first()
+            )
+            if _active:
+                active_signal_ctx = {
+                    "direction": _active.direction,
+                    "entry_low": _active.entry_low,
+                    "entry_high": _active.entry_high,
+                    "stop_loss": _active.stop_loss,
+                    "tp1": _active.take_profit_1,
+                    "tp2": _active.take_profit_2,
+                    "score": _active.confluence_score,
+                    "setup_type": _active.setup_type,
+                    "created_at": str(_active.created_at),
+                }
+                logger.info(f"[AI] Found active DB signal for {symbol}/{timeframe}: {_active.direction}")
+        finally:
+            _db.close()
+    except Exception as e:
+        logger.warning(f"[AI] DB signal lookup failed: {e}")
+
+    # ── 5. Stream NVIDIA Nemotron ──
     yield sse("status", "ai_thinking")
 
     settings = get_settings()
-    system_msg, user_msg = _build_prompt(ctx, setup_levels)
+    system_msg, user_msg = _build_prompt(ctx, setup_levels, active_signal=active_signal_ctx)
     full_reasoning = ""
     full_answer = ""
 
