@@ -626,7 +626,7 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
                       </div>
                     </div>
                     <div style={{ flex: 1, borderLeft: "1px solid rgba(255,255,255,0.1)", paddingLeft: 12 }}>
-                      <div style={{ fontSize: "0.55rem", color: "var(--text-muted)" }}>Whale Orders (>$50k)</div>
+                      <div style={{ fontSize: "0.55rem", color: "var(--text-muted)" }}>Whale Orders (&gt;$50k)</div>
                       <div style={{ fontSize: "0.85rem", fontWeight: 800, display: "flex", gap: 4 }}>
                         <span style={{ color: "#4ade80" }}>{orderFlow.whale_buy_count}B</span>
                         <span style={{ color: "var(--text-muted)" }}>/</span>
