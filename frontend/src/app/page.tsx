@@ -242,7 +242,22 @@ export default function DashboardPage() {
                     <span className={`badge badge-${setup.direction === "BUY" ? "buy" : "sell"}`} style={{ fontWeight: 800 }}>{setup.direction}</span>
                     <TierBadge tier={setup.signal_grade || "NO_TRADE"} />
                   </div>
-                  <span style={{ fontSize: "0.65rem", color: "var(--text-muted)", fontWeight: 600 }}>{setup.timeframe}</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: "0.65rem", color: "var(--text-muted)", fontWeight: 600 }}>{setup.timeframe}</span>
+                    <Link 
+                      href={`/charts?symbol=${setup.symbol}&tf=${setup.timeframe}&ai=true`}
+                      style={{ 
+                        background: "rgba(167,139,250,0.15)", color: "#a78bfa",
+                        border: "1px solid rgba(167,139,250,0.3)", borderRadius: 6,
+                        padding: "4px 8px", fontSize: "0.6rem", fontWeight: 800, textDecoration: "none",
+                        display: "flex", alignItems: "center", gap: 4, transition: "all 0.2s"
+                      }}
+                      onMouseOver={(e) => { e.currentTarget.style.background = "rgba(167,139,250,0.25)"; e.currentTarget.style.transform = "scale(1.05)"; }}
+                      onMouseOut={(e) => { e.currentTarget.style.background = "rgba(167,139,250,0.15)"; e.currentTarget.style.transform = "scale(1)"; }}
+                    >
+                      🧠 AI
+                    </Link>
+                  </div>
                 </div>
                 {/* Score bar */}
                 <div style={{ marginBottom: 14 }}>
@@ -373,8 +388,23 @@ export default function DashboardPage() {
                       <LayerBreakdown breakdown={row.score_breakdown} />
                     </td>
                     {/* Total Score */}
-                    <td style={{ minWidth: 110 }}>
-                      <ScoreBar score={row.signal_score ?? 0} max={100} />
+                    <td style={{ minWidth: 140 }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                        <ScoreBar score={row.signal_score ?? 0} max={100} />
+                        <Link 
+                          href={`/charts?symbol=${row.symbol}&tf=${row.timeframe || "1h"}&ai=true`}
+                          style={{
+                            background: "rgba(167,139,250,0.1)", border: "1px solid rgba(167,139,250,0.3)",
+                            borderRadius: 6, padding: "4px", color: "#a78bfa", fontSize: "0.7rem",
+                            display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.2s"
+                          }}
+                          onMouseOver={(e) => { e.currentTarget.style.background = "rgba(167,139,250,0.2)"; e.currentTarget.style.transform = "scale(1.1)"; }}
+                          onMouseOut={(e) => { e.currentTarget.style.background = "rgba(167,139,250,0.1)"; e.currentTarget.style.transform = "scale(1)"; }}
+                          title="Run AI Analyst"
+                        >
+                          🧠
+                        </Link>
+                      </div>
                     </td>
                   </tr>
                 );

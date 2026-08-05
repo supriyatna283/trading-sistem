@@ -4,6 +4,7 @@ import MainLayout from "@/components/layout/MainLayout";
 import TradingViewChart, { SetupOverlay } from "@/components/charts/TradingViewChart";
 import AIAnalysisPanel from "@/components/charts/AIAnalysisPanel";
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 import { API_URL, debounce } from "@/lib/utils";
 
@@ -43,8 +44,15 @@ function Toast({ message, type, onClose }: { message: string; type: "error" | "s
   );
 }
 
-export default function ChartsPage() {
-  const [selectedSymbol, setSelectedSymbol] = useState("BTCUSDT");
+import { Suspense } from "react";
+
+function ChartsPageContent() {
+  const searchParams = useSearchParams();
+  const initSymbol = searchParams.get("symbol") || "BTCUSDT";
+  const initTf = searchParams.get("tf") || "1h";
+  const initAi = searchParams.get("ai") === "true";
+
+  const [selectedSymbol, setSelectedSymbol] = useState(initSymbol);
   const [searchInput, setSearchInput] = useState("");
   const [allSymbols, setAllSymbols] = useState<string[]>([]);
   const [activeSetups, setActiveSetups] = useState<any[]>([]);
@@ -63,8 +71,8 @@ export default function ChartsPage() {
   const [setupTfFilter, setSetupTfFilter] = useState("ALL");
   const [refreshKey, setRefreshKey] = useState(0);
   const [showSearch, setShowSearch] = useState(false);
-  const [activeTimeframe, setActiveTimeframe] = useState("1h");
-  const [showAIPanel, setShowAIPanel] = useState(false);
+  const [activeTimeframe, setActiveTimeframe] = useState(initTf);
+  const [showAIPanel, setShowAIPanel] = useState(initAi);
   const pageRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const mtfAbortRef = useRef<AbortController | null>(null);
@@ -108,6 +116,7 @@ export default function ChartsPage() {
     };
     fetchData();
   }, []);
+
 
   const fetchMTFData = useCallback(async (sym: string) => {
     if (mtfAbortRef.current) mtfAbortRef.current.abort();
@@ -804,5 +813,13 @@ export default function ChartsPage() {
         `}</style>
       </div>
     </MainLayout>
+  );
+}
+
+export default function ChartsPage() {
+  return (
+    <Suspense fallback={<div style={{ padding: "40px", textAlign: "center", color: "var(--text-muted)" }}>Loading charts...</div>}>
+      <ChartsPageContent />
+    </Suspense>
   );
 }

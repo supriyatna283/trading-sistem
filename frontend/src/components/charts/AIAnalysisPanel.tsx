@@ -125,6 +125,85 @@ function HighlightRow({ label, active }: { label: string; active: boolean }) {
 }
 
 // ─────────────────────────────────────────────────
+// UI/UX Parser for AI Markdown Output
+// ─────────────────────────────────────────────────
+function ParsedAnalysis({ text }: { text: string }) {
+  if (!text) return null;
+  
+  // A simple section parser based on the known AI prompt structure
+  const sections = text.split(/(?=\#\#\# \d\.)/g);
+  
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "16px", padding: "4px" }}>
+      {sections.map((sec, idx) => {
+        const titleMatch = sec.match(/### \d\.\s*(.*)/);
+        const title = titleMatch ? titleMatch[1].trim() : "";
+        let content = sec.replace(/### \d\.\s*.*\n?/, "").trim();
+        
+        if (!title) {
+          // Intro text before any ### section
+          return content ? <div key={idx} style={{ fontSize: "0.8rem", color: "var(--text-muted)", lineHeight: 1.6 }}>{content}</div> : null;
+        }
+
+        // Section 3: Setup Trading (Cards)
+        if (title.includes("Setup Trading")) {
+          // Parse lines like "- **Area Entry:** [0.6110 - 0.6145]"
+          const lines = content.split("\\n");
+          return (
+            <div key={idx} style={{ background: "rgba(59,130,246,0.05)", border: "1px solid rgba(59,130,246,0.2)", borderRadius: "10px", padding: "12px" }}>
+              <div style={{ fontSize: "0.85rem", fontWeight: 800, color: "#60a5fa", marginBottom: "8px", display: "flex", alignItems: "center", gap: "6px" }}>
+                <span>📐</span> {title}
+              </div>
+              <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
+                {content}
+              </div>
+            </div>
+          );
+        }
+
+        // Section 4 & 6: Risiko / Self-Critique (Alert Box)
+        if (title.includes("Risiko") || title.includes("Self-Critique")) {
+          return (
+            <div key={idx} style={{ background: "rgba(239,68,68,0.05)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: "10px", padding: "12px", borderLeft: "4px solid #ef4444" }}>
+              <div style={{ fontSize: "0.85rem", fontWeight: 800, color: "#f87171", marginBottom: "8px", display: "flex", alignItems: "center", gap: "6px" }}>
+                <span>⚠️</span> {title}
+              </div>
+              <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
+                {content}
+              </div>
+            </div>
+          );
+        }
+
+        // Section 7: Kesimpulan (Badge)
+        if (title.includes("Kesimpulan")) {
+          return (
+            <div key={idx} style={{ background: "linear-gradient(135deg, rgba(34,197,94,0.1), rgba(16,185,129,0.05))", border: "1px solid rgba(34,197,94,0.3)", borderRadius: "10px", padding: "16px", textAlign: "center" }}>
+              <div style={{ fontSize: "0.8rem", fontWeight: 900, color: "#4ade80", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px" }}>
+                🔑 {title}
+              </div>
+              <div style={{ fontSize: "0.85rem", fontWeight: 700, color: "var(--text-primary)", lineHeight: 1.5 }}>
+                {content.replace(/\\*\\*/g, "")}
+              </div>
+            </div>
+          );
+        }
+
+        // Default sections (Narasi, Justifikasi, Waktu)
+        return (
+          <div key={idx} style={{ padding: "4px 0" }}>
+            <div style={{ fontSize: "0.85rem", fontWeight: 800, color: "var(--text-primary)", marginBottom: "6px" }}>{title}</div>
+            <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
+              {content.replace(/\\*\\*/g, "")}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────
 // Main Component
 // ─────────────────────────────────────────────────
 export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: Props) {
@@ -620,12 +699,16 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
             
             {/* Initial Analysis Result */}
             {answer ? (
-              <div className="chat-bubble assistant-bubble">
-                <div className="bubble-header">🤖 AI Analyst</div>
-                <div className="bubble-content">
-                  {answer}
-                  {status === "streaming" && <span id="ai-cursor">▌</span>}
-                </div>
+              <div className="chat-bubble assistant-bubble" style={{ background: "transparent", border: "none", padding: 0 }}>
+                {status === "done" ? (
+                  <ParsedAnalysis text={answer} />
+                ) : (
+                  <div className="bubble-content" style={{ padding: "8px 12px", background: "rgba(167,139,250,0.08)", border: "1px solid rgba(167,139,250,0.2)", borderRadius: "8px" }}>
+                    <div className="bubble-header">🤖 AI Analyst (Mengetik...)</div>
+                    {answer}
+                    <span id="ai-cursor">▌</span>
+                  </div>
+                )}
               </div>
             ) : isPulsing ? (
               <div id="ai-thinking-indicator">
