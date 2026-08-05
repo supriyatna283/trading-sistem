@@ -138,15 +138,18 @@ async def generate_setup(
         market_intel_data=market_intel_data,
     )
 
-    # Phase 3: Volume Delta (only if score is promising, to save API calls)
+    # Phase 3: Smart Money Flow Delta (Binance AggTrades)
     if confluence.total_score >= 12:
         try:
-            from app.engines.order_flow_engine import order_flow_engine
-            footprint = await order_flow_engine.get_footprint(symbol.upper(), timeframe, limit=1)
-            if footprint and len(footprint) > 0:
-                volume_delta = footprint[-1].get("delta", 0)
-        except Exception:
+            from app.engines.quick_analytics import QuickAnalyticsEngine
+            qa_engine = QuickAnalyticsEngine()
+            smart_money = await qa_engine.get_order_flow_delta(symbol.upper(), limit=500)
+            if smart_money and "delta" in smart_money:
+                # Use total delta (buy_vol - sell_vol) as the dominant flow indicator
+                volume_delta = smart_money["delta"]
+        except Exception as e:
             pass
+
 
     # Generate setup (V4 — full Phase 3 power features)
     setup = setup_gen.generate(

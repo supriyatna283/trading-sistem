@@ -1010,6 +1010,7 @@ async def _stream_ai_analysis(
         "smc": ctx["smc"],
         "macro": ctx.get("macro", {}),
         "news": ctx.get("news", {}),
+        "order_flow": ctx.get("order_flow", {}),
     }
     yield sse("context", json.dumps(context_snapshot))
 

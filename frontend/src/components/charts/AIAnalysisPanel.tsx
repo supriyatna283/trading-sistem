@@ -328,24 +328,9 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
 
   useEffect(() => {
     if (!isOpen) return;
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => startAnalysis(symbol, timeframe), 2500);
-    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbol, timeframe, isOpen]);
-
-  useEffect(() => { if (!isOpen) cancelStream(); }, [isOpen, cancelStream]);
-  useEffect(() => { if (answerRef.current && tab === "analysis") answerRef.current.scrollTop = answerRef.current.scrollHeight; }, [answer, tab]);
-  useEffect(() => { if (chatEndRef.current && tab === "analysis") chatEndRef.current.scrollIntoView({ behavior: "smooth" }); }, [chatHistory, isChatting, tab]);
-
-  if (!isOpen) return null;
-
-  const isPulsing = status === "computing" || status === "thinking" || status === "streaming";
-  const htfCtx = context?.htf_biases || setup?.htf_biases || {};
-  const ind = setup?.indicators || context?.indicators || {};
-  const smc = setup?.smc || context?.smc || {};
-  const macro = context?.macro || {};
+    if (  const macro = context?.macro || {};
   const news = context?.news || {};
+  const orderFlow = context?.order_flow || {};
   const highlights = setup?.highlights || {};
   const score = setup?.confluence_score ?? 0;
   const maxScore = setup?.max_score ?? 33;
@@ -600,7 +585,47 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
         <div id="ai-macro-tab">
           {macro && Object.keys(macro).length > 0 ? (
             <>
-              {/* Macro cards 2x2 */}
+              {/* SMART MONEY (Whales) Strip */}
+              {orderFlow && orderFlow.buy_pct && (
+                <div style={{ 
+                  margin: "0 0 12px 0", padding: "10px", 
+                  background: orderFlow.dominance === "BUY" ? "linear-gradient(90deg, rgba(34,197,94,0.1), rgba(21,128,61,0.05))" : 
+                              orderFlow.dominance === "SELL" ? "linear-gradient(90deg, rgba(239,68,68,0.1), rgba(153,27,27,0.05))" : 
+                              "rgba(255,255,255,0.03)", 
+                  border: `1px solid ${orderFlow.dominance === "BUY" ? "rgba(34,197,94,0.3)" : orderFlow.dominance === "SELL" ? "rgba(239,68,68,0.3)" : "var(--border)"}`,
+                  borderRadius: 8, display: "flex", flexDirection: "column", gap: 6 
+                }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ fontSize: "0.6rem", fontWeight: 800, letterSpacing: "0.05em", color: "var(--text-primary)" }}>🐋 SMART MONEY FLOW (Binance)</span>
+                    <span style={{ 
+                      fontSize: "0.65rem", fontWeight: 900, 
+                      color: orderFlow.dominance === "BUY" ? "#4ade80" : orderFlow.dominance === "SELL" ? "#f87171" : "var(--text-muted)" 
+                    }}>{orderFlow.dominance} DOMINANCE</span>
+                  </div>
+                  <div style={{ display: "flex", gap: 12 }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: "0.55rem", color: "var(--text-muted)" }}>Total Volume Delta</div>
+                      <div style={{ fontSize: "0.9rem", fontWeight: 800, fontFamily: "monospace", color: orderFlow.delta_usd > 0 ? "#4ade80" : "#f87171" }}>
+                        {orderFlow.delta_usd > 0 ? "+" : ""}{orderFlow.delta_usd.toLocaleString('en-US', {maximumFractionDigits:0})} USD
+                      </div>
+                    </div>
+                    <div style={{ flex: 1, borderLeft: "1px solid rgba(255,255,255,0.1)", paddingLeft: 12 }}>
+                      <div style={{ fontSize: "0.55rem", color: "var(--text-muted)" }}>Whale Orders (>$50k)</div>
+                      <div style={{ fontSize: "0.85rem", fontWeight: 800, display: "flex", gap: 4 }}>
+                        <span style={{ color: "#4ade80" }}>{orderFlow.whale_buy_count}B</span>
+                        <span style={{ color: "var(--text-muted)" }}>/</span>
+                        <span style={{ color: "#f87171" }}>{orderFlow.whale_sell_count}S</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ height: 4, borderRadius: 2, display: "flex", overflow: "hidden", marginTop: 2 }}>
+                    <div style={{ width: `${orderFlow.buy_pct}%`, background: "#22c55e" }} />
+                    <div style={{ width: `${orderFlow.sell_pct}%`, background: "#ef4444" }} />
+                  </div>
+                </div>
+              )}
+
+              {/* Macro cards */}
               <div id="ai-macro-grid">
                 {[
                   {
