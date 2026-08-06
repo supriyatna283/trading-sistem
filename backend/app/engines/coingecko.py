@@ -54,7 +54,7 @@ class CoinGeckoEngine:
 
         # Return from cache if valid
         if _mcap_cache and now - _mcap_cache["ts"] < _CACHE_TTL_SECONDS:
-            return _mcap_cache["data"]
+            return _mcap_cache["data"][:limit]
 
         try:
             # We fetch up to 200 to ensure we have enough after filtering out stablecoins/non-binance pairs if needed
@@ -95,19 +95,17 @@ class CoinGeckoEngine:
                     "name": item.get("name"),
                     "image": item.get("image")
                 })
-                
-                if len(results) >= limit:
-                    break
+                # Removed break on limit so we cache everything
 
-            # Cache the results
+            # Cache the full results
             _mcap_cache = {"data": results, "ts": now}
-            logger.info(f"[CoinGecko] Fetched top {len(results)} pairs by market cap.")
-            return results
+            logger.info(f"[CoinGecko] Cached top {len(results)} pairs by market cap.")
+            return results[:limit]
 
         except Exception as e:
             logger.error(f"[CoinGecko] Error fetching market cap data: {e}")
             if _mcap_cache:
-                return _mcap_cache["data"]
+                return _mcap_cache["data"][:limit]
             return []
 
     async def close(self):
