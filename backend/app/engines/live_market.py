@@ -10,9 +10,10 @@ from app.engines.coingecko import coingecko_engine
 
 logger = logging.getLogger(__name__)
 
-BINANCE_WS_URL = "wss://stream.binance.com:9443/ws/!ticker@arr"
-BINANCE_REST_URL = "https://api.binance.com/api/v3/ticker/24hr"
-BINANCE_KLINE_URL = "https://api.binance.com/api/v3/klines"
+# Using data-stream.binance.vision and data-api.binance.vision to bypass US IP blocks on HuggingFace
+BINANCE_WS_URL = "wss://data-stream.binance.vision:9443/ws/!ticker@arr"
+BINANCE_REST_URL = "https://data-api.binance.vision/api/v3/ticker/24hr"
+BINANCE_KLINE_URL = "https://data-api.binance.vision/api/v3/klines"
 
 # In-memory store for the latest ticker data
 # Format: {"BTCUSDT": {"symbol": "BTCUSDT", "price": 60000.0, "change_24h": 2.5, "volume_24h": 1000000.0, "timestamp": 123456789}}

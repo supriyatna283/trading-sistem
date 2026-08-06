@@ -25,7 +25,8 @@ class CoinGeckoEngine:
             return _valid_symbols_cache
             
         try:
-            resp = await self.client.get("https://api.binance.com/api/v3/exchangeInfo")
+            # Using data-api.binance.vision to bypass US geo-blocking on cloud servers (e.g. HuggingFace)
+            resp = await self.client.get("https://data-api.binance.vision/api/v3/exchangeInfo")
             resp.raise_for_status()
             data = resp.json()
             
