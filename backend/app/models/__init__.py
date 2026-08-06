@@ -6,6 +6,7 @@ from app.models.journal_entry import JournalEntry
 from app.models.alert import Alert
 from app.models.user_settings import UserSettings
 from app.models.scanner_result import ScannerResult
+from app.models.shadow_setup import ShadowSetup
 
 __all__ = [
     "Candle",
@@ -14,4 +15,5 @@ __all__ = [
     "Alert",
     "UserSettings",
     "ScannerResult",
+    "ShadowSetup",
 ]

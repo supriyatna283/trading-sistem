@@ -10,8 +10,11 @@ Fetches:
 import httpx
 import logging
 import time
+import asyncio
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
+
+from app.engines.nlp_extractor import extract_news_structure
 
 logger = logging.getLogger(__name__)
 
@@ -134,10 +137,32 @@ class CryptoNewsEngine:
                     logger.debug(f"Failed to parse news item: {e}")
                     continue
 
-            _crypto_news_cache = {"data": parsed, "ts": now}
-            logger.info(f"Fetched {len(parsed)} crypto news from CryptoPanic")
+            # We only extract NLP for the top 5 to save time/tokens
+            filtered = self._filter_by_symbol(parsed, symbol, limit)
+            
+            async def _enrich_with_nlp(item: Dict) -> Dict:
+                struct = await extract_news_structure(item["title"], item["source"])
+                if struct:
+                    item["nlp"] = struct.model_dump()
+                else:
+                    item["nlp"] = {
+                        "event_type": "UNKNOWN",
+                        "sentiment_score": 0.0,
+                        "impact_level": "LOW",
+                        "summary": "Data berita gagal diproses (fallback)."
+                    }
+                return item
 
-            return self._filter_by_symbol(parsed, symbol, limit)
+            # Concurrent extraction for top items
+            enriched_items = await asyncio.gather(*[_enrich_with_nlp(n) for n in filtered[:5]])
+            
+            # Combine back with non-enriched (if limit > 5)
+            final_list = list(enriched_items) + filtered[5:]
+            
+            _crypto_news_cache = {"data": final_list, "ts": now}
+            logger.info(f"Fetched {len(parsed)} crypto news, NLP extracted {len(enriched_items)}")
+
+            return final_list
 
         except Exception as e:
             logger.warning(f"CryptoPanic fetch error: {e}")

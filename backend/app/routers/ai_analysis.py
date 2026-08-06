@@ -1213,7 +1213,36 @@ async def _stream_ai_analysis(
     t_end_ai = time.time()
     logger.info(f"[AI] AI generation for {symbol} took {t_end_ai - t_start_ai:.2f}s")
 
-    # ── 5. Cache result ──
+    # ── 5a. Shadow Tracking (False Negative from AI Filter) ──
+    if "VERDICT: WAIT" in full_answer.upper() and ctx["signal"] in ["BUY", "SELL"] and ctx["confluence"]["score"] >= 60:
+        try:
+            from app.database import SessionLocal
+            from app.models.shadow_setup import ShadowSetup
+            _db_shadow = SessionLocal()
+            try:
+                # Extract simple reason string from the reasoning or answer (first 200 chars)
+                reason_snippet = full_reasoning[-500:] if full_reasoning else full_answer[:500]
+                shadow = ShadowSetup(
+                    symbol=symbol.upper(),
+                    direction=ctx["signal"],
+                    entry_low=setup_levels.get("entry_low") or 0,
+                    entry_high=setup_levels.get("entry_high") or 0,
+                    stop_loss=setup_levels.get("stop_loss") or 0,
+                    take_profit_1=setup_levels.get("tp1") or 0,
+                    risk_reward=setup_levels.get("risk_reward") or 0,
+                    confluence_score=ctx["confluence"]["score"],
+                    timeframe=timeframe,
+                    reason=f"AI rejected high-score {ctx['signal']}. Snippet: {reason_snippet}",
+                )
+                _db_shadow.add(shadow)
+                _db_shadow.commit()
+                logger.info(f"[AI] ShadowSetup logged for {symbol} (AI chose WAIT on score {ctx['confluence']['score']})")
+            finally:
+                _db_shadow.close()
+        except Exception as e:
+            logger.error(f"[AI] Failed to save ShadowSetup: {e}")
+
+    # ── 5b. Cache result ──
     _set_cache(symbol, timeframe, {
         "context_snapshot": context_snapshot,
         "setup": full_setup,

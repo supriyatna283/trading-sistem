@@ -332,6 +332,31 @@ class QuickAnalyticsEngine:
             "verdict": "Estimasi win rate tidak tersedia",
         }
 
+    # ── 3. Shadow Tracking (Opportunity Cost) ──
+    def get_shadow_stats(self) -> Dict[str, Any]:
+        """
+        Query the shadow_setups table to measure how often the AI (or whale filter)
+        vetoes high-score setups (False Negatives).
+        """
+        try:
+            from app.database import SessionLocal
+            from app.models.shadow_setup import ShadowSetup
+            db = SessionLocal()
+            try:
+                total_shadows = db.query(ShadowSetup).count()
+                # Di masa depan, ini bisa di-join dengan data harga historis untuk 
+                # melihat berapa persen dari shadow setup ini yang menyentuh TP1
+                
+                return {
+                    "total_vetoed_signals": total_shadows,
+                    "opportunity_cost_note": "Tracking ongoing. Check database for detailed reasons."
+                }
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning(f"Shadow Stats error: {e}")
+            return {"total_vetoed_signals": 0}
+
     async def close(self):
         await self.client.aclose()
 
