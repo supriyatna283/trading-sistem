@@ -1,12 +1,9 @@
+'use client';
+
 import React from 'react';
 import MainLayout from '@/components/layout/MainLayout';
 import MarketTable from '@/components/markets/MarketTable';
 import { ArrowTrendingUpIcon } from '@heroicons/react/24/outline';
-
-export const metadata = {
-  title: 'Live Markets | Trading Intelligence',
-  description: 'Real-time cryptocurrency market screener and live ticker.',
-};
 
 export default function MarketsPage() {
   const [status, setStatus] = React.useState<'LIVE' | 'DEGRADED'>('LIVE');
