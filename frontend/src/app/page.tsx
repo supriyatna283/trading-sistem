@@ -202,7 +202,7 @@ export default function DashboardPage() {
       </div>
 
       {/* ── Stats ── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 xl:gap-8 mb-10">
         {statCards.map(s => <StatCard key={s.label} {...s} />)}
       </div>
 
@@ -226,17 +226,17 @@ export default function DashboardPage() {
             No active signals detected. Running scanner...
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6 xl:gap-8">
             {activeSetups.slice(0, 6).map((setup: any, idx: number) => (
               <div key={setup.id || idx} style={{
-                background: "rgba(255,255,255,0.015)", border: "1px solid var(--border)", borderRadius: 16, padding: 18,
+                background: "rgba(255,255,255,0.015)", border: "1px solid var(--border)", borderRadius: 16, padding: 24,
                 transition: "all 0.3s ease", cursor: "pointer",
               }}
               onMouseOver={(e) => e.currentTarget.style.border = "1px solid rgba(59,130,246,0.3)"}
               onMouseOut={(e) => e.currentTarget.style.border = "1px solid var(--border)"}
               >
                 {/* Header: Symbol + Direction + Grade */}
-                <div className="flex-between" style={{ marginBottom: 14 }}>
+                <div className="flex-between" style={{ marginBottom: 20 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                     <span className="text-mono" style={{ fontWeight: 900, fontSize: "1.05rem", color: "#fff" }}>{setup.symbol}</span>
                     <span className={`badge badge-${setup.direction === "BUY" ? "buy" : "sell"}`} style={{ fontWeight: 800 }}>{setup.direction}</span>
@@ -260,19 +260,19 @@ export default function DashboardPage() {
                   </div>
                 </div>
                 {/* Score bar */}
-                <div style={{ marginBottom: 14 }}>
+                <div style={{ marginBottom: 20 }}>
                   <ScoreBar score={setup.signal_score ?? 0} max={100} />
                   <LayerBreakdown breakdown={setup.score_breakdown} />
                 </div>
                 {/* Levels */}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
                   {[
                     { l: "Entry Zone", v: `${setup.entry_low} – ${setup.entry_high}`, c: "var(--text-primary)" },
                     { l: "Stop Loss", v: setup.stop_loss, c: "var(--accent-red)" },
                     { l: "Target 1", v: setup.take_profit_1, c: "var(--accent-green)" },
                     { l: "R:R", v: `1:${(setup.risk_reward ?? 0).toFixed(1)}`, c: "var(--accent-blue)" },
                   ].map(f => (
-                    <div key={f.l} style={{ background: "var(--bg-secondary)", borderRadius: 8, padding: "7px 10px" }}>
+                    <div key={f.l} style={{ background: "var(--bg-secondary)", borderRadius: 10, padding: "10px 14px" }}>
                       <div style={{ fontSize: "0.58rem", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 2 }}>{f.l}</div>
                       <div className="text-mono" style={{ fontSize: "0.76rem", fontWeight: 700, color: f.c }}>{f.v}</div>
                     </div>
