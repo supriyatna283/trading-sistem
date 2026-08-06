@@ -39,7 +39,6 @@ export default function MarketTable({ onStatusChange }: MarketTableProps) {
   const [sparklines, setSparklines] = useState<Record<string, number[]>>({});
   const [recentSpikes, setRecentSpikes] = useState<SpikeEvent[]>([]);
   const [loading, setLoading] = useState(true);
-  const [demoMode, setDemoMode] = useState(false);
   
   // Use a ref to hold the current coins array for the SSE event listener
   // to avoid stale closures.
@@ -104,61 +103,7 @@ export default function MarketTable({ onStatusChange }: MarketTableProps) {
     }
   };
 
-  // 3. Demo Mode Injector
-  useEffect(() => {
-    if (!demoMode || coinsRef.current.length === 0) return;
-    
-    const interval = setInterval(() => {
-      // Pick a random coin from the current list
-      const currentCoins = coinsRef.current;
-      const randomCoin = currentCoins[Math.floor(Math.random() * currentCoins.length)];
-      if (!randomCoin) return;
-      
-      const isBuy = Math.random() > 0.5;
-      const fakeVol = Math.floor(Math.random() * 4000000) + 1000000; // $1M - $5M
-      
-      const newSpike: SpikeEvent = {
-        id: `demo-${Date.now()}`,
-        symbol: randomCoin.symbol,
-        name: randomCoin.name,
-        type: isBuy ? 'buy' : 'sell',
-        volume: fakeVol,
-        timestamp: new Date()
-      };
-      
-      // Update Radar
-      setRecentSpikes(prev => {
-        const combined = [newSpike, ...prev];
-        return combined.slice(0, 5);
-      });
-      
-      // Trigger row glow
-      setCoins(prevCoins => {
-        const newCoins = [...prevCoins];
-        const idx = newCoins.findIndex(c => c.symbol === randomCoin.symbol);
-        if (idx !== -1) {
-          newCoins[idx] = { 
-            ...newCoins[idx], 
-            spike: isBuy ? 'buy' : 'sell', 
-            spike_vol: fakeVol 
-          };
-        }
-        return newCoins;
-      });
-      
-      // Clear spike after 15s
-      setTimeout(() => {
-        setCoins(current => current.map(c => 
-          (c.symbol === randomCoin.symbol && c.spike) ? { ...c, spike: null, spike_vol: 0 } : c
-        ));
-      }, 15000);
-      
-    }, 2000); // Inject a whale every 2 seconds
-    
-    return () => clearInterval(interval);
-  }, [demoMode]);
-
-  // 4. Connect SSE for live updates
+  // 3. Connect SSE for live updates
   useEffect(() => {
     if (loading) return;
     
@@ -259,73 +204,50 @@ export default function MarketTable({ onStatusChange }: MarketTableProps) {
   }
 
   return (
-    <div className="space-y-4">
-      {/* Whale Radar (Always On) */}
-      <div className="flex items-center gap-3 overflow-x-auto p-3 rounded-xl border border-white/10 bg-black/40 backdrop-blur-xl shadow-2xl relative no-scrollbar">
-        <div className="flex-shrink-0 flex items-center gap-2 text-white font-bold text-sm bg-gray-900/80 border border-gray-700 px-3 py-1.5 rounded-lg shadow-inner">
-          <span className="animate-pulse text-emerald-400">📡</span> 
-          <span className="bg-gradient-to-r from-emerald-400 to-cyan-400 bg-clip-text text-transparent">Whale Radar</span>
-        </div>
-        
-        {recentSpikes.length === 0 ? (
-          <div className="flex-1 text-gray-500 text-xs flex items-center gap-2 italic">
-             <span className="flex h-2 w-2 relative">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-             </span>
-             Scanning exchange endpoints for institutional liquidity...
+    <div className="space-y-6">
+      {/* Whale Radar */}
+      {recentSpikes.length > 0 && (
+        <div className="flex items-center gap-3 overflow-x-auto p-4 rounded-2xl border border-white/5 bg-gradient-to-r from-gray-900/80 to-black/60 backdrop-blur-xl shadow-2xl no-scrollbar relative overflow-hidden">
+          <div className="absolute inset-0 bg-gradient-to-r from-emerald-500/5 to-rose-500/5 animate-pulse pointer-events-none"></div>
+          <div className="flex-shrink-0 flex items-center gap-2 text-white font-bold text-sm bg-black/60 px-4 py-2 rounded-xl border border-white/10 z-10">
+            <span className="animate-pulse">📡</span> Whale Radar:
           </div>
-        ) : (
-          recentSpikes.map(spike => (
-            <div key={spike.id} className={`flex-shrink-0 flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium animate-in fade-in zoom-in slide-in-from-right-4 duration-500 shadow-lg ${
-              spike.type === 'buy' ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/50 shadow-emerald-500/20' : 
-              spike.type === 'sell' ? 'bg-rose-500/20 text-rose-400 border-rose-500/50 shadow-rose-500/20' :
-              'bg-gray-500/20 text-gray-400 border-gray-500/50'
+          {recentSpikes.map(spike => (
+            <div key={spike.id} className={`z-10 flex-shrink-0 flex items-center gap-2 px-4 py-2 rounded-xl border text-xs font-medium animate-in fade-in slide-in-from-right-4 duration-500 shadow-lg ${
+              spike.type === 'buy' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30 shadow-emerald-500/10' : 
+              spike.type === 'sell' ? 'bg-rose-500/10 text-rose-400 border-rose-500/30 shadow-rose-500/10' :
+              'bg-gray-500/10 text-gray-400 border-gray-500/30 shadow-gray-500/10'
             }`}>
-              <span>{spike.name}</span>
-              <span className="font-mono bg-black/30 px-1.5 rounded">${formatCompact(spike.volume)}</span>
+              <span className="font-bold tracking-wide text-white">{spike.name}</span>
+              <span className="font-mono tabular-nums font-semibold">${formatCompact(spike.volume)}</span>
               <span className="opacity-50 text-[10px]">
                 {spike.timestamp.toLocaleTimeString()}
               </span>
             </div>
-          ))
-        )}
-        
-        {/* Demo Toggle */}
-        <div className="ml-auto flex-shrink-0">
-          <button 
-            onClick={() => setDemoMode(!demoMode)}
-            className={`text-[10px] px-3 py-1.5 rounded-lg border font-bold transition-all ${
-              demoMode 
-                ? 'bg-amber-500/20 text-amber-400 border-amber-500/50 animate-pulse' 
-                : 'bg-white/5 text-gray-400 border-white/10 hover:bg-white/10'
-            }`}
-          >
-            {demoMode ? '🛑 STOP DEMO' : '🧪 TEST UX (DEMO)'}
-          </button>
+          ))}
         </div>
-      </div>
+      )}
 
       {/* Main Table */}
-      <div className="overflow-x-auto rounded-xl border border-white/5 bg-gray-900/50 backdrop-blur-xl">
-        <table className="w-full text-sm text-left">
-        <thead className="text-xs text-gray-400 uppercase bg-black/40 border-b border-white/5">
+      <div className="overflow-x-auto rounded-3xl border border-white/5 bg-gray-950/40 backdrop-blur-2xl shadow-[0_8px_32px_0_rgba(0,0,0,0.3)]">
+        <table className="w-full text-sm text-left border-collapse">
+        <thead className="text-[10px] text-gray-400 uppercase tracking-widest bg-black/40 border-b border-white/5 font-semibold">
           <tr>
-            <th className="px-6 py-4 font-medium">#</th>
-            <th className="px-6 py-4 font-medium">Asset</th>
-            <th className="px-6 py-4 font-medium text-right">Price</th>
-            <th className="px-6 py-4 font-medium text-right">24h Change</th>
-            <th className="px-6 py-4 font-medium text-right">24h Volume</th>
-            <th className="px-6 py-4 font-medium text-right relative group/tooltip">
-              <span className="border-b border-dashed border-gray-500 cursor-help">Market Cap</span>
-              <div className="absolute bottom-full right-0 mb-2 w-64 bg-gray-900 border border-gray-700 text-gray-300 text-[10px] sm:text-xs p-2 rounded shadow-xl opacity-0 invisible group-hover/tooltip:opacity-100 group-hover/tooltip:visible transition-all z-10 pointer-events-none normal-case font-normal text-left">
+            <th className="px-6 py-5">#</th>
+            <th className="px-6 py-5">Asset</th>
+            <th className="px-6 py-5 text-right">Price</th>
+            <th className="px-6 py-5 text-right">24h Change</th>
+            <th className="px-6 py-5 text-right">24h Volume</th>
+            <th className="px-6 py-5 text-right relative group/tooltip">
+              <span className="border-b border-dashed border-gray-600 pb-0.5 cursor-help hover:text-gray-200 transition-colors">Market Cap</span>
+              <div className="absolute bottom-full right-0 mb-3 w-64 bg-gray-900/95 backdrop-blur-md border border-gray-700 text-gray-300 text-xs p-3 rounded-xl shadow-2xl opacity-0 invisible group-hover/tooltip:opacity-100 group-hover/tooltip:visible transition-all z-20 pointer-events-none normal-case font-normal text-left leading-relaxed">
                 Diukur dari rata-rata volume tertimbang lintas-bursa (CoinGecko). Harga dapat memiliki spread dengan ticker live Binance di kolom Price.
               </div>
             </th>
-            <th className="px-6 py-4 font-medium text-center">Last 7 Days</th>
+            <th className="px-6 py-5 text-center">Last 7 Days</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-white/5">
+        <tbody className="divide-y divide-white/[0.03]">
           {coins.map((coin) => {
             const isPositive = coin.change_24h >= 0;
             const flashClass = coin.flash === 'up' 
@@ -337,14 +259,14 @@ export default function MarketTable({ onStatusChange }: MarketTableProps) {
             const isSpikeBuy = coin.spike === 'buy';
             const isSpikeSell = coin.spike === 'sell';
             const rowSpikeClass = isSpikeBuy 
-                ? 'bg-emerald-900/30 ring-1 ring-emerald-500/40 shadow-[inset_0_0_20px_rgba(16,185,129,0.2)] z-10 relative transition-none'
+                ? 'bg-emerald-900/20 ring-1 ring-inset ring-emerald-500/30 shadow-[inset_0_0_30px_rgba(16,185,129,0.15)] z-10 relative transition-none'
                 : isSpikeSell 
-                  ? 'bg-rose-900/30 ring-1 ring-rose-500/40 shadow-[inset_0_0_20px_rgba(244,63,94,0.2)] z-10 relative transition-none'
+                  ? 'bg-rose-900/20 ring-1 ring-inset ring-rose-500/30 shadow-[inset_0_0_30px_rgba(244,63,94,0.15)] z-10 relative transition-none'
                   : 'transition-all duration-[3000ms]'; // Slow fade out
 
             return (
-              <tr key={coin.symbol} className={`hover:bg-white/[0.02] group ${rowSpikeClass}`}>
-                <td className="px-6 py-4 text-gray-500 font-medium">
+              <tr key={coin.symbol} className={`hover:bg-white/[0.04] group hover:scale-[1.002] hover:-translate-y-[1px] hover:z-10 hover:shadow-2xl relative border-l-[3px] border-transparent hover:border-emerald-500/50 ${rowSpikeClass}`}>
+                <td className="px-6 py-5 text-gray-500 font-medium tabular-nums">
                   {coin.market_cap_rank || '-'}
                 </td>
                 <td className="px-6 py-4">
@@ -357,40 +279,40 @@ export default function MarketTable({ onStatusChange }: MarketTableProps) {
                       </div>
                     )}
                     <div>
-                      <div className="font-bold text-white group-hover:text-emerald-400 transition-colors flex items-center gap-2">
+                      <div className="font-bold text-gray-100 group-hover:text-emerald-400 transition-colors flex items-center gap-2">
                         {coin.name}
                         {coin.spike && (
-                          <span className={`text-[10px] px-1.5 py-0.5 rounded flex items-center gap-1 ${
-                            isSpikeBuy ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 
-                            'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                          <span className={`text-[10px] px-2 py-0.5 rounded-md flex items-center gap-1 font-semibold shadow-lg ${
+                            isSpikeBuy ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 shadow-emerald-500/20' : 
+                            'bg-rose-500/20 text-rose-400 border border-rose-500/30 shadow-rose-500/20'
                           }`}>
-                            {isSpikeBuy ? '🐋 Whale Buy' : '🩸 Whale Sell'} ${formatCompact(coin.spike_vol || 0)}
+                            {isSpikeBuy ? '🐋 Whale Buy' : '🩸 Whale Sell'} <span className="tabular-nums">${formatCompact(coin.spike_vol || 0)}</span>
                           </span>
                         )}
                       </div>
-                      <div className="text-xs text-gray-500 font-medium">
+                      <div className="text-xs text-gray-500 font-medium tracking-wide">
                         {coin.symbol.replace('USDT', '')}
                       </div>
                     </div>
                   </div>
                 </td>
-                <td className="px-6 py-4 text-right">
-                  <div className={`font-mono font-medium py-1 px-2 rounded -mr-2 inline-block ${flashClass}`}>
+                <td className="px-6 py-5 text-right">
+                  <div className={`font-mono font-medium py-1 px-2 rounded-lg -mr-2 inline-block tabular-nums ${flashClass}`}>
                     ${formatPrice(coin.price)}
                   </div>
                 </td>
-                <td className="px-6 py-4 text-right">
-                  <div className={`font-medium ${isPositive ? 'text-emerald-400' : 'text-rose-400'}`}>
+                <td className="px-6 py-5 text-right">
+                  <div className={`font-medium tabular-nums ${isPositive ? 'text-emerald-400' : 'text-rose-400'}`}>
                     {isPositive ? '+' : ''}{coin.change_24h?.toFixed(2)}%
                   </div>
                 </td>
-                <td className="px-6 py-4 text-right font-mono text-gray-400">
+                <td className="px-6 py-5 text-right font-mono text-gray-400 tabular-nums font-medium">
                   ${formatCompact(coin.volume_24h)}
                 </td>
-                <td className="px-6 py-4 text-right font-mono text-gray-400">
+                <td className="px-6 py-5 text-right font-mono text-gray-400 tabular-nums font-medium">
                   ${formatCompact(coin.market_cap)}
                 </td>
-                <td className="px-6 py-4 flex justify-center">
+                <td className="px-6 py-5 flex justify-center">
                   <div className="w-32 h-10 opacity-70 group-hover:opacity-100 transition-opacity">
                     {sparklines[coin.symbol] ? (
                       <SparklineChart 
