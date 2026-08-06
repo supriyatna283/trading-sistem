@@ -1,5 +1,5 @@
 import React from 'react';
-import MainLayout from '@/components/MainLayout';
+import MainLayout from '@/components/layout/MainLayout';
 import MarketTable from '@/components/markets/MarketTable';
 import { ArrowTrendingUpIcon } from '@heroicons/react/24/outline';
 
