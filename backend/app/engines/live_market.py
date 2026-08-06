@@ -119,16 +119,17 @@ class LiveMarketEngine:
                             spike_vol = 0
                             
                             if old_state:
-                                vol_diff = new_volume - old_state["volume_24h"]
-                                # Lowered threshold to 5k USDT for more frequent visual feedback
-                                if vol_diff > 5000 and vol_diff < new_volume: # avoid cold boot spikes
-                                    spike_vol = vol_diff
-                                    if new_price > old_state["price"]:
+                                # Use 'Q' (last trade quantity) instead of 24h rolling volume delta
+                                last_qty = float(item.get("Q", 0))
+                                last_trade_usdt = last_qty * new_price
+                                
+                                # Threshold set to 1,000 USDT to ensure the user can immediately see the UX in action
+                                if last_trade_usdt > 1000:
+                                    spike_vol = last_trade_usdt
+                                    if new_price >= old_state["price"]:
                                         spike_type = "buy"
-                                    elif new_price < old_state["price"]:
-                                        spike_type = "sell"
                                     else:
-                                        spike_type = "neutral"
+                                        spike_type = "sell"
                             
                             if not old_state or old_state["price"] != new_price or spike_type:
                                 _in_memory_ticker_state[symbol] = {
