@@ -120,8 +120,8 @@ class LiveMarketEngine:
                             
                             if old_state:
                                 vol_diff = new_volume - old_state["volume_24h"]
-                                # If volume spiked by more than 50k USDT in this 1-second tick
-                                if vol_diff > 50000 and vol_diff < new_volume: # avoid cold boot spikes
+                                # Lowered threshold to 5k USDT for more frequent visual feedback
+                                if vol_diff > 5000 and vol_diff < new_volume: # avoid cold boot spikes
                                     spike_vol = vol_diff
                                     if new_price > old_state["price"]:
                                         spike_type = "buy"
