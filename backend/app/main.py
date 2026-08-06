@@ -33,6 +33,7 @@ from app.routers import (
     portfolio,
     order_flow,
     ai_analysis,
+    markets,
 )
 from app.services.auto_scheduler import run_scheduler, stop_scheduler, scheduler_state
 from app.security import require_api_key
@@ -90,6 +91,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"❌ Smart Tape failed to start: {e}")
 
+    # 5. Start Live Market WebSocket Manager (Binance Live Ticker)
+    try:
+        from app.engines.live_market import live_market_engine
+        await live_market_engine.start()
+        logger.info("✅ Live Market WS Manager started (Binance)")
+    except Exception as e:
+        logger.error(f"❌ Live Market WS failed to start: {e}")
+
     yield
 
     # Shutdown
@@ -111,6 +120,12 @@ async def lifespan(app: FastAPI):
     try:
         from app.services.tape_ws_manager import smart_tape_manager
         await smart_tape_manager.stop()
+    except Exception:
+        pass
+
+    try:
+        from app.engines.live_market import live_market_engine
+        await live_market_engine.stop()
     except Exception:
         pass
 
@@ -161,6 +176,7 @@ app.include_router(trading.router)
 app.include_router(portfolio.router)
 app.include_router(order_flow.router)
 app.include_router(ai_analysis.router)
+app.include_router(markets.router)
 
 
 @app.get("/")

@@ -29,10 +29,10 @@ const NAV_GROUPS = [
     label: "Core",
     items: [
       { href: "/",            label: "Dashboard",   icon: LayoutDashboard, color: "#3b82f6" },
+      { href: "/markets",     label: "Live Markets",icon: Globe,           color: "#10b981" },
       { href: "/scanner",     label: "Scanner",     icon: Search,          color: "#8b5cf6" },
       { href: "/setups",      label: "Setups",      icon: Target,          color: "#f43f5e" },
       { href: "/charts",      label: "Charts",      icon: LineChart,       color: "#0ea5e9" },
-      { href: "/sentiment",   label: "Sentiment",   icon: Globe,           color: "#10b981" },
       { href: "/market-intel",label: "Market Intel",icon: Brain,           color: "#f59e0b" },
     ],
   },
