@@ -39,6 +39,7 @@ export default function MarketTable({ onStatusChange }: MarketTableProps) {
   const [sparklines, setSparklines] = useState<Record<string, number[]>>({});
   const [recentSpikes, setRecentSpikes] = useState<SpikeEvent[]>([]);
   const [loading, setLoading] = useState(true);
+  const [demoMode, setDemoMode] = useState(false);
   
   // Use a ref to hold the current coins array for the SSE event listener
   // to avoid stale closures.
@@ -103,7 +104,61 @@ export default function MarketTable({ onStatusChange }: MarketTableProps) {
     }
   };
 
-  // 3. Connect SSE for live updates
+  // 3. Demo Mode Injector
+  useEffect(() => {
+    if (!demoMode || coinsRef.current.length === 0) return;
+    
+    const interval = setInterval(() => {
+      // Pick a random coin from the current list
+      const currentCoins = coinsRef.current;
+      const randomCoin = currentCoins[Math.floor(Math.random() * currentCoins.length)];
+      if (!randomCoin) return;
+      
+      const isBuy = Math.random() > 0.5;
+      const fakeVol = Math.floor(Math.random() * 4000000) + 1000000; // $1M - $5M
+      
+      const newSpike: SpikeEvent = {
+        id: `demo-${Date.now()}`,
+        symbol: randomCoin.symbol,
+        name: randomCoin.name,
+        type: isBuy ? 'buy' : 'sell',
+        volume: fakeVol,
+        timestamp: new Date()
+      };
+      
+      // Update Radar
+      setRecentSpikes(prev => {
+        const combined = [newSpike, ...prev];
+        return combined.slice(0, 5);
+      });
+      
+      // Trigger row glow
+      setCoins(prevCoins => {
+        const newCoins = [...prevCoins];
+        const idx = newCoins.findIndex(c => c.symbol === randomCoin.symbol);
+        if (idx !== -1) {
+          newCoins[idx] = { 
+            ...newCoins[idx], 
+            spike: isBuy ? 'buy' : 'sell', 
+            spike_vol: fakeVol 
+          };
+        }
+        return newCoins;
+      });
+      
+      // Clear spike after 15s
+      setTimeout(() => {
+        setCoins(current => current.map(c => 
+          (c.symbol === randomCoin.symbol && c.spike) ? { ...c, spike: null, spike_vol: 0 } : c
+        ));
+      }, 15000);
+      
+    }, 2000); // Inject a whale every 2 seconds
+    
+    return () => clearInterval(interval);
+  }, [demoMode]);
+
+  // 4. Connect SSE for live updates
   useEffect(() => {
     if (loading) return;
     
@@ -205,27 +260,51 @@ export default function MarketTable({ onStatusChange }: MarketTableProps) {
 
   return (
     <div className="space-y-4">
-      {/* Whale Radar */}
-      {recentSpikes.length > 0 && (
-        <div className="flex items-center gap-3 overflow-x-auto p-3 rounded-xl border border-white/5 bg-gray-900/50 backdrop-blur-xl no-scrollbar">
-          <div className="flex-shrink-0 flex items-center gap-2 text-white font-bold text-sm bg-black/40 px-3 py-1.5 rounded-lg">
-            <span className="animate-pulse">📡</span> Whale Radar:
+      {/* Whale Radar (Always On) */}
+      <div className="flex items-center gap-3 overflow-x-auto p-3 rounded-xl border border-white/10 bg-black/40 backdrop-blur-xl shadow-2xl relative no-scrollbar">
+        <div className="flex-shrink-0 flex items-center gap-2 text-white font-bold text-sm bg-gray-900/80 border border-gray-700 px-3 py-1.5 rounded-lg shadow-inner">
+          <span className="animate-pulse text-emerald-400">📡</span> 
+          <span className="bg-gradient-to-r from-emerald-400 to-cyan-400 bg-clip-text text-transparent">Whale Radar</span>
+        </div>
+        
+        {recentSpikes.length === 0 ? (
+          <div className="flex-1 text-gray-500 text-xs flex items-center gap-2 italic">
+             <span className="flex h-2 w-2 relative">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+             </span>
+             Scanning exchange endpoints for institutional liquidity...
           </div>
-          {recentSpikes.map(spike => (
-            <div key={spike.id} className={`flex-shrink-0 flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium animate-in fade-in slide-in-from-right-4 duration-500 ${
-              spike.type === 'buy' ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' : 
-              spike.type === 'sell' ? 'bg-rose-500/20 text-rose-400 border-rose-500/30' :
-              'bg-gray-500/20 text-gray-400 border-gray-500/30'
+        ) : (
+          recentSpikes.map(spike => (
+            <div key={spike.id} className={`flex-shrink-0 flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium animate-in fade-in zoom-in slide-in-from-right-4 duration-500 shadow-lg ${
+              spike.type === 'buy' ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/50 shadow-emerald-500/20' : 
+              spike.type === 'sell' ? 'bg-rose-500/20 text-rose-400 border-rose-500/50 shadow-rose-500/20' :
+              'bg-gray-500/20 text-gray-400 border-gray-500/50'
             }`}>
               <span>{spike.name}</span>
-              <span className="font-mono">${formatCompact(spike.volume)}</span>
+              <span className="font-mono bg-black/30 px-1.5 rounded">${formatCompact(spike.volume)}</span>
               <span className="opacity-50 text-[10px]">
                 {spike.timestamp.toLocaleTimeString()}
               </span>
             </div>
-          ))}
+          ))
+        )}
+        
+        {/* Demo Toggle */}
+        <div className="ml-auto flex-shrink-0">
+          <button 
+            onClick={() => setDemoMode(!demoMode)}
+            className={`text-[10px] px-3 py-1.5 rounded-lg border font-bold transition-all ${
+              demoMode 
+                ? 'bg-amber-500/20 text-amber-400 border-amber-500/50 animate-pulse' 
+                : 'bg-white/5 text-gray-400 border-white/10 hover:bg-white/10'
+            }`}
+          >
+            {demoMode ? '🛑 STOP DEMO' : '🧪 TEST UX (DEMO)'}
+          </button>
         </div>
-      )}
+      </div>
 
       {/* Main Table */}
       <div className="overflow-x-auto rounded-xl border border-white/5 bg-gray-900/50 backdrop-blur-xl">
