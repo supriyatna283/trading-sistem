@@ -16,7 +16,11 @@ interface CoinData {
   flash?: 'up' | 'down' | null;
 }
 
-export default function MarketTable() {
+interface MarketTableProps {
+  onStatusChange?: (status: 'LIVE' | 'DEGRADED') => void;
+}
+
+export default function MarketTable({ onStatusChange }: MarketTableProps) {
   const [coins, setCoins] = useState<CoinData[]>([]);
   const [sparklines, setSparklines] = useState<Record<string, number[]>>({});
   const [loading, setLoading] = useState(true);
@@ -92,7 +96,14 @@ export default function MarketTable() {
     
     eventSource.onmessage = (event) => {
       try {
-        const updates = JSON.parse(event.data);
+        const payload = JSON.parse(event.data);
+        if (!payload) return;
+        
+        if (payload.status && onStatusChange) {
+          onStatusChange(payload.status);
+        }
+        
+        const updates = payload.updates;
         if (!updates || updates.length === 0) return;
         
         // Update coins state with flashes
@@ -159,7 +170,12 @@ export default function MarketTable() {
             <th className="px-6 py-4 font-medium text-right">Price</th>
             <th className="px-6 py-4 font-medium text-right">24h Change</th>
             <th className="px-6 py-4 font-medium text-right">24h Volume</th>
-            <th className="px-6 py-4 font-medium text-right">Market Cap</th>
+            <th className="px-6 py-4 font-medium text-right relative group/tooltip">
+              <span className="border-b border-dashed border-gray-500 cursor-help">Market Cap</span>
+              <div className="absolute bottom-full right-0 mb-2 w-64 bg-gray-900 border border-gray-700 text-gray-300 text-[10px] sm:text-xs p-2 rounded shadow-xl opacity-0 invisible group-hover/tooltip:opacity-100 group-hover/tooltip:visible transition-all z-10 pointer-events-none normal-case font-normal text-left">
+                Diukur dari rata-rata volume tertimbang lintas-bursa (CoinGecko). Harga dapat memiliki spread dengan ticker live Binance di kolom Price.
+              </div>
+            </th>
             <th className="px-6 py-4 font-medium text-center">Last 7 Days</th>
           </tr>
         </thead>

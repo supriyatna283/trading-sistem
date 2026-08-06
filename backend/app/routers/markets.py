@@ -28,37 +28,31 @@ async def stream_live_markets(request: Request, symbols: str = Query("", descrip
     symbol_list = [s.strip() for s in symbols.split(",") if s.strip()]
     
     async def event_generator():
-        last_sent_state = {}
-        
-        while True:
-            if await request.is_disconnected():
-                break
-                
-            updates = []
+        q = live_market_engine.subscribe()
+        try:
+            # Send initial status immediately so frontend knows we're alive or degraded
+            yield f"data: {json.dumps({'status': live_market_engine.status, 'updates': []})}\n\n"
             
-            # If specific symbols requested, only track those. Otherwise track all in memory (which is top 100 via snapshot typically).
-            target_symbols = symbol_list if symbol_list else list(_in_memory_ticker_state.keys())
-            
-            for sym in target_symbols:
-                current_state = _in_memory_ticker_state.get(sym)
-                if not current_state:
-                    continue
+            while True:
+                if await request.is_disconnected():
+                    break
                     
-                # Check if state changed since last sent
-                last_state = last_sent_state.get(sym)
-                if not last_state or last_state["timestamp"] < current_state["timestamp"]:
-                    updates.append({
-                        "symbol": sym,
-                        "price": current_state["price"],
-                        "change_24h": current_state["change_24h"],
-                        "volume_24h": current_state["volume_24h"]
-                    })
-                    last_sent_state[sym] = current_state.copy()
-            
-            if updates:
-                yield f"data: {json.dumps(updates)}\n\n"
-                
-            await asyncio.sleep(1.0) # Throttle updates to 1 per second to save browser CPU
+                try:
+                    # Wait for next payload from queue, timeout every 2 seconds to check disconnect
+                    payload = await asyncio.wait_for(q.get(), timeout=2.0)
+                    if payload is None: # Sentinel for shutdown
+                        break
+                        
+                    # Filter updates if specific symbols requested
+                    if symbol_list:
+                        payload["updates"] = [u for u in payload.get("updates", []) if u["symbol"] in symbol_list]
+                        
+                    yield f"data: {json.dumps(payload)}\n\n"
+                    
+                except asyncio.TimeoutError:
+                    continue
+        finally:
+            live_market_engine.unsubscribe(q)
 
     headers = {
         "Content-Type": "text/event-stream",

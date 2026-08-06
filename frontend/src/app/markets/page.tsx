@@ -9,6 +9,8 @@ export const metadata = {
 };
 
 export default function MarketsPage() {
+  const [status, setStatus] = React.useState<'LIVE' | 'DEGRADED'>('LIVE');
+
   return (
     <MainLayout>
       <div className="max-w-7xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-12">
@@ -28,13 +30,23 @@ export default function MarketsPage() {
           </div>
           
           <div className="flex items-center gap-2">
-            <div className="flex items-center gap-2 text-xs font-medium text-emerald-400 bg-emerald-500/10 px-3 py-1.5 rounded-full border border-emerald-500/20">
-              <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-              </span>
-              Live WebSocket Connected
-            </div>
+            {status === 'LIVE' ? (
+              <div className="flex items-center gap-2 text-xs font-medium text-emerald-400 bg-emerald-500/10 px-3 py-1.5 rounded-full border border-emerald-500/20">
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                </span>
+                Live WebSocket Connected
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 text-xs font-medium text-amber-400 bg-amber-500/10 px-3 py-1.5 rounded-full border border-amber-500/20">
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+                </span>
+                Degraded (REST Polling)
+              </div>
+            )}
           </div>
         </div>
 
@@ -43,7 +55,7 @@ export default function MarketsPage() {
           {/* Subtle background glow */}
           <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-3xl h-64 bg-emerald-500/10 blur-[120px] rounded-full pointer-events-none" />
           
-          <MarketTable />
+          <MarketTable onStatusChange={setStatus} />
         </div>
       </div>
     </MainLayout>

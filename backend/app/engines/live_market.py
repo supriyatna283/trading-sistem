@@ -24,6 +24,11 @@ class LiveMarketEngine:
         self._running = False
         self._ws_task = None
         self._rest_client = httpx.AsyncClient(timeout=10.0)
+        
+        # Pub/Sub system
+        self._subscribers: List[asyncio.Queue] = []
+        self.status = "DEGRADED"  # Start degraded until WS connects
+        self._last_rest_poll = 0
 
     async def start(self):
         """Starts the WebSocket background task."""
@@ -39,21 +44,55 @@ class LiveMarketEngine:
         if self._ws_task:
             self._ws_task.cancel()
         await self._rest_client.aclose()
+        
+        # Cleanup subscribers
+        for q in self._subscribers:
+            await q.put(None) # Sentinel to stop generators
+        self._subscribers.clear()
         logger.info("[LiveMarket] WebSocket manager stopped.")
 
+    def subscribe(self) -> asyncio.Queue:
+        """Returns a queue to listen for price updates."""
+        q = asyncio.Queue()
+        self._subscribers.append(q)
+        return q
+
+    def unsubscribe(self, q: asyncio.Queue):
+        """Removes a subscriber queue."""
+        if q in self._subscribers:
+            self._subscribers.remove(q)
+
+    def _broadcast(self, updates: List[Dict]):
+        """Sends updates to all subscribers."""
+        if not updates and self.status == "LIVE":
+            return
+            
+        # We also want to broadcast status changes, so we package the payload
+        payload = {
+            "status": self.status,
+            "updates": updates
+        }
+        
+        for q in self._subscribers:
+            # Non-blocking put, if queue is full (client too slow), we could drop, but asyncio.Queue is unbounded by default
+            q.put_nowait(payload)
+
     async def _ws_manager(self):
-        """Maintains persistent WS connection to Binance."""
+        """Maintains persistent WS connection to Binance, with fallback REST polling."""
         retry_delay = 1
+        
         while self._running:
             try:
-                # We only care about tracking coins that are in our Top 100 list
-                # This list will be refreshed occasionally by Coingecko, but for WS filtering,
-                # we don't strictly need to filter here, we can just save everything to dict.
-                # Python dict update is O(1) and very fast even for 2000 symbols.
+                # If we are reconnecting, we are in degraded mode
+                if self.status != "DEGRADED":
+                    self.status = "DEGRADED"
+                    self._broadcast([]) # Broadcast status change
                 
                 async with websockets.connect(BINANCE_WS_URL, ping_interval=20, ping_timeout=20) as ws:
                     logger.info(f"[LiveMarket] Connected to {BINANCE_WS_URL}")
                     retry_delay = 1  # reset delay on successful connection
+                    self.status = "LIVE"
+                    self._broadcast([]) # Broadcast status change
                     
                     async for message in ws:
                         if not self._running:
@@ -61,27 +100,53 @@ class LiveMarketEngine:
                         
                         data = json.loads(message)
                         now = datetime.utcnow().timestamp()
+                        updates = []
                         
-                        # !ticker@arr returns a list of dictionaries
                         for item in data:
                             symbol = item.get("s")
-                            # Only store USDT pairs to save some memory
                             if not symbol.endswith("USDT"):
                                 continue
                                 
-                            _in_memory_ticker_state[symbol] = {
-                                "symbol": symbol,
-                                "price": float(item.get("c", 0)),
-                                "change_24h": float(item.get("P", 0)), # price change percent
-                                "volume_24h": float(item.get("q", 0)), # quote volume
-                                "timestamp": now
-                            }
+                            new_price = float(item.get("c", 0))
+                            
+                            # Determine if price actually changed to prevent broadcast spam
+                            old_state = _in_memory_ticker_state.get(symbol)
+                            if not old_state or old_state["price"] != new_price:
+                                _in_memory_ticker_state[symbol] = {
+                                    "symbol": symbol,
+                                    "price": new_price,
+                                    "change_24h": float(item.get("P", 0)),
+                                    "volume_24h": float(item.get("q", 0)),
+                                    "timestamp": now
+                                }
+                                updates.append(_in_memory_ticker_state[symbol])
+                        
+                        # Throttle broadcasts slightly to prevent overwhelming the event loop if there are huge bursts
+                        if updates:
+                            self._broadcast(updates)
                             
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"[LiveMarket] WS Disconnected: {e}. Reconnecting in {retry_delay}s...")
-                await asyncio.sleep(retry_delay)
+                
+                # Degraded Mode REST Polling
+                # If we wait a long time, poll REST to keep data fresh
+                self.status = "DEGRADED"
+                self._broadcast([])
+                
+                waited = 0
+                while waited < retry_delay and self._running:
+                    now = datetime.utcnow().timestamp()
+                    # Poll every 30 seconds while degraded
+                    if now - self._last_rest_poll > 30:
+                        logger.info("[LiveMarket] WS is down. Polling REST API...")
+                        await self._fetch_rest_snapshot()
+                        self._last_rest_poll = now
+                        
+                    await asyncio.sleep(1)
+                    waited += 1
+                    
                 retry_delay = min(retry_delay * 2, 60) # cap backoff to 60s
 
     async def get_snapshot(self, limit: int = 100) -> List[Dict]:
@@ -108,7 +173,6 @@ class LiveMarketEngine:
                     "volume_24h": ticker["volume_24h"],
                 })
             else:
-                # If ticker still missing (e.g., binance doesn't have it), just output empty fields
                 result.append({
                     **coin,
                     "price": 0.0,
@@ -126,6 +190,7 @@ class LiveMarketEngine:
             data = resp.json()
             now = datetime.utcnow().timestamp()
             
+            updates = []
             for item in data:
                 symbol = item.get("symbol")
                 if not symbol.endswith("USDT"):
@@ -137,6 +202,9 @@ class LiveMarketEngine:
                     "volume_24h": float(item.get("quoteVolume", 0)),
                     "timestamp": now
                 }
+                updates.append(_in_memory_ticker_state[symbol])
+                
+            self._broadcast(updates)
             logger.info("[LiveMarket] REST fallback snapshot successful.")
         except Exception as e:
             logger.error(f"[LiveMarket] REST fallback failed: {e}")

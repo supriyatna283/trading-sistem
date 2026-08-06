@@ -8,16 +8,45 @@ logger = logging.getLogger(__name__)
 
 # Cache state
 _mcap_cache: Optional[Dict] = None
+_valid_symbols_cache: Optional[set] = None
+_valid_symbols_ts: float = 0
 _CACHE_TTL_SECONDS = 3600  # 1 hour
 
 class CoinGeckoEngine:
     def __init__(self):
         self.client = httpx.AsyncClient(timeout=15.0)
 
+    async def _get_valid_binance_symbols(self) -> set:
+        """Fetch and cache all valid USDT symbols from Binance."""
+        global _valid_symbols_cache, _valid_symbols_ts
+        now = datetime.now(timezone.utc).timestamp()
+        
+        if _valid_symbols_cache and now - _valid_symbols_ts < 86400: # 24h cache
+            return _valid_symbols_cache
+            
+        try:
+            resp = await self.client.get("https://api.binance.com/api/v3/exchangeInfo")
+            resp.raise_for_status()
+            data = resp.json()
+            
+            valid_symbols = set()
+            for s in data.get("symbols", []):
+                if s.get("status") == "TRADING" and s.get("quoteAsset") == "USDT":
+                    valid_symbols.add(s.get("symbol"))
+                    
+            _valid_symbols_cache = valid_symbols
+            _valid_symbols_ts = now
+            logger.info(f"[CoinGecko] Cached {len(valid_symbols)} valid Binance USDT symbols.")
+            return valid_symbols
+        except Exception as e:
+            logger.error(f"[CoinGecko] Failed to fetch exchangeInfo: {e}")
+            return _valid_symbols_cache or set()
+
     async def get_top_usdt_pairs(self, limit: int = 150) -> List[Dict]:
         """
         Fetches the top coins by market cap from CoinGecko and formats them as Binance USDT pairs.
-        Returns a list of dicts: {"symbol": "BTCUSDT", "market_cap_rank": 1, "market_cap": 1000000000, "name": "Bitcoin"}
+        Validates against Binance exchangeInfo so dead/non-listed coins are excluded.
+        Returns a list of dicts.
         """
         global _mcap_cache
         now = datetime.now(timezone.utc).timestamp()
@@ -41,6 +70,8 @@ class CoinGeckoEngine:
             resp.raise_for_status()
             data = resp.json()
 
+            valid_binance_symbols = await self._get_valid_binance_symbols()
+
             results = []
             # Common stablecoins or tokens that don't have a direct USDT pair or are redundant
             ignore_symbols = {"usdt", "usdc", "fdusd", "tusd", "busd", "dai", "wbtc", "steth"}
@@ -51,6 +82,10 @@ class CoinGeckoEngine:
                     continue
 
                 binance_symbol = f"{cg_symbol.upper()}USDT"
+                
+                # Validation: Skip if not a valid trading pair on Binance
+                if valid_binance_symbols and binance_symbol not in valid_binance_symbols:
+                    continue
                 
                 results.append({
                     "symbol": binance_symbol,
