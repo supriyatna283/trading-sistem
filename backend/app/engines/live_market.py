@@ -184,6 +184,25 @@ class LiveMarketEngine:
             await self._fetch_rest_snapshot()
             
         result = []
+        
+        # RESILIENCE: If CoinGecko is rate limited (429) on a cold boot, top_coins will be empty.
+        # In this case, we fallback to ranking coins by Binance 24h Volume instead of Market Cap!
+        if not top_coins:
+            logger.warning("[LiveMarket] CoinGecko returned empty data (likely 429). Falling back to Binance volume ranking.")
+            sorted_tickers = sorted(_in_memory_ticker_state.values(), key=lambda x: x.get("volume_24h", 0), reverse=True)
+            for i, ticker in enumerate(sorted_tickers[:limit]):
+                result.append({
+                    "symbol": ticker["symbol"],
+                    "market_cap_rank": i + 1,
+                    "market_cap": 0,
+                    "name": ticker["symbol"].replace("USDT", ""),
+                    "image": "",
+                    "price": ticker["price"],
+                    "change_24h": ticker["change_24h"],
+                    "volume_24h": ticker["volume_24h"],
+                })
+            return result
+            
         for coin in top_coins:
             symbol = coin["symbol"]
             ticker = _in_memory_ticker_state.get(symbol)
