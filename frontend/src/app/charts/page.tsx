@@ -221,7 +221,7 @@ function ChartsPageContent() {
         {/* ── Top Bar ── */}
         <div id="charts-topbar">
           {/* Left: Symbol + TF selector */}
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <button
               onClick={() => { setShowSearch(v => !v); setTimeout(() => searchRef.current?.focus(), 50); }}
               id="symbol-pill"
@@ -256,7 +256,7 @@ function ChartsPageContent() {
           </div>
 
           {/* Right: actions */}
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
             <button onClick={handleRefresh} className="icon-btn" title="Refresh">↺</button>
             <button
               onClick={() => setShowWatchlist(v => !v)}
@@ -806,6 +806,7 @@ function ChartsPageContent() {
           }
           @media (max-width: 768px) {
             #charts-page-root { height: auto; overflow: visible; }
+            #charts-topbar { flex-direction: column; align-items: flex-start; gap: 14px; }
             #charts-body { flex-direction: column; }
             #watchlist-sidebar, #setups-sidebar { width: 100%; height: auto; max-height: 200px; }
             #chart-area { min-height: 400px; }
