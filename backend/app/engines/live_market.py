@@ -109,16 +109,37 @@ class LiveMarketEngine:
                                 continue
                                 
                             new_price = float(item.get("c", 0))
+                            new_volume = float(item.get("q", 0))
                             
                             # Determine if price actually changed to prevent broadcast spam
                             old_state = _in_memory_ticker_state.get(symbol)
-                            if not old_state or old_state["price"] != new_price:
+                            
+                            # Spike detection
+                            spike_type = None
+                            spike_vol = 0
+                            
+                            if old_state:
+                                vol_diff = new_volume - old_state["volume_24h"]
+                                # If volume spiked by more than 50k USDT in this 1-second tick
+                                if vol_diff > 50000 and vol_diff < new_volume: # avoid cold boot spikes
+                                    spike_vol = vol_diff
+                                    if new_price > old_state["price"]:
+                                        spike_type = "buy"
+                                    elif new_price < old_state["price"]:
+                                        spike_type = "sell"
+                                    else:
+                                        spike_type = "neutral"
+                            
+                            if not old_state or old_state["price"] != new_price or spike_type:
                                 _in_memory_ticker_state[symbol] = {
                                     "symbol": symbol,
                                     "price": new_price,
                                     "change_24h": float(item.get("P", 0)),
-                                    "volume_24h": float(item.get("q", 0)),
-                                    "timestamp": now
+                                    "volume_24h": new_volume,
+                                    "timestamp": now,
+                                    # Temporary fields for SSE payload, will be cleared by frontend
+                                    "spike": spike_type,
+                                    "spike_vol": spike_vol
                                 }
                                 updates.append(_in_memory_ticker_state[symbol])
                         

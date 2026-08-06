@@ -17,6 +17,8 @@ interface CoinData {
   change_24h: number;
   volume_24h: number;
   flash?: 'up' | 'down' | null;
+  spike?: 'buy' | 'sell' | 'neutral' | null;
+  spike_vol?: number;
 }
 
 interface MarketTableProps {
@@ -123,18 +125,27 @@ export default function MarketTable({ onStatusChange }: MarketTableProps) {
               if (update.price > oldCoin.price) flash = 'up';
               else if (update.price < oldCoin.price) flash = 'down';
               
-              if (flash) {
-                newCoins[idx] = { ...oldCoin, ...update, flash };
+              const spike = update.spike || null;
+              const spike_vol = update.spike_vol || 0;
+              
+              if (flash || spike) {
+                newCoins[idx] = { ...oldCoin, ...update, flash, spike, spike_vol };
                 changed = true;
               }
             }
           }
           
           if (changed) {
-            // Clear flashes after 500ms
+            // Clear price flashes after 500ms
             setTimeout(() => {
               setCoins(current => current.map(c => c.flash ? { ...c, flash: null } : c));
             }, 500);
+            
+            // Clear volume spikes after 2500ms to allow users to read it
+            setTimeout(() => {
+              setCoins(current => current.map(c => c.spike ? { ...c, spike: null, spike_vol: 0 } : c));
+            }, 2500);
+            
             return newCoins;
           }
           
@@ -191,8 +202,16 @@ export default function MarketTable({ onStatusChange }: MarketTableProps) {
                 ? 'bg-rose-500/20 text-rose-400 transition-none' 
                 : 'transition-colors duration-500';
 
+            const isSpikeBuy = coin.spike === 'buy';
+            const isSpikeSell = coin.spike === 'sell';
+            const rowSpikeClass = isSpikeBuy 
+                ? 'bg-emerald-900/40 ring-1 ring-emerald-500/50 shadow-[0_0_15px_rgba(16,185,129,0.2)] z-10 relative transition-none'
+                : isSpikeSell 
+                  ? 'bg-rose-900/40 ring-1 ring-rose-500/50 shadow-[0_0_15px_rgba(244,63,94,0.2)] z-10 relative transition-none'
+                  : 'transition-all duration-1000';
+
             return (
-              <tr key={coin.symbol} className="hover:bg-white/[0.02] transition-colors group">
+              <tr key={coin.symbol} className={`hover:bg-white/[0.02] group ${rowSpikeClass}`}>
                 <td className="px-6 py-4 text-gray-500 font-medium">
                   {coin.market_cap_rank || '-'}
                 </td>
@@ -206,8 +225,16 @@ export default function MarketTable({ onStatusChange }: MarketTableProps) {
                       </div>
                     )}
                     <div>
-                      <div className="font-bold text-white group-hover:text-emerald-400 transition-colors">
+                      <div className="font-bold text-white group-hover:text-emerald-400 transition-colors flex items-center gap-2">
                         {coin.name}
+                        {coin.spike && (
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded flex items-center gap-1 ${
+                            isSpikeBuy ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 
+                            'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                          }`}>
+                            {isSpikeBuy ? '🐋 Whale Buy' : '🩸 Whale Sell'} ${formatCompact(coin.spike_vol || 0)}
+                          </span>
+                        )}
                       </div>
                       <div className="text-xs text-gray-500 font-medium">
                         {coin.symbol.replace('USDT', '')}
