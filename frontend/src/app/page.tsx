@@ -202,12 +202,12 @@ export default function DashboardPage() {
       </div>
 
       {/* ── Stats ── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 xl:gap-8 mb-10">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 xl:gap-8 mb-16">
         {statCards.map(s => <StatCard key={s.label} {...s} />)}
       </div>
 
       {/* ── Active Setups ── */}
-      <div className="glass-card" style={{ padding: 24, marginBottom: 28, border: "1px solid var(--border)" }}>
+      <div className="glass-card" style={{ padding: 24, marginTop: 16, marginBottom: 28, border: "1px solid var(--border)" }}>
         <div className="flex-between" style={{ marginBottom: 20 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <div style={{ width: 4, height: 20, borderRadius: 99, background: "linear-gradient(180deg,#f59e0b,#3b82f6)" }} />
