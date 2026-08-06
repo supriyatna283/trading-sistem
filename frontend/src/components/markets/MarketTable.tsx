@@ -21,6 +21,15 @@ interface CoinData {
   spike_vol?: number;
 }
 
+interface SpikeEvent {
+  id: string;
+  symbol: string;
+  name: string;
+  type: 'buy' | 'sell' | 'neutral';
+  volume: number;
+  timestamp: Date;
+}
+
 interface MarketTableProps {
   onStatusChange?: (status: 'LIVE' | 'DEGRADED') => void;
 }
@@ -28,6 +37,7 @@ interface MarketTableProps {
 export default function MarketTable({ onStatusChange }: MarketTableProps) {
   const [coins, setCoins] = useState<CoinData[]>([]);
   const [sparklines, setSparklines] = useState<Record<string, number[]>>({});
+  const [recentSpikes, setRecentSpikes] = useState<SpikeEvent[]>([]);
   const [loading, setLoading] = useState(true);
   
   // Use a ref to hold the current coins array for the SSE event listener
@@ -115,6 +125,7 @@ export default function MarketTable({ onStatusChange }: MarketTableProps) {
         setCoins(prevCoins => {
           const newCoins = [...prevCoins];
           let changed = false;
+          let newSpikes: SpikeEvent[] = [];
           
           for (const update of updates) {
             const idx = newCoins.findIndex(c => c.symbol === update.symbol);
@@ -128,11 +139,29 @@ export default function MarketTable({ onStatusChange }: MarketTableProps) {
               const spike = update.spike || null;
               const spike_vol = update.spike_vol || 0;
               
+              if (spike) {
+                newSpikes.push({
+                  id: `${update.symbol}-${Date.now()}`,
+                  symbol: update.symbol,
+                  name: oldCoin.name,
+                  type: spike,
+                  volume: spike_vol,
+                  timestamp: new Date()
+                });
+              }
+              
               if (flash || spike) {
                 newCoins[idx] = { ...oldCoin, ...update, flash, spike, spike_vol };
                 changed = true;
               }
             }
+          }
+          
+          if (newSpikes.length > 0) {
+            setRecentSpikes(prev => {
+              const combined = [...newSpikes, ...prev];
+              return combined.slice(0, 5); // keep top 5
+            });
           }
           
           if (changed) {
@@ -141,10 +170,10 @@ export default function MarketTable({ onStatusChange }: MarketTableProps) {
               setCoins(current => current.map(c => c.flash ? { ...c, flash: null } : c));
             }, 500);
             
-            // Clear volume spikes after 2500ms to allow users to read it
+            // Clear volume spikes after 15000ms (15 seconds) to allow users to read it
             setTimeout(() => {
               setCoins(current => current.map(c => c.spike ? { ...c, spike: null, spike_vol: 0 } : c));
-            }, 2500);
+            }, 15000);
             
             return newCoins;
           }
@@ -175,8 +204,32 @@ export default function MarketTable({ onStatusChange }: MarketTableProps) {
   }
 
   return (
-    <div className="overflow-x-auto rounded-xl border border-white/5 bg-gray-900/50 backdrop-blur-xl">
-      <table className="w-full text-sm text-left">
+    <div className="space-y-4">
+      {/* Whale Radar */}
+      {recentSpikes.length > 0 && (
+        <div className="flex items-center gap-3 overflow-x-auto p-3 rounded-xl border border-white/5 bg-gray-900/50 backdrop-blur-xl no-scrollbar">
+          <div className="flex-shrink-0 flex items-center gap-2 text-white font-bold text-sm bg-black/40 px-3 py-1.5 rounded-lg">
+            <span className="animate-pulse">📡</span> Whale Radar:
+          </div>
+          {recentSpikes.map(spike => (
+            <div key={spike.id} className={`flex-shrink-0 flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium animate-in fade-in slide-in-from-right-4 duration-500 ${
+              spike.type === 'buy' ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' : 
+              spike.type === 'sell' ? 'bg-rose-500/20 text-rose-400 border-rose-500/30' :
+              'bg-gray-500/20 text-gray-400 border-gray-500/30'
+            }`}>
+              <span>{spike.name}</span>
+              <span className="font-mono">${formatCompact(spike.volume)}</span>
+              <span className="opacity-50 text-[10px]">
+                {spike.timestamp.toLocaleTimeString()}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Main Table */}
+      <div className="overflow-x-auto rounded-xl border border-white/5 bg-gray-900/50 backdrop-blur-xl">
+        <table className="w-full text-sm text-left">
         <thead className="text-xs text-gray-400 uppercase bg-black/40 border-b border-white/5">
           <tr>
             <th className="px-6 py-4 font-medium">#</th>
@@ -205,10 +258,10 @@ export default function MarketTable({ onStatusChange }: MarketTableProps) {
             const isSpikeBuy = coin.spike === 'buy';
             const isSpikeSell = coin.spike === 'sell';
             const rowSpikeClass = isSpikeBuy 
-                ? 'bg-emerald-900/40 ring-1 ring-emerald-500/50 shadow-[0_0_15px_rgba(16,185,129,0.2)] z-10 relative transition-none'
+                ? 'bg-emerald-900/30 ring-1 ring-emerald-500/40 shadow-[inset_0_0_20px_rgba(16,185,129,0.2)] z-10 relative transition-none'
                 : isSpikeSell 
-                  ? 'bg-rose-900/40 ring-1 ring-rose-500/50 shadow-[0_0_15px_rgba(244,63,94,0.2)] z-10 relative transition-none'
-                  : 'transition-all duration-1000';
+                  ? 'bg-rose-900/30 ring-1 ring-rose-500/40 shadow-[inset_0_0_20px_rgba(244,63,94,0.2)] z-10 relative transition-none'
+                  : 'transition-all duration-[3000ms]'; // Slow fade out
 
             return (
               <tr key={coin.symbol} className={`hover:bg-white/[0.02] group ${rowSpikeClass}`}>
@@ -275,6 +328,7 @@ export default function MarketTable({ onStatusChange }: MarketTableProps) {
           })}
         </tbody>
       </table>
+    </div>
     </div>
   );
 }
