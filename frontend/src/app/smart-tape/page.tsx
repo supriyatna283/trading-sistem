@@ -161,7 +161,7 @@ export default function SmartTapePage() {
 
     // ── 2. OKX trades ──
     const connectOKX = () => {
-      const ws = new WebSocket("wss://wsaws.okx.com:8443/ws/v5/public");
+      const ws = new WebSocket("wss://ws.okx.com:8443/ws/v5/public");
       wsList.push(ws);
       ws.onopen = () => {
         const args = SCAN_SYMBOLS.map(s => ({
@@ -266,7 +266,7 @@ export default function SmartTapePage() {
     setScanning(true);
     try {
       const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/v1/orderflow/whales?limit=100`
+        `${process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/v1/orderflow/whales/scan/multi?limit=100`
       );
       const data = await res.json();
       setScanData(data);
