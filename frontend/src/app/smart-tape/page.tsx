@@ -18,7 +18,8 @@ const SCAN_SYMBOLS = ["BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT","ADAUSDT
 
 type Trade = {
   exchange?: string; symbol: string; price: number; qty: number; notional: number;
-  side: "BUY" | "SELL"; tier: string; timestamp: number; trade_id?: string; agg_trade_id?: number;
+  side: "BUY" | "SELL" | "LIQUIDATION"; tier: string; timestamp: number; trade_id?: string; agg_trade_id?: number;
+  isNew?: boolean;
 };
 
 function formatLocalTime(ts: number): string {
@@ -38,19 +39,91 @@ export default function SmartTapePage() {
   const [scanData, setScanData] = useState<any>(null);
   const [scanning, setScanning] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
+  const [audioEnabled, setAudioEnabled] = useState(false);
+  const [isRedAlert, setIsRedAlert] = useState(false);
+  
   const wsRef = useRef<WebSocket | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const alertTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const pausedRef = useRef(false);
 
   pausedRef.current = paused;
 
+  const initAudio = () => {
+    if (!audioCtxRef.current) {
+      audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
+    setAudioEnabled(true);
+  };
+
+  const playPing = useCallback((notional: number) => {
+    if (!audioEnabled || !audioCtxRef.current) return;
+    const ctx = audioCtxRef.current;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    
+    // Higher pitch for bigger whales
+    osc.frequency.setValueAtTime(notional > 500000 ? 800 : 600, ctx.currentTime);
+    osc.type = "sine";
+    
+    gain.gain.setValueAtTime(0.1, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
+    
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.5);
+  }, [audioEnabled]);
+
+  const playKlaxon = useCallback(() => {
+    if (!audioEnabled || !audioCtxRef.current) return;
+    const ctx = audioCtxRef.current;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    
+    osc.frequency.setValueAtTime(150, ctx.currentTime);
+    osc.frequency.linearRampToValueAtTime(100, ctx.currentTime + 0.8);
+    osc.type = "sawtooth";
+    
+    gain.gain.setValueAtTime(0.2, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.8);
+    
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.8);
+  }, [audioEnabled]);
+
   const addTrades = useCallback((newTrades: Trade[]) => {
     if (pausedRef.current) return;
+
+    newTrades.forEach(t => {
+      t.isNew = true;
+      if (t.side === "LIQUIDATION") {
+        playKlaxon();
+        setIsRedAlert(true);
+        if (alertTimeoutRef.current) clearTimeout(alertTimeoutRef.current);
+        alertTimeoutRef.current = setTimeout(() => setIsRedAlert(false), 2000);
+      } else if (t.notional >= 100000) {
+        playPing(t.notional);
+      }
+    });
+
     setTrades(prev => {
       const combined = [...newTrades, ...prev].slice(0, 500);
       return combined;
     });
-  }, []);
+
+    // Remove isNew flag after animation finishes
+    setTimeout(() => {
+      setTrades(prev => prev.map(t => {
+        const match = newTrades.find(nt => (nt.trade_id === t.trade_id) || (nt.agg_trade_id === t.agg_trade_id));
+        if (match) return { ...t, isNew: false };
+        return t;
+      }));
+    }, 2000);
+  }, [playPing, playKlaxon]);
 
   // ── WebSocket — Multi-Exchange Direct (Binance + OKX + Bybit) ──
   useEffect(() => {
@@ -144,9 +217,35 @@ export default function SmartTapePage() {
       ws.onerror = () => ws.close();
     };
 
+    // ── 4. BINANCE forceOrder (Liquidations) ──
+    const connectLiquidations = () => {
+      const ws = new WebSocket("wss://fstream.binance.com/ws/!forceOrder@arr");
+      wsList.push(ws);
+      ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data);
+          const items = Array.isArray(msg) ? msg : [msg];
+          for (const item of items) {
+            if (item.e !== "forceOrder") continue;
+            const d = item.o;
+            const price = parseFloat(d.p);
+            const qty = parseFloat(d.q);
+            const notional = price * qty;
+            if (notional < threshold) continue;
+            addTrades([{ exchange: "Liq 🔥", symbol: d.s, price, qty, notional,
+              side: "LIQUIDATION", tier: classifyTier(notional),
+              timestamp: d.T, trade_id: "liq-" + d.T + Math.random() }]);
+          }
+        } catch {}
+      };
+      ws.onclose = () => { const t = setTimeout(connectLiquidations, 3000); timers.push(t); };
+      ws.onerror = () => ws.close();
+    };
+
     connectBinance();
     connectOKX();
     connectBybit();
+    connectLiquidations();
 
     return () => {
       wsList.forEach(ws => ws.close());
@@ -195,16 +294,36 @@ export default function SmartTapePage() {
 
   return (
     <MainLayout>
+      {isRedAlert && <div className="red-alert-hud" />}
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         {/* Header */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
-            <h1 style={{ fontSize: "1.5rem", fontWeight: 800, margin: 0, letterSpacing: "-0.03em" }}>🎬 Smart Tape</h1>
+            <h1 style={{ fontSize: "1.5rem", fontWeight: 800, margin: 0, letterSpacing: "-0.03em" }}>🎬 Smart Tape V2</h1>
             <p style={{ color: "var(--text-secondary)", fontSize: "0.82rem", margin: "4px 0 0" }}>
-              Multi-exchange whale detector — Binance + OKX + Bybit
+              Whale Radar & Liquidations Heatmap
             </p>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {!audioEnabled && (
+              <button onClick={initAudio} style={{
+                padding: "5px 12px", borderRadius: 20, fontSize: "0.72rem", fontWeight: 700, cursor: "pointer",
+                background: "rgba(59,130,246,0.15)", border: "1px solid rgba(59,130,246,0.4)", color: "var(--accent-blue)",
+              }}>
+                🔊 Enable Audio
+              </button>
+            )}
+            <button onClick={() => {
+               playKlaxon();
+               setIsRedAlert(true);
+               if (alertTimeoutRef.current) clearTimeout(alertTimeoutRef.current);
+               alertTimeoutRef.current = setTimeout(() => setIsRedAlert(false), 2000);
+            }} style={{
+               padding: "5px 12px", borderRadius: 20, fontSize: "0.72rem", fontWeight: 700, cursor: "pointer",
+               background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.4)", color: "#ef4444",
+            }}>
+              🚨 Test Alert
+            </button>
             <span style={{
               padding: "5px 12px", borderRadius: 20, fontSize: "0.72rem", fontWeight: 700,
               background: connected ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)",
@@ -363,23 +482,26 @@ export default function SmartTapePage() {
                 const cfg = TIER_CONFIG[t.tier] || TIER_CONFIG.RETAIL;
                 return (
                   <div
-                    key={`${t.agg_trade_id}-${i}`}
+                    key={`${t.agg_trade_id || t.trade_id}-${i}`}
+                    className={`${t.isNew && t.notional >= 100000 ? (t.side === "LIQUIDATION" ? "liquidation-row" : "whale-row") : ""}`}
                     style={{
                       display: "grid", gridTemplateColumns: "80px 1fr 90px 110px 110px 90px 70px",
                       padding: "7px 16px", borderBottom: "1px solid rgba(255,255,255,0.02)",
-                      background: i === 0 ? (t.side === "BUY" ? "rgba(34,197,94,0.04)" : "rgba(239,68,68,0.04)") : "transparent",
+                      background: i === 0 ? (t.side === "LIQUIDATION" ? "rgba(239,68,68,0.08)" : t.side === "BUY" ? "rgba(34,197,94,0.04)" : "rgba(239,68,68,0.04)") : "transparent",
                       fontSize: "0.78rem", alignItems: "center",
-                      borderLeft: `3px solid ${t.side === "BUY" ? "rgba(34,197,94,0.4)" : "rgba(239,68,68,0.4)"}`,
+                      borderLeft: `3px solid ${t.side === "LIQUIDATION" ? "#ef4444" : t.side === "BUY" ? "rgba(34,197,94,0.4)" : "rgba(239,68,68,0.4)"}`,
                       transition: "background 0.5s",
                     }}
                   >
                     <span style={{ color: "var(--text-muted)", fontFamily: "'JetBrains Mono', monospace", fontSize: "0.7rem" }}>{formatLocalTime(t.timestamp)}</span>
                     <span style={{ fontSize: "0.68rem", fontWeight: 700, padding: "2px 6px", borderRadius: 4,
-                      background: t.exchange === "bybit" ? "rgba(247,147,26,0.12)" : t.exchange === "okx" ? "rgba(0,180,255,0.12)" : "rgba(130,255,180,0.12)",
-                      color: t.exchange === "bybit" ? "#f7931a" : t.exchange === "okx" ? "#00b4ff" : "#82ffb4",
+                      background: t.exchange === "bybit" ? "rgba(247,147,26,0.12)" : t.exchange === "okx" ? "rgba(0,180,255,0.12)" : t.exchange === "Liq 🔥" ? "rgba(239,68,68,0.15)" : "rgba(130,255,180,0.12)",
+                      color: t.exchange === "bybit" ? "#f7931a" : t.exchange === "okx" ? "#00b4ff" : t.exchange === "Liq 🔥" ? "#ef4444" : "#82ffb4",
                     }}>{(t.exchange || "unknown").toUpperCase()}</span>
                     <span style={{ fontWeight: 700 }}>{t.symbol.replace("USDT", "")}<span style={{ color: "var(--text-muted)", fontWeight: 400 }}>/USDT</span></span>
-                    <span style={{ fontWeight: 700, color: t.side === "BUY" ? "#22c55e" : "#ef4444" }}>{t.side === "BUY" ? "▲ BUY" : "▼ SELL"}</span>
+                    <span style={{ fontWeight: 700, color: t.side === "LIQUIDATION" ? "#ef4444" : t.side === "BUY" ? "#22c55e" : "#ef4444" }}>
+                      {t.side === "LIQUIDATION" ? "💥 REKT" : t.side === "BUY" ? "▲ BUY" : "▼ SELL"}
+                    </span>
                     <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700 }}>
                       ${t.notional >= 1e6 ? `${(t.notional/1e6).toFixed(2)}M` : t.notional >= 1000 ? `${(t.notional/1000).toFixed(1)}K` : t.notional.toFixed(0)}
                     </span>
