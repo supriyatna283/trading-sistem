@@ -209,7 +209,46 @@ def _calculate_setup_levels(ctx: dict, smc_obj=None, entry_df=None) -> dict:
             tp3 = price - risk * 4.5
 
     risk = abs(price - sl) if sl else 0
+    
+    # BUG FIX #1: SL must be at minimum 0.5×ATR away from entry.
+    # If SL ends up too close (calculated from a tiny OB), force it to 1.0×ATR.
+    atr_val = ctx.get("atr") or ctx.get("indicators", {}).get("atr") or 0
+    if risk > 0 and atr_val > 0 and risk < atr_val * 0.5:
+        logger.warning(f"[SetupLevels] SL too tight ({risk:.2f} < 0.5×ATR={atr_val*0.5:.2f}). Forcing SL to 1.0×ATR.")
+        if direction == "BUY":
+            sl = price - atr_val * 1.0
+        else:
+            sl = price + atr_val * 1.0
+        # Recalculate TP proportionally using R:R=2
+        risk = abs(price - sl)
+        if direction == "BUY":
+            tp1 = price + risk * 2.0
+            tp2 = price + risk * 3.0
+            tp3 = price + risk * 4.5
+        else:
+            tp1 = price - risk * 2.0
+            tp2 = price - risk * 3.0
+            tp3 = price - risk * 4.5
+
     rr1 = round(abs(tp1 - price) / risk, 2) if risk > 0 else None
+    
+    # BUG FIX #1b: Cap R:R at 5.0 — anything above is almost certainly a calculation error
+    if rr1 and rr1 > 5.0:
+        logger.warning(f"[SetupLevels] R:R={rr1} exceeds cap of 5.0. This suggests a bad SL. Capping at 2.0 and recalculating.")
+        if direction == "BUY":
+            sl = price - atr_val * 1.0
+        else:
+            sl = price + atr_val * 1.0
+        risk = abs(price - sl)
+        if direction == "BUY":
+            tp1 = price + risk * 2.0
+            tp2 = price + risk * 3.0
+            tp3 = price + risk * 4.5
+        else:
+            tp1 = price - risk * 2.0
+            tp2 = price - risk * 3.0
+            tp3 = price - risk * 4.5
+        rr1 = round(abs(tp1 - price) / risk, 2) if risk > 0 else None
 
     return {
         "entry_low": _safe_float(entry_low),
@@ -219,7 +258,7 @@ def _calculate_setup_levels(ctx: dict, smc_obj=None, entry_df=None) -> dict:
         "tp2": _safe_float(tp2),
         "tp3": _safe_float(tp3),
         "risk_reward": rr1,
-        "atr": _safe_float(atr),
+        "atr": _safe_float(atr_val),
         "risk_per_unit": _safe_float(risk),
     }
 
@@ -285,18 +324,44 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
     ls_ratio = ls_ratio_raw if isinstance(ls_ratio_raw, dict) else {}
     funding_data = funding_list[0] if funding_list else {}
 
-    # Sprint 1: Inject cached whales + kline pressure
+    # BUG FIX #2: Build order_flow with dynamic interpretation based on whale count
+    # kline pressure (buy_pct/sell_pct/delta_usd) comes from _fetch_kline_pressure.
+    # If it fails (HF IP block on Futures), fall back to whale count as the signal.
     pressure = order_flow_raw if isinstance(order_flow_raw, dict) else {}
     cached_whales = order_flow_engine.get_cached_whales(symbol.upper())
     whale_buys = [w for w in cached_whales if w.get("tier") == "WHALE" and w.get("side") == "BUY"]
     whale_sells = [w for w in cached_whales if w.get("tier") == "WHALE" and w.get("side") == "SELL"]
+    
+    # Determine if kline pressure data is valid (not default 50/50)
+    buy_pct_raw = pressure.get("buy_pct", 50.0)
+    sell_pct_raw = pressure.get("sell_pct", 50.0)
+    delta_usd_raw = pressure.get("delta_usd", 0.0)
+    kline_valid = (buy_pct_raw != 50.0 or sell_pct_raw != 50.0 or delta_usd_raw != 0.0)
+    
+    # Build dynamic interpretation
+    total_whale = len(whale_buys) + len(whale_sells)
+    if total_whale > 0:
+        if len(whale_buys) > len(whale_sells) * 1.5:
+            whale_interp = f"🐋 Whale dominan BELI ({len(whale_buys)}B vs {len(whale_sells)}S) — potensi akumulasi institusi"
+        elif len(whale_sells) > len(whale_buys) * 1.5:
+            whale_interp = f"🐋 Whale dominan JUAL ({len(whale_sells)}S vs {len(whale_buys)}B) — distribusi institusi aktif"
+        else:
+            whale_interp = f"🐋 Whale seimbang ({len(whale_buys)}B / {len(whale_sells)}S) — tidak ada sinyal arah kuat"
+    else:
+        whale_interp = "Tidak ada whale activity tercatat dalam cache"
+    
+    if kline_valid:
+        kline_interp = f"Kline pressure: Buy {buy_pct_raw}% / Sell {sell_pct_raw}% | {whale_interp}"
+    else:
+        kline_interp = f"Kline pressure N/A (Futures API diblok dari server) | {whale_interp}"
+
     order_flow = {
-        "buy_pct": round(pressure.get("buy_pct", 50.0), 1),
-        "sell_pct": round(pressure.get("sell_pct", 50.0), 1),
-        "delta_usd": round(pressure.get("delta_usd", 0.0), 0),
+        "buy_pct": round(buy_pct_raw, 1),
+        "sell_pct": round(sell_pct_raw, 1),
+        "delta_usd": round(delta_usd_raw, 0),
         "whale_buy_count": len(whale_buys),
         "whale_sell_count": len(whale_sells),
-        "interpretation": "Data volume 1H akurat",
+        "interpretation": kline_interp,
     }
 
     # Build full_sentiment dict (same structure as SentimentEngine.get_full_sentiment())
@@ -433,8 +498,9 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
     try:
         vp = calculate_volume_profile(entry_df)
         poc = _safe_float(vp.get("poc")) if vp else None
-        va_high = _safe_float(vp.get("va_high")) if vp else None
-        va_low = _safe_float(vp.get("va_low")) if vp else None
+        # BUG FIX #3: volume profile returns 'vah'/'val', not 'va_high'/'va_low'
+        va_high = _safe_float(vp.get("vah")) if vp else None
+        va_low = _safe_float(vp.get("val")) if vp else None
     except Exception:
         poc = va_high = va_low = None
 
