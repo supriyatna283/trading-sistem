@@ -79,3 +79,13 @@ async def alerts_ws(websocket: WebSocket):
             await websocket.receive_text()
     except WebSocketDisconnect:
         ws_manager.disconnect(websocket, "alerts")
+
+@router.websocket("/ws/whale")
+async def whale_ws(websocket: WebSocket):
+    """WebSocket endpoint for real-time whale transactions."""
+    await ws_manager.connect(websocket, "whale")
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket, "whale")

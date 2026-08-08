@@ -57,8 +57,11 @@ Hyperliquid is **not** integrated yet.
 cd backend
 pip install -r requirements.txt
 cp .env.example .env
-# Edit .env — set DB_*, optionally API_KEY and Telegram
+# For Whale Tracker: Public RPCs are already set by default in config.py.
+# Ensure ETH_RPC_URL, BSC_RPC_URL, and SOL_RPC_URL are valid in config.py or .env.
 python -m uvicorn app.main:app --reload --port 8000
+# In a new terminal, run DB migration for whale tracker:
+# python -m app.migrate_whale
 ```
 
 ### Frontend
@@ -108,6 +111,7 @@ In **development**, if `API_KEY` is empty, writes are allowed (with a startup wa
 | Journal          | Win rate, profit factor, drawdown          |
 | Alerts           | Telegram, email (SMTP), web                |
 | Auto-trading     | Optional Binance Futures (dry-run default) |
+| Whale Tracker    | Real-time EVM & Solana whale detection     |
 
 
 ## Environment variables

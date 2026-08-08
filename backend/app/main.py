@@ -34,8 +34,10 @@ from app.routers import (
     order_flow,
     ai_analysis,
     markets,
+    whale_api,
 )
 from app.services.auto_scheduler import run_scheduler, stop_scheduler, scheduler_state
+from app.services.whale_detector import start_whale_pollers, stop_whale_pollers
 from app.security import require_api_key
 from fastapi import Depends
 
@@ -99,6 +101,10 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"❌ Live Market WS failed to start: {e}")
 
+    # 6. Start Whale Tracker RPC Pollers
+    start_whale_pollers(get_db)
+    logger.info("✅ Whale Tracker RPC Pollers started")
+
     yield
 
     # Shutdown
@@ -128,6 +134,9 @@ async def lifespan(app: FastAPI):
         await live_market_engine.stop()
     except Exception:
         pass
+
+    stop_whale_pollers()
+    logger.info("🛑 Whale pollers stopped")
 
 
 settings = get_settings()
@@ -177,6 +186,7 @@ app.include_router(portfolio.router)
 app.include_router(order_flow.router)
 app.include_router(ai_analysis.router)
 app.include_router(markets.router)
+app.include_router(whale_api.router)
 
 
 @app.get("/")

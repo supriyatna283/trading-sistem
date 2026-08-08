@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     # Protect trading, deletes, and config writes (set in production)
     API_KEY: str = "supersecretkey123"
 
+    # Whale Tracker Public RPCs
+    ETH_RPC_URL: str = "https://eth.llamarpc.com"
+    BSC_RPC_URL: str = "https://bsc-dataseed.binance.org"
+    SOL_RPC_URL: str = "https://api.mainnet-beta.solana.com"
+
     @property
     def DATABASE_URL(self) -> str:
         """Build MySQL/TiDB connection URL with automatic SSL for TiDB Cloud."""
