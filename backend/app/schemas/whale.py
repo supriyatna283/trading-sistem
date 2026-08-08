@@ -13,7 +13,7 @@ class WalletResponse(BaseModel):
     confidence: Optional[float] = None
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class WhaleTransactionResponse(BaseModel):
     id: int
@@ -31,6 +31,6 @@ class WhaleTransactionResponse(BaseModel):
     raw_source: str
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
