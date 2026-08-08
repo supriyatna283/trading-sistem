@@ -6,6 +6,10 @@ import httpx
 
 # We will use web3 for EVM. Note: Make sure web3 is in requirements.txt
 from web3 import AsyncWeb3, AsyncHTTPProvider
+try:
+    from web3.middleware import ExtraDataToPOAMiddleware
+except ImportError:
+    from web3.middleware import async_geth_poa_middleware as ExtraDataToPOAMiddleware
 
 from app.models.whale import WhaleTransaction, WhaleThreshold, WhaleDirection
 from app.schemas.whale import WhaleTransactionResponse
@@ -37,6 +41,7 @@ async def poll_evm_chain(chain_id: str, rpc_url: str, db_factory: Callable[[], S
     
     # Initialize async web3 provider
     w3 = AsyncWeb3(AsyncHTTPProvider(rpc_url))
+    w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
     
     last_block = None
     

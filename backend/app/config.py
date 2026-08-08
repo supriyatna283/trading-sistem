@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     API_KEY: str = "supersecretkey123"
 
     # Whale Tracker Public RPCs
-    ETH_RPC_URL: str = "https://eth.llamarpc.com"
+    ETH_RPC_URL: str = "https://rpc.ankr.com/eth"
     BSC_RPC_URL: str = "https://bsc-dataseed.binance.org"
     SOL_RPC_URL: str = "https://api.mainnet-beta.solana.com"
 
