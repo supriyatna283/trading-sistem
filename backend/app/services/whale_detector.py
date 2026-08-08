@@ -267,6 +267,18 @@ def start_whale_pollers(db_factory: Callable[[], Session]):
     """Start all chain pollers as asyncio background tasks."""
     global _polling_tasks
     
+    # Seed chains if they don't exist
+    try:
+        db = next(db_factory())
+        from app.models.whale import Chain
+        for c_id, c_name in [("ethereum", "Ethereum"), ("bsc", "Binance Smart Chain"), ("solana", "Solana")]:
+            if not db.query(Chain).filter_by(id=c_id).first():
+                db.add(Chain(id=c_id, name=c_name))
+        db.commit()
+        db.close()
+    except Exception as e:
+        logger.error(f"Failed to seed chains: {e}")
+
     if settings.ETH_RPC_URL:
         _polling_tasks.append(asyncio.create_task(poll_evm_chain("ethereum", settings.ETH_RPC_URL, db_factory, get_eth_price)))
         
