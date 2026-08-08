@@ -100,3 +100,92 @@ def get_top_wallets(
             "total_volume": r.total_volume or 0
         } for r in results
     ]
+
+@router.get("/dashboard")
+def get_whale_dashboard(db: Session = Depends(get_db)):
+    from sqlalchemy import case, String, Float
+    from sqlalchemy.sql import cast
+    now = datetime.utcnow()
+    since = now - timedelta(hours=24)
+
+    # 1. Total Volume & Mega Moves
+    summary = db.query(
+        func.sum(WhaleTransaction.usd_value).label('total_volume'),
+        func.sum(case((WhaleTransaction.usd_value >= 5000000, 1), else_=0)).label('mega_moves_count')
+    ).filter(WhaleTransaction.block_time >= since).first()
+
+    total_volume = float(summary.total_volume or 0)
+    mega_moves = int(summary.mega_moves_count or 0)
+
+    # 2. Top Asset
+    top_asset_row = db.query(
+        WhaleTransaction.token_symbol,
+        func.sum(WhaleTransaction.usd_value).label('vol')
+    ).filter(WhaleTransaction.block_time >= since).group_by(WhaleTransaction.token_symbol).order_by(desc('vol')).first()
+    
+    top_asset = top_asset_row.token_symbol if top_asset_row else "ETH"
+
+    # 3. Chain Breakdown
+    chain_rows = db.query(
+        WhaleTransaction.chain_id,
+        func.sum(WhaleTransaction.usd_value).label('vol')
+    ).filter(WhaleTransaction.block_time >= since).group_by(WhaleTransaction.chain_id).all()
+    
+    chain_breakdown = {}
+    for r in chain_rows:
+        pct = (float(r.vol) / total_volume * 100) if total_volume > 0 else 0
+        chain_breakdown[r.chain_id] = {
+            "volume": float(r.vol),
+            "percentage": round(pct, 1)
+        }
+
+    # 4. Net Flow Bias (Outflow - Inflow)
+    flow_row = db.query(
+        func.sum(case((WhaleTransaction.direction == 'outflow', WhaleTransaction.usd_value), else_=0)).label('outflow'),
+        func.sum(case((WhaleTransaction.direction == 'inflow', WhaleTransaction.usd_value), else_=0)).label('inflow')
+    ).filter(WhaleTransaction.block_time >= since).first()
+    
+    outflow = float(flow_row.outflow or 0)
+    inflow = float(flow_row.inflow or 0)
+    net_flow = outflow - inflow
+    
+    if net_flow > 0:
+        bias_label = "BULLISH FLOW"
+        bias_desc = f"+${net_flow/1000000:.1f}M Net Accumulation (Outflow from CEX)"
+    else:
+        bias_label = "BEARISH FLOW"
+        bias_desc = f"-${abs(net_flow)/1000000:.1f}M Net Dump (Inflow to CEX)"
+
+    # 5. Top Entities (Wallets)
+    entity_rows = db.query(
+        Wallet.label,
+        Wallet.entity_type,
+        func.sum(WhaleTransaction.usd_value).label('vol')
+    ).join(
+        WhaleTransaction,
+        (Wallet.id == WhaleTransaction.from_wallet_id) | (Wallet.id == WhaleTransaction.to_wallet_id)
+    ).filter(
+        WhaleTransaction.block_time >= since,
+        Wallet.label.isnot(None)
+    ).group_by(Wallet.id).order_by(desc('vol')).limit(6).all()
+    
+    top_entities = []
+    for r in entity_rows:
+        top_entities.append({
+            "name": r.label,
+            "type": r.entity_type,
+            "volume": float(r.vol)
+        })
+
+    return {
+        "total_volume_24h": total_volume,
+        "mega_moves_count": mega_moves,
+        "top_asset": top_asset,
+        "chain_breakdown": chain_breakdown,
+        "net_flow_bias": {
+            "label": bias_label,
+            "description": bias_desc,
+            "net_flow_usd": net_flow
+        },
+        "top_entities": top_entities
+    }

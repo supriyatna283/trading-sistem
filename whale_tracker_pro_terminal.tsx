@@ -1,6 +1,4 @@
-'use client';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { useWhaleSocket } from '@/lib/hooks/useWhaleSocket';
 import {
   Activity,
   ArrowUpRight,
@@ -209,9 +207,7 @@ const CHAINS = [
   { id: 'ARB', name: 'Arbitrum', color: 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30' }
 ];
 
-const ACTION_COLORS: any = {
-  INFLOW: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
-  OUTFLOW: 'bg-rose-500/10 text-rose-400 border-rose-500/20',
+const ACTION_COLORS = {
   TRANSFER: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
   BUY: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
   SELL: 'bg-rose-500/10 text-rose-400 border-rose-500/20',
@@ -220,7 +216,7 @@ const ACTION_COLORS: any = {
   BRIDGE: 'bg-blue-500/10 text-blue-400 border-blue-500/20'
 };
 
-const ENTITY_BADGES: any = {
+const ENTITY_BADGES = {
   exchange: { bg: 'bg-amber-500/15 text-amber-300 border-amber-500/30', label: 'Exchange' },
   institution: { bg: 'bg-blue-500/15 text-blue-300 border-blue-500/30', label: 'Fund/Inst' },
   market_maker: { bg: 'bg-purple-500/15 text-purple-300 border-purple-500/30', label: 'MM' },
@@ -229,13 +225,11 @@ const ENTITY_BADGES: any = {
   mev: { bg: 'bg-rose-500/15 text-rose-300 border-rose-500/30', label: 'MEV Bot' },
   bridge: { bg: 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30', label: 'Bridge' },
   protocol: { bg: 'bg-violet-500/15 text-violet-300 border-violet-500/30', label: 'Protocol' },
-  unknown: { bg: 'bg-slate-700/50 text-slate-400 border-slate-600/30', label: 'Wallet' },
-  unlabeled: { bg: 'bg-slate-700/50 text-slate-400 border-slate-600/30', label: 'Wallet' }
+  unknown: { bg: 'bg-slate-700/50 text-slate-400 border-slate-600/30', label: 'Wallet' }
 };
 
 export default function App() {
-  
-  
+  const [transactions, setTransactions] = useState(INITIAL_TRANSACTIONS);
   const [activeTab, setActiveTab] = useState('live'); // 'live' | 'visualizer' | 'trends' | 'entities'
   const [selectedChain, setSelectedChain] = useState('ALL');
   const [minUsdFilter, setMinUsdFilter] = useState(10000);
@@ -245,83 +239,91 @@ export default function App() {
   const [soundEnabled, setSoundEnabled] = useState(true);
   
   // Slideover & Modal states
-  const [inspectTx, setInspectTx] = useState<any | null>(null);
-  const [inspectWallet, setInspectWallet] = useState<any | null>(null);
-  const [expandedTxId, setExpandedTxId] = useState<string | null>(null);
-  const [copiedText, setCopiedText] = useState<string | null>(null);
-  const [dashboardData, setDashboardData] = useState<any>(null);
-
-  const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-  const WS_URL = API_BASE.replace(/^http/, 'ws') + '/ws/whale';
-  const API_URL = API_BASE + '/api';
-
-  const { transactions: backendTxs, isConnected, setInitialTransactions } = useWhaleSocket(WS_URL);
-  
-
-  
-  useEffect(() => {
-      const fetchLive = async () => {
-          try {
-              const params = new URLSearchParams({ limit: '50' });
-              if (selectedChain !== 'ALL') params.append('chain', selectedChain);
-              const res = await fetch(`${API_URL}/whale/live?${params.toString()}`);
-              if (res.ok) {
-                  const data = await res.json();
-                  setInitialTransactions(data);
-              }
-          } catch (error) {
-              console.error('Failed to fetch live whales', error);
-          }
-      };
-      const fetchDashboard = async () => {
-          try {
-              const res = await fetch(`${API_URL}/whale/dashboard`);
-              if (res.ok) {
-                  const data = await res.json();
-                  setDashboardData(data);
-              }
-          } catch (error) {
-              console.error('Failed to fetch dashboard', error);
-          }
-      };
-      fetchLive();
-      fetchDashboard();
-      
-      // Setup polling for dashboard every 30s
-      const interval = setInterval(fetchDashboard, 30000);
-      return () => clearInterval(interval);
-  }, [selectedChain, setInitialTransactions, API_URL]);
-
-
-  const transactions = useMemo(() => {
-    return backendTxs.map((tx: any) => ({
-        id: String(tx.id),
-        time: new Date(tx.block_time).toLocaleTimeString(),
-        timestamp: new Date(tx.block_time).getTime(),
-        chain: tx.chain_id.toUpperCase(),
-        action: tx.direction.toUpperCase(),
-        usdValue: tx.usd_value,
-        amount: tx.amount.toLocaleString(undefined, { maximumFractionDigits: 2 }),
-        token: tx.token_symbol,
-        from: tx.from_wallet?.address || 'Unknown',
-        fromEntity: tx.from_wallet?.label || 'Unknown Wallet',
-        fromEntityType: tx.from_wallet?.entity_type || 'unlabeled',
-        to: tx.to_wallet?.address || 'Unknown',
-        toEntity: tx.to_wallet?.label || 'Unknown Wallet',
-        toEntityType: tx.to_wallet?.entity_type || 'unlabeled',
-        hash: tx.tx_hash,
-        gasFee: 'N/A',
-        impact: tx.usd_value > 10000000 ? 'MEGA' : tx.usd_value > 2000000 ? 'HIGH' : 'MEDIUM',
-        isNew: false
-    }));
-  }, [backendTxs]);
-  
-  
+  const [inspectTx, setInspectTx] = useState(null);
+  const [inspectWallet, setInspectWallet] = useState(null);
+  const [expandedTxId, setExpandedTxId] = useState(null);
+  const [copiedText, setCopiedText] = useState(null);
 
   // Live stream generator interval simulation
-  
-  
-  
+  useEffect(() => {
+    if (!isLive) return;
+
+    const tokensByChain = {
+      ETH: ['ETH', 'WBTC', 'USDT', 'USDC', 'LINK', 'UNI', 'PEPE'],
+      SOL: ['SOL', 'JUP', 'PYTH', 'BONK', 'WIF', 'RAY'],
+      BSC: ['BNB', 'CAKE', 'USDT', 'FDUSD'],
+      BASE: ['ETH', 'AERO', 'BRETT', 'DEGEN'],
+      ARB: ['ETH', 'ARB', 'GMX', 'PENDLE']
+    };
+
+    const actions = ['TRANSFER', 'BUY', 'SELL', 'SWAP', 'BRIDGE', 'STAKE'];
+    const entityNames = [
+      { name: 'Binance Hot Wallet', type: 'exchange' },
+      { name: 'Wintermute Trading', type: 'market_maker' },
+      { name: 'Jump Crypto', type: 'institution' },
+      { name: 'Kraken Prime', type: 'exchange' },
+      { name: 'Uniswap V3 Router', type: 'dex' },
+      { name: 'Unknown Mega Whale 🐋', type: 'whale' },
+      { name: 'MEV Bot Arbitrage', type: 'mev' },
+      { name: 'BlackRock BUIDL Vault', type: 'institution' },
+      { name: 'Aave V3 Reserve', type: 'protocol' },
+      { name: 'Cumberland DRW', type: 'market_maker' }
+    ];
+
+    const interval = setInterval(() => {
+      const chainKeys = ['ETH', 'SOL', 'BSC', 'BASE', 'ARB'];
+      const randomChain = chainKeys[Math.floor(Math.random() * chainKeys.length)];
+      const chainTokens = tokensByChain[randomChain];
+      const randomToken = chainTokens[Math.floor(Math.random() * chainTokens.length)];
+      const randomAction = actions[Math.floor(Math.random() * actions.length)];
+      
+      const rawUsd = Math.floor(Math.random() * Math.random() * 80000000) + 15000;
+      const formattedUsd = rawUsd;
+      
+      let amountVal = 0;
+      if (randomToken === 'ETH') amountVal = (rawUsd / 3000).toFixed(1);
+      else if (randomToken === 'SOL') amountVal = (rawUsd / 140).toFixed(0);
+      else if (randomToken === 'WBTC') amountVal = (rawUsd / 62000).toFixed(2);
+      else if (randomToken === 'BNB') amountVal = (rawUsd / 580).toFixed(1);
+      else amountVal = (rawUsd / 1.2).toFixed(0);
+
+      const fromE = entityNames[Math.floor(Math.random() * entityNames.length)];
+      let toE = entityNames[Math.floor(Math.random() * entityNames.length)];
+      while (toE.name === fromE.name) {
+        toE = entityNames[Math.floor(Math.random() * entityNames.length)];
+      }
+
+      const newTx = {
+        id: `tx-${Date.now()}`,
+        time: 'Just now',
+        timestamp: Date.now(),
+        chain: randomChain,
+        action: randomAction,
+        usdValue: formattedUsd,
+        amount: Number(amountVal).toLocaleString(),
+        token: randomToken,
+        from: `0x${Math.random().toString(16).substr(2, 4)}...${Math.random().toString(16).substr(2, 4)}`,
+        fromEntity: fromE.name,
+        fromEntityType: fromE.type,
+        to: `0x${Math.random().toString(16).substr(2, 4)}...${Math.random().toString(16).substr(2, 4)}`,
+        toEntity: toE.name,
+        toEntityType: toE.type,
+        hash: `0x${Math.random().toString(16).substr(2, 32)}`,
+        gasFee: `$${(Math.random() * 15 + 0.1).toFixed(2)}`,
+        impact: formattedUsd > 10000000 ? 'MEGA' : formattedUsd > 2000000 ? 'HIGH' : 'MEDIUM',
+        isNew: true
+      };
+
+      setTransactions((prev) => [newTx, ...prev.slice(0, 49)]);
+
+      // Audio notification simulation chime
+      if (soundEnabled && formattedUsd > 5000000) {
+        // Subtle alert indication state
+      }
+    }, 3500);
+
+    return () => clearInterval(interval);
+  }, [isLive, soundEnabled]);
 
   const filteredTransactions = useMemo(() => {
     return transactions.filter((tx) => {
@@ -341,20 +343,38 @@ export default function App() {
   }, [transactions, selectedChain, minUsdFilter, actionFilter, searchQuery]);
 
   // Calculated Stats
-  const total24hVolume = dashboardData?.total_volume_24h || 0;
+  const total24hVolume = useMemo(() => {
+    return transactions.reduce((acc, curr) => acc + curr.usdValue, 0);
+  }, [transactions]);
 
-  const megaTransactionsCount = dashboardData?.mega_moves_count || 0;
+  const megaTransactionsCount = useMemo(() => {
+    return transactions.filter((t) => t.usdValue >= 5000000).length;
+  }, [transactions]);
 
-  const topToken = { token: dashboardData?.top_asset || 'N/A', volume: 0 };
+  const topToken = useMemo(() => {
+    const tokenCounts = {};
+    transactions.forEach((t) => {
+      tokenCounts[t.token] = (tokenCounts[t.token] || 0) + t.usdValue;
+    });
+    let maxT = 'ETH';
+    let maxV = 0;
+    Object.entries(tokenCounts).forEach(([tk, val]) => {
+      if (val > maxV) {
+        maxV = val;
+        maxT = tk;
+      }
+    });
+    return { token: maxT, volume: maxV };
+  }, [transactions]);
 
   // Helpers
-  const formatUsd = (val: number) => {
+  const formatUsd = (val) => {
     if (val >= 1000000) return `$${(val / 1000000).toFixed(2)}M`;
     if (val >= 1000) return `$${(val / 1000).toFixed(0)}k`;
     return `$${val.toLocaleString()}`;
   };
 
-  const copyToClipboard = (text: string) => {
+  const copyToClipboard = (text) => {
     navigator.clipboard.writeText(text);
     setCopiedText(text);
     setTimeout(() => setCopiedText(null), 2000);
@@ -938,23 +958,13 @@ export default function App() {
                 Chain Volume Breakdown
               </h3>
               <div className="space-y-3">
-                {
-                (dashboardData?.chain_breakdown ? Object.entries(dashboardData.chain_breakdown).map(([chain, data]: any) => {
-                    const colors: any = {
-                        ethereum: 'bg-indigo-500',
-                        solana: 'bg-purple-500',
-                        bsc: 'bg-amber-500',
-                        base: 'bg-blue-500',
-                        arbitrum: 'bg-cyan-500'
-                    };
-                    return {
-                        chain: chain.toUpperCase(),
-                        pct: data.percentage,
-                        val: formatUsd(data.volume),
-                        color: colors[chain] || 'bg-slate-500'
-                    }
-                }) : [])
-.map((c) => (
+                {[
+                  { chain: 'Ethereum (ETH)', pct: 58, val: '$824.2M', color: 'bg-indigo-500' },
+                  { chain: 'Solana (SOL)', pct: 24, val: '$341.5M', color: 'bg-purple-500' },
+                  { chain: 'BNB Chain (BSC)', pct: 10, val: '$142.1M', color: 'bg-amber-500' },
+                  { chain: 'Base (BASE)', pct: 5, val: '$71.0M', color: 'bg-blue-500' },
+                  { chain: 'Arbitrum (ARB)', pct: 3, val: '$42.6M', color: 'bg-cyan-500' }
+                ].map((c) => (
                   <div key={c.chain} className="space-y-1">
                     <div className="flex justify-between text-xs font-semibold text-slate-300">
                       <span>{c.chain}</span>
@@ -981,15 +991,15 @@ export default function App() {
                   <div>
                     <p className="text-xs text-slate-400">24h Net Exchange Inflow / Outflow</p>
                     <p className="text-lg font-bold text-emerald-400 mt-0.5">
-                      {dashboardData?.net_flow_bias?.description || 'Loading...'}
+                      +$184.5M Net Accumulation (Outflow from CEX)
                     </p>
                   </div>
                   <span className="p-2 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold text-xs">
-                    {dashboardData?.net_flow_bias?.label || 'LOADING'}
+                    BULLISH FLOW
                   </span>
                 </div>
                 <p className="text-xs text-slate-400 leading-relaxed">
-                  Real-time calculation of net exchange flows based on on-chain transactions exceeding minimum tracking thresholds.
+                  Mega whales are withdrawing ETH and SOL from Binance and Coinbase into non-custodial staking and cold wallets, indicating low immediate sell pressure.
                 </p>
               </div>
             </div>
@@ -1005,22 +1015,14 @@ export default function App() {
             </h3>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {
-              (dashboardData?.top_entities ? dashboardData.top_entities.map((e: any) => {
-                  let rating = "Active Entity";
-                  if (e.type === 'exchange') rating = "High Liquidity";
-                  else if (e.type === 'market_maker') rating = "High Frequency";
-                  else if (e.type === 'whale') rating = "High Impact";
-                  
-                  return {
-                      name: e.name,
-                      type: e.type.replace('_', ' ').toUpperCase(),
-                      volume: formatUsd(e.volume) + ' 24h',
-                      rating: rating,
-                      badge: e.type
-                  }
-              }) : [])
-.map((entity) => (
+              {[
+                { name: 'Binance Hot Wallet #1', type: 'Exchange', volume: '$420.5M 24h', rating: 'High Liquidity', badge: 'exchange' },
+                { name: 'Wintermute Trading', type: 'Market Maker', volume: '$180.2M 24h', rating: 'High Frequency', badge: 'market_maker' },
+                { name: 'Jump Crypto', type: 'Institution', volume: '$95.4M 24h', rating: 'Strategic Flow', badge: 'institution' },
+                { name: 'BlackRock BUIDL Vault', type: 'Institutional ETF', volume: '$210.0M 24h', rating: 'Long Term Custody', badge: 'institution' },
+                { name: 'MEV Bot Arbitrage', type: 'Algorithmic', volume: '$45.1M 24h', rating: 'MEV Sandwich', badge: 'mev' },
+                { name: 'Justin Sun Wallet', type: 'Whale Individual', volume: '$62.8M 24h', rating: 'High Impact', badge: 'whale' }
+              ].map((entity) => (
                 <div
                   key={entity.name}
                   onClick={() => setInspectWallet({ name: entity.name, type: entity.badge, address: '0x71C...88B1' })}
@@ -1189,7 +1191,3 @@ export default function App() {
     </div>
   );
 }
-
-
-
-
