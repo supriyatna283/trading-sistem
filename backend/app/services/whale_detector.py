@@ -67,7 +67,8 @@ async def poll_evm_chain(chain_id: str, rpc_url: str, db_factory: Callable[[], S
                 db = next(db_factory())
                 try:
                     threshold_entry = db.query(WhaleThreshold).filter_by(chain_id=chain_id).first()
-                    usd_threshold = threshold_entry.usd_threshold if threshold_entry else 10000.0
+                    base_threshold = threshold_entry.usd_threshold if threshold_entry else 10000.0
+                    usd_threshold = min(base_threshold, 10000.0) # Force max 10k for demo
                     token_price = await get_price()
                     min_amount = usd_threshold / token_price
 
@@ -113,7 +114,11 @@ async def poll_evm_chain(chain_id: str, rpc_url: str, db_factory: Callable[[], S
                             db.commit()
                             db.refresh(whale_tx)
                             
-                            response = WhaleTransactionResponse.from_orm(whale_tx)
+                            try:
+                                response = WhaleTransactionResponse.model_validate(whale_tx)
+                            except AttributeError:
+                                response = WhaleTransactionResponse.from_orm(whale_tx)
+                                
                             await ws_manager.broadcast("whale", response.json())
                             logger.info(f"[{chain_id.upper()} WHALE] {usd_value} USD")
                 finally:
@@ -174,7 +179,8 @@ async def poll_solana_chain(rpc_url: str, db_factory: Callable[[], Session]):
                                 db = next(db_factory())
                                 try:
                                     threshold_entry = db.query(WhaleThreshold).filter_by(chain_id=chain_id).first()
-                                    usd_threshold = threshold_entry.usd_threshold if threshold_entry else 10000.0
+                                    base_threshold = threshold_entry.usd_threshold if threshold_entry else 10000.0
+                                    usd_threshold = min(base_threshold, 10000.0) # Force max 10k for demo
                                     sol_price = await get_sol_price()
                                     
                                     for tx in block_data["transactions"]:
@@ -234,7 +240,11 @@ async def poll_solana_chain(rpc_url: str, db_factory: Callable[[], Session]):
                                             db.commit()
                                             db.refresh(whale_tx)
                                             
-                                            response = WhaleTransactionResponse.from_orm(whale_tx)
+                                            try:
+                                                response = WhaleTransactionResponse.model_validate(whale_tx)
+                                            except AttributeError:
+                                                response = WhaleTransactionResponse.from_orm(whale_tx)
+                                                
                                             await ws_manager.broadcast("whale", response.json())
                                             logger.info(f"[SOLANA WHALE] {usd_value} USD")
                                             
