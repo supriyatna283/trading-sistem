@@ -10,7 +10,7 @@ import { Activity, BarChart2, Radio } from 'lucide-react';
 export default function WhaleTrackerPage() {
     const [activeTab, setActiveTab] = useState<'live' | 'history'>('live');
     const [chainFilter, setChainFilter] = useState('all');
-    const [minUsdFilter, setMinUsdFilter] = useState('500000');
+    const [minUsdFilter, setMinUsdFilter] = useState('10000');
     const [entityFilter, setEntityFilter] = useState('all');
     
     const [historyData, setHistoryData] = useState<HistoryData[]>([]);

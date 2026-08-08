@@ -67,7 +67,7 @@ async def poll_evm_chain(chain_id: str, rpc_url: str, db_factory: Callable[[], S
                 db = next(db_factory())
                 try:
                     threshold_entry = db.query(WhaleThreshold).filter_by(chain_id=chain_id).first()
-                    usd_threshold = threshold_entry.usd_threshold if threshold_entry else 500000.0
+                    usd_threshold = threshold_entry.usd_threshold if threshold_entry else 10000.0
                     token_price = await get_price()
                     min_amount = usd_threshold / token_price
 
@@ -174,7 +174,7 @@ async def poll_solana_chain(rpc_url: str, db_factory: Callable[[], Session]):
                                 db = next(db_factory())
                                 try:
                                     threshold_entry = db.query(WhaleThreshold).filter_by(chain_id=chain_id).first()
-                                    usd_threshold = threshold_entry.usd_threshold if threshold_entry else 500000.0
+                                    usd_threshold = threshold_entry.usd_threshold if threshold_entry else 10000.0
                                     sol_price = await get_sol_price()
                                     
                                     for tx in block_data["transactions"]:

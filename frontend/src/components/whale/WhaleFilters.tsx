@@ -57,6 +57,7 @@ export default function WhaleFilters({
                         onChange={(e) => setMinUsdFilter(e.target.value)}
                         className="bg-gray-800/50 border border-gray-700 text-white rounded-lg px-3 py-1.5 focus:outline-none focus:border-[#5B8DEF] transition-colors appearance-none w-full md:w-auto cursor-pointer"
                     >
+                        <option value="10000">$10k+</option>
                         <option value="100000">$100k+</option>
                         <option value="500000">$500k+</option>
                         <option value="1000000">$1M+</option>
