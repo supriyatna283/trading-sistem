@@ -1019,8 +1019,7 @@ export default function App() {
                       rating: rating,
                       badge: e.type
                   }
-              }) : [])
-.map((entity) => (
+              }) : []).map((entity: any) => (
                 <div
                   key={entity.name}
                   onClick={() => setInspectWallet({ name: entity.name, type: entity.badge, address: '0x71C...88B1' })}
