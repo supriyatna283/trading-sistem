@@ -5,8 +5,7 @@ from sqlalchemy.orm import Session
 import httpx
 
 # We will use web3 for EVM. Note: Make sure web3 is in requirements.txt
-from web3 import AsyncWeb3
-from web3.providers.async_rpc import AsyncHTTPProvider
+from web3 import AsyncWeb3, AsyncHTTPProvider
 
 from app.models.whale import WhaleTransaction, WhaleThreshold, WhaleDirection
 from app.schemas.whale import WhaleTransactionResponse
