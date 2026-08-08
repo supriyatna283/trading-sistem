@@ -25,7 +25,12 @@ export interface WhaleTransaction {
     raw_source: string;
 }
 
-export function useWhaleSocket(url: string = 'ws://localhost:8000/ws/whale') {
+const getWsUrl = () => {
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    return apiUrl.replace(/^http/, 'ws') + '/ws/whale';
+};
+
+export function useWhaleSocket(url: string = getWsUrl()) {
     const [transactions, setTransactions] = useState<WhaleTransaction[]>([]);
     const [isConnected, setIsConnected] = useState(false);
     const wsRef = useRef<WebSocket | null>(null);
