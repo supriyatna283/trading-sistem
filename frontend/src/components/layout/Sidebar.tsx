@@ -21,7 +21,8 @@ import {
   Puzzle,
   ChevronLeft,
   ChevronRight,
-  Zap
+  Zap,
+  Waves
 } from "lucide-react";
 
 const NAV_GROUPS = [
@@ -34,6 +35,7 @@ const NAV_GROUPS = [
       { href: "/setups", label: "Setups", icon: Target, color: "#f43f5e" },
       { href: "/charts", label: "Charts", icon: LineChart, color: "#0ea5e9" },
       { href: "/market-intel", label: "Market Intel", icon: Brain, color: "#f59e0b" },
+      { href: "/whale-tracker", label: "Whale Tracker", icon: Waves, color: "#06b6d4" },
     ],
   },
   {
