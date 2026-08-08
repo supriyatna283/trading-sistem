@@ -33,34 +33,4 @@ class WhaleTransactionResponse(BaseModel):
     class Config:
         orm_mode = True
 
-# -- Webhook Payloads --
 
-# Moralis ERC20 Transfer Schema
-class MoralisErc20Transfer(BaseModel):
-    transactionHash: str
-    contract: str
-    fromAddress: str
-    toAddress: str
-    valueWithDecimals: str
-    tokenName: str
-    tokenSymbol: str
-    tokenDecimals: str
-
-class MoralisWebhookPayload(BaseModel):
-    confirmed: bool
-    chainId: str
-    streamId: str
-    erc20Transfers: List[MoralisErc20Transfer]
-    # Native transfers could also be added if monitoring ETH/BNB directly
-
-# Helius Enriched Transaction Schema (Simplified for whales)
-class HeliusTokenTransfer(BaseModel):
-    fromUserAccount: str
-    toUserAccount: str
-    mint: str
-    tokenAmount: float
-    tokenStandard: str
-
-class HeliusWebhookPayload(BaseModel):
-    # Helius sends an array of enriched transactions
-    __root__: List[Any] # Will parse manually in service due to complexity of structure
