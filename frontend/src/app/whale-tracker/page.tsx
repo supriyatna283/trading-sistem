@@ -16,9 +16,10 @@ export default function WhaleTrackerPage() {
     const [historyData, setHistoryData] = useState<HistoryData[]>([]);
     const [loadingHistory, setLoadingHistory] = useState(false);
 
-    // TODO: Determine API URL based on environment variables in real app
-    const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/ws/whale';
-    const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
+    // Determine API URL based on environment variables
+    const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    const WS_URL = API_BASE.replace(/^http/, 'ws') + '/ws/whale';
+    const API_URL = API_BASE + '/api';
 
     const { transactions, isConnected, setInitialTransactions } = useWhaleSocket(WS_URL);
 
