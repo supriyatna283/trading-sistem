@@ -48,10 +48,10 @@ async def poll_evm_chain(chain_id: str, rpc_url: str, db_factory: Callable[[], S
     while True:
         try:
             # Check connection
-            if not await w3.is_connected():
-                logger.error(f"{chain_id} RPC disconnected. Retrying in 10s...")
-                await asyncio.sleep(10)
-                continue
+            # if not await w3.is_connected():
+            #     logger.error(f"{chain_id} RPC disconnected. Retrying in 10s...")
+            #     await asyncio.sleep(10)
+            #     continue
 
             current_block = await w3.eth.block_number
             
