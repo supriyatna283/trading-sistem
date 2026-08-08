@@ -64,7 +64,7 @@ async def poll_evm_chain(chain_id: str, rpc_url: str, db_factory: Callable[[], S
                 block = await w3.eth.get_block(block_to_process, full_transactions=True)
                 
                 # Fetch threshold and price
-                db = db_factory()
+                db = next(db_factory())
                 try:
                     threshold_entry = db.query(WhaleThreshold).filter_by(chain_id=chain_id).first()
                     usd_threshold = threshold_entry.usd_threshold if threshold_entry else 500000.0
@@ -171,7 +171,7 @@ async def poll_solana_chain(rpc_url: str, db_factory: Callable[[], Session]):
                         if block_resp.status_code == 200:
                             block_data = block_resp.json().get("result")
                             if block_data and "transactions" in block_data:
-                                db = db_factory()
+                                db = next(db_factory())
                                 try:
                                     threshold_entry = db.query(WhaleThreshold).filter_by(chain_id=chain_id).first()
                                     usd_threshold = threshold_entry.usd_threshold if threshold_entry else 500000.0
