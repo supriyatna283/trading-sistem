@@ -119,7 +119,8 @@ async def poll_evm_chain(chain_id: str, rpc_url: str, db_factory: Callable[[], S
                             except AttributeError:
                                 response = WhaleTransactionResponse.from_orm(whale_tx)
                                 
-                            await ws_manager.broadcast("whale", response.json())
+                            import json
+                            await ws_manager.send_to_channel("whale", json.loads(response.json()))
                             logger.info(f"[{chain_id.upper()} WHALE] {usd_value} USD")
                 finally:
                     db.close()
@@ -245,7 +246,8 @@ async def poll_solana_chain(rpc_url: str, db_factory: Callable[[], Session]):
                                             except AttributeError:
                                                 response = WhaleTransactionResponse.from_orm(whale_tx)
                                                 
-                                            await ws_manager.broadcast("whale", response.json())
+                                            import json
+                                            await ws_manager.send_to_channel("whale", json.loads(response.json()))
                                             logger.info(f"[SOLANA WHALE] {usd_value} USD")
                                             
                                 finally:
