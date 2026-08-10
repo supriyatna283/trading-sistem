@@ -78,10 +78,12 @@ export default function App() {
         playMegaAlert();
       }
 
+      const blockTimeStr = tx.block_time.endsWith('Z') ? tx.block_time : `${tx.block_time}Z`;
+
       return {
         id: String(tx.id),
-        time: new Date(tx.block_time).toLocaleTimeString(),
-        timestamp: new Date(tx.block_time).getTime(),
+        time: new Date(blockTimeStr).toLocaleTimeString(),
+        timestamp: new Date(blockTimeStr).getTime(),
         chain: tx.chain_id.toUpperCase(),
         action: tx.direction.toUpperCase(),
         usdValue: tx.usd_value,

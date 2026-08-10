@@ -31,6 +31,24 @@ export const ENTITY_BADGES: any = {
   unlabeled: { bg: 'bg-slate-700/50 text-slate-400 border-slate-600/30', label: 'Wallet' }
 };
 
+export const getBlockExplorerUrl = (chain: string, hash: string) => {
+  const chainUpper = chain.toUpperCase();
+  switch (chainUpper) {
+    case 'ETH':
+      return `https://etherscan.io/tx/${hash}`;
+    case 'SOL':
+      return `https://solscan.io/tx/${hash}`;
+    case 'BSC':
+      return `https://bscscan.com/tx/${hash}`;
+    case 'BASE':
+      return `https://basescan.org/tx/${hash}`;
+    case 'ARB':
+      return `https://arbiscan.io/tx/${hash}`;
+    default:
+      return '#';
+  }
+};
+
 export const formatUsd = (val: number) => {
   if (val >= 1000000) return `$${(val / 1000000).toFixed(2)}M`;
   if (val >= 1000) return `$${(val / 1000).toFixed(0)}k`;

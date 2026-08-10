@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Zap, Copy, ExternalLink } from 'lucide-react';
-import { formatUsd } from './constants';
+import { formatUsd, getBlockExplorerUrl } from './constants';
 
 interface TransactionModalProps {
   inspectTx: any;
@@ -82,8 +82,9 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({ inspectTx, s
               <Copy className="w-4 h-4" /> {copied ? 'Copied!' : 'Copy Hash'}
             </button>
             <a
-              href="#"
-              onClick={(e) => e.preventDefault()}
+              href={getBlockExplorerUrl(inspectTx.chain, inspectTx.hash)}
+              target="_blank"
+              rel="noopener noreferrer"
               className="flex-1 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-cyan-500/20 transition-all"
             >
               <ExternalLink className="w-4 h-4" /> Block Explorer
