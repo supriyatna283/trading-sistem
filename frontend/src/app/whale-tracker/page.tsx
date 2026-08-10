@@ -34,7 +34,27 @@ export default function App() {
   const WS_URL = API_BASE.replace(/^http/, 'ws') + '/ws/whale';
   const API_URL = API_BASE + '/api';
 
-  const { transactions: backendTxs, isConnected, setInitialTransactions } = useWhaleSocket(WS_URL);
+  const { transactions: backendTxs, isConnected, setInitialTransactions, appendHistoricalTransactions } = useWhaleSocket(WS_URL);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [currentOffset, setCurrentOffset] = useState(50);
+
+  const loadMoreHistory = async () => {
+    setIsLoadingMore(true);
+    try {
+      const params = new URLSearchParams({ limit: '50', offset: String(currentOffset) });
+      if (selectedChain !== 'ALL') params.append('chain', selectedChain);
+      const res = await fetch(`${API_URL}/whale/live?${params.toString()}`);
+      if (res.ok) {
+        const data = await res.json();
+        appendHistoricalTransactions(data);
+        setCurrentOffset(prev => prev + 50);
+      }
+    } catch (error) {
+      console.error('Failed to load more history', error);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  };
 
   useEffect(() => {
     const fetchLive = async () => {
@@ -160,6 +180,8 @@ export default function App() {
             transactions={filteredTransactions} 
             setInspectTx={setInspectTx}
             setInspectWallet={setInspectWallet}
+            loadMoreHistory={loadMoreHistory}
+            isLoadingMore={isLoadingMore}
           />
         )}
 

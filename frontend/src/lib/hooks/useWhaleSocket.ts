@@ -50,8 +50,8 @@ export function useWhaleSocket(url: string = getWsUrl()) {
             try {
                 const tx: WhaleTransaction = JSON.parse(event.data);
                 tx.isNew = true; // Flag for UI highlight
-                // Prepend the new transaction and keep up to 100 items
-                setTransactions((prev) => [tx, ...prev].slice(0, 100));
+                // Prepend the new transaction and keep up to 500 items
+                setTransactions((prev) => [tx, ...prev].slice(0, 500));
             } catch (error) {
                 console.error('Failed to parse whale tx data:', error);
             }
@@ -83,5 +83,16 @@ export function useWhaleSocket(url: string = getWsUrl()) {
         setTransactions(initialData);
     }, []);
 
-    return { transactions, isConnected, setInitialTransactions };
+    // Used to append historical data fetched via "Load More"
+    const appendHistoricalTransactions = useCallback((historyData: WhaleTransaction[]) => {
+        setTransactions((prev) => {
+            // Filter out duplicates just in case
+            const existingIds = new Set(prev.map(t => t.id));
+            const newTxs = historyData.filter(t => !existingIds.has(t.id));
+            // Append older data to the end
+            return [...prev, ...newTxs].slice(0, 500);
+        });
+    }, []);
+
+    return { transactions, isConnected, setInitialTransactions, appendHistoricalTransactions };
 }

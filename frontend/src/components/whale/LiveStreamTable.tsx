@@ -7,12 +7,16 @@ interface LiveStreamTableProps {
   transactions: any[];
   setInspectTx: (tx: any) => void;
   setInspectWallet: (wallet: any) => void;
+  loadMoreHistory?: () => void;
+  isLoadingMore?: boolean;
 }
 
 export const LiveStreamTable: React.FC<LiveStreamTableProps> = React.memo(({
   transactions,
   setInspectTx,
-  setInspectWallet
+  setInspectWallet,
+  loadMoreHistory,
+  isLoadingMore
 }) => {
   const [expandedTxId, setExpandedTxId] = useState<string | null>(null);
   const [copiedText, setCopiedText] = useState<string | null>(null);
@@ -258,6 +262,25 @@ export const LiveStreamTable: React.FC<LiveStreamTableProps> = React.memo(({
             </AnimatePresence>
           </tbody>
         </table>
+        
+        {loadMoreHistory && transactions.length > 0 && (
+          <div className="p-4 border-t border-slate-700/50 flex justify-center">
+            <button 
+              onClick={loadMoreHistory}
+              disabled={isLoadingMore}
+              className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-sm font-semibold transition-colors disabled:opacity-50 flex items-center gap-2"
+            >
+              {isLoadingMore ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  Loading...
+                </>
+              ) : (
+                'Load More History'
+              )}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

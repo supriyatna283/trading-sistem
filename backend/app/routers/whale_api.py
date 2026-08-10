@@ -19,7 +19,8 @@ router = APIRouter(prefix="/api/whale", tags=["Whale Tracker"])
 @router.get("/live", response_model=List[WhaleTransactionResponse])
 def get_live_whales(
     chain: Optional[str] = None,
-    limit: int = Query(50, le=100),
+    limit: int = Query(50, le=500),
+    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db)
 ):
     """Get the latest whale transactions for the live feed."""
@@ -30,7 +31,7 @@ def get_live_whales(
     if chain and chain.lower() != "all":
         query = query.filter(WhaleTransaction.chain_id == chain.lower())
         
-    transactions = query.order_by(desc(WhaleTransaction.block_time)).limit(limit).all()
+    transactions = query.order_by(desc(WhaleTransaction.block_time)).offset(offset).limit(limit).all()
     return transactions
 
 @router.get("/history")

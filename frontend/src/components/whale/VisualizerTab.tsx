@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Network } from 'lucide-react';
+import dagre from 'dagre';
 import {
   ReactFlow,
   useNodesState,
@@ -31,14 +32,7 @@ export const VisualizerTab: React.FC<VisualizerTabProps> = ({ transactions, setI
         const res = await fetch(`${API_BASE}/api/whale/graph?chain=${chainFilter}&limit=100`);
         const data = await res.json();
         
-        // Layout algorithm (simple random or circle for now)
-        const radius = 250;
-        const centerX = 400;
-        const centerY = 300;
-        
-        const mappedNodes = data.nodes.map((node: any, idx: number) => {
-          const angle = (idx / data.nodes.length) * 2 * Math.PI;
-          
+        const mappedNodes = data.nodes.map((node: any) => {
           let bgColor = '#1e293b';
           let borderColor = '#334155';
           if (node.data.type === 'exchange') {
@@ -51,10 +45,7 @@ export const VisualizerTab: React.FC<VisualizerTabProps> = ({ transactions, setI
 
           return {
             id: node.id,
-            position: { 
-              x: centerX + radius * Math.cos(angle) * (Math.random() * 0.5 + 0.8), 
-              y: centerY + radius * Math.sin(angle) * (Math.random() * 0.5 + 0.8) 
-            },
+            position: { x: 0, y: 0 }, // Will be set by dagre
             data: { 
               label: (
                 <div className="flex flex-col items-center">
@@ -100,7 +91,31 @@ export const VisualizerTab: React.FC<VisualizerTabProps> = ({ transactions, setI
           },
         }));
 
-        setNodes(mappedNodes);
+        // Apply Dagre layout
+        const dagreGraph = new dagre.graphlib.Graph();
+        dagreGraph.setDefaultEdgeLabel(() => ({}));
+        dagreGraph.setGraph({ rankdir: 'LR', ranksep: 200, nodesep: 50 }); // Left-to-Right layout
+
+        mappedNodes.forEach((node: any) => {
+          dagreGraph.setNode(node.id, { width: 150, height: 60 });
+        });
+
+        mappedEdges.forEach((edge: any) => {
+          dagreGraph.setEdge(edge.source, edge.target);
+        });
+
+        dagre.layout(dagreGraph);
+
+        const layoutedNodes = mappedNodes.map((node: any) => {
+          const nodeWithPosition = dagreGraph.node(node.id);
+          node.position = {
+            x: nodeWithPosition.x - 75, // subtract half width
+            y: nodeWithPosition.y - 30, // subtract half height
+          };
+          return node;
+        });
+
+        setNodes(layoutedNodes);
         setEdges(mappedEdges);
       } catch (err) {
         console.error(err);
