@@ -375,8 +375,14 @@ async def process_transaction(db, chain_id, tx_hash, from_addr, to_addr, symbol,
         raw_source="public_rpc"
     )
     db.add(whale_tx)
-    db.commit()
-    db.refresh(whale_tx)
+    try:
+        db.commit()
+        db.refresh(whale_tx)
+    except Exception as e:
+        db.rollback()
+        # Usually IntegrityError due to unique constraint on (chain_id, tx_hash).
+        # We can safely ignore duplicate transfers from the same transaction hash for now.
+        return
     
     try:
         response = WhaleTransactionResponse.model_validate(whale_tx)
