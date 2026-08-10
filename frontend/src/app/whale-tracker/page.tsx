@@ -12,6 +12,7 @@ import { TrendsTab } from '@/components/whale/TrendsTab';
 import { EntitiesTab } from '@/components/whale/EntitiesTab';
 import { TransactionModal } from '@/components/whale/TransactionModal';
 import { WalletModal } from '@/components/whale/WalletModal';
+import MainLayout from "@/components/layout/MainLayout";
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('live');
@@ -122,8 +123,9 @@ export default function App() {
   }, [transactions, selectedChain, minUsdFilter, actionFilter, debouncedSearchQuery, isLive]);
 
   return (
-    <div className="min-h-screen bg-[#0a0d14] text-slate-100 font-sans selection:bg-cyan-500/30 selection:text-cyan-200 antialiased flex flex-col">
-      <WhaleHeader 
+    <MainLayout>
+      <div className="bg-[#0a0d14] text-slate-100 font-sans selection:bg-cyan-500/30 selection:text-cyan-200 antialiased flex flex-col rounded-xl overflow-hidden shadow-2xl ring-1 ring-white/5">
+        <WhaleHeader 
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         soundEnabled={soundEnabled}
@@ -180,6 +182,7 @@ export default function App() {
           </div>
         </div>
       </footer>
-    </div>
+      </div>
+    </MainLayout>
   );
 }
