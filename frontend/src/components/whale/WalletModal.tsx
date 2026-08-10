@@ -38,10 +38,22 @@ export const WalletModal: React.FC<WalletModalProps> = ({ inspectWallet, setInsp
             <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
               <p className="text-xs text-slate-400">Estimated On-Chain Balance</p>
               <p className="text-2xl font-black text-emerald-400">$248,510,000</p>
-              <div className="flex items-center gap-2 text-xs text-slate-400 pt-1">
-                <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-semibold">
-                  Risk Score: Low (0.04)
-                </span>
+              
+              <div className="flex flex-wrap items-center gap-2 pt-2">
+                {inspectWallet.win_rate > 0 ? (
+                  <>
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${inspectWallet.win_rate > 65 ? 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20' : 'bg-blue-500/10 text-blue-400 border-blue-500/20'}`}>
+                      {inspectWallet.win_rate > 65 && '⭐ Smart Money | '}{inspectWallet.win_rate.toFixed(1)}% Win Rate
+                    </span>
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${inspectWallet.pnl_usd > 0 ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border-rose-500/20'}`}>
+                      Est. PnL: {inspectWallet.pnl_usd > 0 ? '+' : ''}{new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(inspectWallet.pnl_usd)}
+                    </span>
+                  </>
+                ) : (
+                  <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-semibold">
+                    Risk Score: Low (0.04)
+                  </span>
+                )}
               </div>
             </div>
 

@@ -1,80 +1,146 @@
-import React from 'react';
-import { BarChart2 } from 'lucide-react';
+import React, { useEffect, useState, useCallback } from 'react';
+import { Network } from 'lucide-react';
+import {
+  ReactFlow,
+  useNodesState,
+  useEdgesState,
+  addEdge,
+  Background,
+  Controls,
+  MarkerType
+} from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
 import { formatUsd } from './constants';
 
 interface VisualizerTabProps {
   transactions: any[];
   setInspectTx: (tx: any) => void;
+  chainFilter: string;
 }
 
-export const VisualizerTab: React.FC<VisualizerTabProps> = ({ transactions, setInspectTx }) => {
+export const VisualizerTab: React.FC<VisualizerTabProps> = ({ transactions, setInspectTx, chainFilter }) => {
+  const [nodes, setNodes, onNodesChange] = useNodesState([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchGraph = async () => {
+      setLoading(true);
+      try {
+        const res = await fetch(`http://localhost:8000/api/whale/graph?chain=${chainFilter}&limit=100`);
+        const data = await res.json();
+        
+        // Layout algorithm (simple random or circle for now)
+        const radius = 250;
+        const centerX = 400;
+        const centerY = 300;
+        
+        const mappedNodes = data.nodes.map((node: any, idx: number) => {
+          const angle = (idx / data.nodes.length) * 2 * Math.PI;
+          
+          let bgColor = '#1e293b';
+          let borderColor = '#334155';
+          if (node.data.type === 'exchange') {
+            bgColor = '#f59e0b20';
+            borderColor = '#f59e0b';
+          } else if (node.data.win_rate > 65) {
+            bgColor = '#eab30820'; // gold for smart money
+            borderColor = '#eab308';
+          }
+
+          return {
+            id: node.id,
+            position: { 
+              x: centerX + radius * Math.cos(angle) * (Math.random() * 0.5 + 0.8), 
+              y: centerY + radius * Math.sin(angle) * (Math.random() * 0.5 + 0.8) 
+            },
+            data: { 
+              label: (
+                <div className="flex flex-col items-center">
+                  <div className="font-bold text-xs">{node.data.label}</div>
+                  {node.data.win_rate > 65 && (
+                    <div className="text-[9px] text-yellow-400 mt-1 flex items-center gap-1">
+                      ⭐ Smart Money
+                    </div>
+                  )}
+                  {node.data.pnl !== 0 && (
+                    <div className={`text-[9px] ${node.data.pnl > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      PnL: {node.data.pnl > 0 ? '+' : ''}{formatUsd(node.data.pnl)}
+                    </div>
+                  )}
+                </div>
+              )
+            },
+            style: {
+              background: bgColor,
+              color: '#f8fafc',
+              border: `1px solid ${borderColor}`,
+              borderRadius: '8px',
+              padding: '10px',
+              width: 150,
+            }
+          };
+        });
+
+        const mappedEdges = data.edges.map((edge: any) => ({
+          id: edge.id,
+          source: edge.source,
+          target: edge.target,
+          animated: edge.animated,
+          label: `${formatUsd(edge.data.usd_value)} ${edge.data.token}`,
+          style: { stroke: '#06b6d4', strokeWidth: Math.max(1, Math.min(5, edge.data.usd_value / 1000000)) },
+          labelStyle: { fill: '#94a3b8', fontSize: 10, fontWeight: 700 },
+          labelBgStyle: { fill: '#0f172a', color: '#fff', fillOpacity: 0.8 },
+          markerEnd: {
+            type: MarkerType.ArrowClosed,
+            width: 20,
+            height: 20,
+            color: '#06b6d4',
+          },
+        }));
+
+        setNodes(mappedNodes);
+        setEdges(mappedEdges);
+      } catch (err) {
+        console.error(err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchGraph();
+  }, [chainFilter]);
+
   return (
     <div className="p-6 rounded-2xl border border-slate-800/80 bg-[#0d111a] shadow-2xl space-y-4">
       <div>
         <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
-          <BarChart2 className="w-5 h-5 text-cyan-400" />
-          Whale Flow Scatter Visualizer
+          <Network className="w-5 h-5 text-cyan-400" />
+          Whale Money Flow Network
         </h3>
         <p className="text-xs text-slate-400">
-          Bubble size represents transaction volume USD. Y-axis represents USD size, X-axis represents relative arrival time.
+          Interactive graph showing the movement of funds between entities. Highlighted nodes indicate Smart Money.
         </p>
       </div>
 
-      <div className="relative h-96 w-full rounded-xl bg-slate-950 border border-slate-800/80 p-4 flex flex-col justify-between overflow-hidden">
-        {/* Grid Lines */}
-        <div className="absolute inset-0 grid grid-rows-4 grid-cols-6 border-slate-800/20 pointer-events-none">
-          {[...Array(24)].map((_, i) => (
-            <div key={i} className="border-b border-r border-slate-800/30"></div>
-          ))}
-        </div>
-
-        {/* Y-Axis Scale Labels */}
-        <div className="absolute left-3 top-3 text-[10px] font-mono text-slate-500">$50M+</div>
-        <div className="absolute left-3 top-1/3 text-[10px] font-mono text-slate-500">$10M</div>
-        <div className="absolute left-3 top-2/3 text-[10px] font-mono text-slate-500">$1M</div>
-
-        {/* Plotted Bubbles */}
-        <div className="relative w-full h-full">
-          {transactions.map((tx, idx) => {
-            const yPos = Math.max(10, Math.min(90, 100 - (tx.usdValue / 50000000) * 85));
-            const xPos = Math.max(5, Math.min(92, 95 - (idx / transactions.length) * 88));
-            const bubbleSize = Math.max(24, Math.min(64, (tx.usdValue / 50000000) * 50 + 20));
-
-            const isBuy = tx.action === 'BUY';
-            const isSell = tx.action === 'SELL';
-
-            return (
-              <div
-                key={tx.id}
-                onClick={() => setInspectTx(tx)}
-                style={{
-                  top: `${yPos}%`,
-                  left: `${xPos}%`,
-                  width: `${bubbleSize}px`,
-                  height: `${bubbleSize}px`
-                }}
-                className={`absolute -translate-x-1/2 -translate-y-1/2 rounded-full cursor-pointer transition-all duration-300 hover:scale-125 hover:z-20 flex items-center justify-center border shadow-lg ${
-                  isBuy
-                    ? 'bg-emerald-500/30 border-emerald-400 text-emerald-200 shadow-emerald-500/20'
-                    : isSell
-                    ? 'bg-rose-500/30 border-rose-400 text-rose-200 shadow-rose-500/20'
-                    : 'bg-cyan-500/30 border-cyan-400 text-cyan-200 shadow-cyan-500/20'
-                }`}
-                title={`${tx.token}: ${formatUsd(tx.usdValue)} (${tx.fromEntity} -> ${tx.toEntity})`}
-              >
-                <span className="text-[9px] font-black tracking-tighter truncate px-1">
-                  {tx.token}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* X-Axis Footer */}
-        <div className="flex justify-between text-[10px] font-mono text-slate-500 pt-2 border-t border-slate-800">
-          <span>Older Activity</span>
-          <span>Real-time Streams ➔</span>
-        </div>
+      <div className="relative h-[600px] w-full rounded-xl border border-slate-800/80 overflow-hidden bg-slate-950">
+        {loading ? (
+          <div className="absolute inset-0 flex items-center justify-center text-cyan-400 animate-pulse">
+            Loading Network Graph...
+          </div>
+        ) : (
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            fitView
+            colorMode="dark"
+          >
+            <Background color="#1e293b" gap={16} />
+            <Controls />
+          </ReactFlow>
+        )}
       </div>
     </div>
   );

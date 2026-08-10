@@ -157,7 +157,7 @@ export default function App() {
         )}
 
         {activeTab === 'visualizer' && (
-          <VisualizerTab transactions={filteredTransactions} setInspectTx={setInspectTx} />
+          <VisualizerTab transactions={filteredTransactions} setInspectTx={setInspectTx} chainFilter={selectedChain} />
         )}
 
         {activeTab === 'trends' && (

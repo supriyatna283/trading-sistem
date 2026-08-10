@@ -11,6 +11,8 @@ class WalletResponse(BaseModel):
     label: Optional[str] = None
     entity_type: str
     confidence: Optional[float] = None
+    win_rate: Optional[float] = None
+    pnl_usd: Optional[float] = None
 
     class Config:
         from_attributes = True

@@ -29,13 +29,22 @@ export const EntitiesTab: React.FC<EntitiesTabProps> = ({ dashboardData, setInsp
                 volume: formatUsd(e.volume) + ' 24h',
                 rating: rating,
                 badge: e.type,
+                address: e.address,
+                win_rate: e.win_rate,
+                pnl_usd: e.pnl_usd
               };
             })
           : []
         ).map((entity: any) => (
           <div
             key={entity.name}
-            onClick={() => setInspectWallet({ name: entity.name, type: entity.badge, address: '0x71C...88B1' })}
+            onClick={() => setInspectWallet({ 
+              name: entity.name, 
+              type: entity.badge, 
+              address: entity.address || '0xUnknown',
+              win_rate: entity.win_rate,
+              pnl_usd: entity.pnl_usd
+            })}
             className="p-4 rounded-xl bg-slate-900/80 border border-slate-800 hover:border-cyan-500/50 cursor-pointer transition-all space-y-2 group"
           >
             <div className="flex items-center justify-between">
@@ -47,10 +56,24 @@ export const EntitiesTab: React.FC<EntitiesTabProps> = ({ dashboardData, setInsp
               </span>
             </div>
             <div className="flex justify-between text-xs text-slate-400">
-              <span>
-                24h Flow: <strong className="text-slate-200">{entity.volume}</strong>
-              </span>
-              <span className="text-cyan-400">{entity.rating}</span>
+              <div className="flex flex-col">
+                <span>
+                  24h Flow: <strong className="text-slate-200">{entity.volume}</strong>
+                </span>
+                {entity.win_rate > 0 && (
+                  <span className="text-emerald-400 mt-0.5 text-[10px] flex items-center gap-1">
+                    {entity.win_rate > 65 && '⭐ Smart Money | '}{entity.win_rate.toFixed(1)}% WR
+                  </span>
+                )}
+              </div>
+              <div className="flex flex-col items-end">
+                <span className="text-cyan-400">{entity.rating}</span>
+                {entity.pnl_usd !== 0 && (
+                  <span className={`text-[10px] mt-0.5 ${entity.pnl_usd > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    PnL: {entity.pnl_usd > 0 ? '+' : ''}{formatUsd(entity.pnl_usd)}
+                  </span>
+                )}
+              </div>
             </div>
           </div>
         ))}

@@ -31,6 +31,8 @@ class Wallet(Base):
     entity_type = Column(String(100), nullable=False, default="unlabeled") # exchange, fund, whale, unlabeled
     entity_source = Column(String(100), nullable=True) # e.g., 'arkham'
     confidence = Column(Float, nullable=True)
+    win_rate = Column(Float, nullable=True, default=0.0)
+    pnl_usd = Column(Float, nullable=True, default=0.0)
     last_enriched_at = Column(DateTime, nullable=True)
 
     __table_args__ = (

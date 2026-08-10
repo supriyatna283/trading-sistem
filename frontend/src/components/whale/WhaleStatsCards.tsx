@@ -1,5 +1,6 @@
 import React from 'react';
-import { DollarSign, Flame, TrendingUp, Cpu } from 'lucide-react';
+import { DollarSign, Flame, TrendingUp, Cpu, Bot } from 'lucide-react';
+import { motion } from 'framer-motion';
 import { formatUsd } from './constants';
 
 interface WhaleStatsCardsProps {
@@ -70,6 +71,34 @@ export const WhaleStatsCards: React.FC<WhaleStatsCardsProps> = ({ dashboardData 
           </div>
         </div>
       </div>
+      
+      {/* AI Narrative Banner */}
+      {dashboardData?.ai_narrative && (
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-4">
+          <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/5 p-4 flex items-start gap-4">
+            <div className="p-2 bg-indigo-500/20 text-indigo-400 rounded-lg shrink-0 mt-0.5">
+              <Bot className="w-5 h-5" />
+            </div>
+            <div className="flex-1">
+              <h4 className="text-xs font-bold text-indigo-400 mb-1 flex items-center gap-2">
+                OpenAI Narrative Insight 
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+                </span>
+              </h4>
+              <motion.p 
+                key={dashboardData.ai_narrative} 
+                initial={{ opacity: 0 }} 
+                animate={{ opacity: 1 }} 
+                className="text-sm font-mono text-indigo-200"
+              >
+                {dashboardData.ai_narrative}
+              </motion.p>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 };

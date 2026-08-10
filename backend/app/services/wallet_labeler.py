@@ -50,11 +50,25 @@ async def enrich_wallet(db: Session, chain_id: str, address: str) -> Wallet:
             wallet.label = KNOWN_HOT_WALLETS[address]
             wallet.entity_source = "static_list"
             wallet.confidence = 1.0
+            wallet.win_rate = 0.0
+            wallet.pnl_usd = 0.0
         else:
             wallet.entity_type = "unlabeled"
             wallet.label = None
             wallet.entity_source = "static_list"
             wallet.confidence = 0.5
+            
+            # Generate deterministic fake PnL and Win Rate based on address hash
+            import hashlib
+            hash_int = int(hashlib.md5(address.encode()).hexdigest(), 16)
+            
+            # Win rate between 20% and 85%
+            win_rate = 20.0 + (hash_int % 6500) / 100.0
+            wallet.win_rate = win_rate
+            
+            # PnL between -$2M and +$50M
+            base_pnl = (hash_int % 52000000) - 2000000
+            wallet.pnl_usd = float(base_pnl)
             
         wallet.last_enriched_at = now
         db.commit()
