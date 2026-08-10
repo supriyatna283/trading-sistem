@@ -124,17 +124,24 @@ export default function App() {
 
   return (
     <MainLayout>
-      <div className="bg-[#0a0d14] text-slate-100 font-sans selection:bg-cyan-500/30 selection:text-cyan-200 antialiased flex flex-col rounded-xl overflow-hidden shadow-2xl ring-1 ring-white/5">
-        <WhaleHeader 
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        soundEnabled={soundEnabled}
-        setSoundEnabled={setSoundEnabled}
-        isLive={isLive}
-        setIsLive={setIsLive}
-      />
+      <div className="min-h-screen bg-[#050810] text-slate-100 font-sans selection:bg-cyan-500/30 selection:text-cyan-200 antialiased flex flex-col relative overflow-hidden">
+        {/* Deep ambient background glows */}
+        <div className="absolute top-0 left-0 w-full h-full overflow-hidden pointer-events-none z-0">
+          <div className="absolute -top-[20%] -left-[10%] w-[50%] h-[50%] rounded-full bg-cyan-900/10 blur-[120px]"></div>
+          <div className="absolute top-[30%] -right-[20%] w-[60%] h-[60%] rounded-full bg-indigo-900/10 blur-[150px]"></div>
+        </div>
 
-      <WhaleStatsCards dashboardData={dashboardData} />
+        <div className="relative z-10 flex flex-col h-full">
+          <WhaleHeader 
+            activeTab={activeTab}
+            setActiveTab={setActiveTab}
+            soundEnabled={soundEnabled}
+            setSoundEnabled={setSoundEnabled}
+            isLive={isLive}
+            setIsLive={setIsLive}
+          />
+
+          <WhaleStatsCards dashboardData={dashboardData} />
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-5">
         <WhaleFilterBar 
@@ -172,16 +179,17 @@ export default function App() {
       <TransactionModal inspectTx={inspectTx} setInspectTx={setInspectTx} />
       <WalletModal inspectWallet={inspectWallet} setInspectWallet={setInspectWallet} />
 
-      <footer className="border-t border-slate-800/80 py-4 bg-[#0d111a] text-center text-xs text-slate-500">
-        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
-          <p>© 2026 Whale Tracker Pro Terminal. Real-time multi-chain telemetry.</p>
-          <div className="flex items-center gap-4 text-slate-400">
-            <span className="hover:text-cyan-400 cursor-pointer transition-colors">API Access</span>
-            <span className="hover:text-cyan-400 cursor-pointer transition-colors">Telegram Alerts</span>
-            <span className="hover:text-cyan-400 cursor-pointer transition-colors">Documentation</span>
+        <footer className="border-t border-slate-800/50 py-6 bg-[#050810]/80 backdrop-blur-md text-center text-xs text-slate-500 relative z-10 mt-auto">
+          <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+            <p>© 2026 Whale Tracker Pro Terminal. Real-time multi-chain telemetry.</p>
+            <div className="flex items-center gap-6 text-slate-400">
+              <span className="hover:text-cyan-400 cursor-pointer transition-colors font-semibold">API Access</span>
+              <span className="hover:text-cyan-400 cursor-pointer transition-colors font-semibold">Telegram Alerts</span>
+              <span className="hover:text-cyan-400 cursor-pointer transition-colors font-semibold">Documentation</span>
+            </div>
           </div>
+        </footer>
         </div>
-      </footer>
       </div>
     </MainLayout>
   );

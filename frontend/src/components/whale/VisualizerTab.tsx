@@ -27,7 +27,8 @@ export const VisualizerTab: React.FC<VisualizerTabProps> = ({ transactions, setI
     const fetchGraph = async () => {
       setLoading(true);
       try {
-        const res = await fetch(`http://localhost:8000/api/whale/graph?chain=${chainFilter}&limit=100`);
+        const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+        const res = await fetch(`${API_BASE}/api/whale/graph?chain=${chainFilter}&limit=100`);
         const data = await res.json();
         
         // Layout algorithm (simple random or circle for now)

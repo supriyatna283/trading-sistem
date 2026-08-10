@@ -24,21 +24,21 @@ export const WhaleFilterBar: React.FC<WhaleFilterBarProps> = ({
   setActionFilter,
 }) => {
   return (
-    <div className="p-4 rounded-2xl bg-[#0f1420] border border-slate-800/80 shadow-xl space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="p-5 rounded-2xl bg-slate-900/40 backdrop-blur-xl border border-slate-700/50 shadow-[0_8px_30px_rgba(0,0,0,0.12)] space-y-4 relative z-10">
+      <div className="flex flex-wrap items-center justify-between gap-4">
         {/* Chain Selector Pills */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 scrollbar-hide">
-          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider mr-1 flex items-center gap-1 shrink-0">
-            <Filter className="w-3.5 h-3.5 text-cyan-400" /> Chains:
+        <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:pb-0 scrollbar-hide">
+          <span className="text-xs font-bold text-slate-400 uppercase tracking-widest mr-2 flex items-center gap-1.5 shrink-0">
+            <Filter className="w-4 h-4 text-cyan-400" /> Chains:
           </span>
           {CHAINS.map((chain) => (
             <button
               key={chain.id}
               onClick={() => setSelectedChain(chain.id)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all border shrink-0 ${
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all border shrink-0 ${
                 selectedChain === chain.id
-                  ? 'bg-cyan-500 text-slate-950 border-cyan-400 shadow-lg shadow-cyan-500/20'
-                  : 'bg-slate-900/80 text-slate-400 border-slate-800 hover:bg-slate-800 hover:text-slate-200'
+                  ? 'bg-gradient-to-r from-cyan-500 to-blue-500 text-white border-transparent shadow-[0_0_15px_rgba(6,182,212,0.4)]'
+                  : 'bg-slate-800/50 text-slate-400 border-slate-700 hover:bg-slate-700 hover:text-white hover:border-slate-600'
               }`}
             >
               {chain.name}
@@ -47,8 +47,8 @@ export const WhaleFilterBar: React.FC<WhaleFilterBarProps> = ({
         </div>
 
         {/* Threshold Filter Buttons */}
-        <div className="flex items-center gap-1.5 shrink-0">
-          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider mr-1">
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="text-xs font-bold text-slate-400 uppercase tracking-widest mr-2">
             Min Size:
           </span>
           {[
@@ -60,10 +60,10 @@ export const WhaleFilterBar: React.FC<WhaleFilterBarProps> = ({
             <button
               key={opt.val}
               onClick={() => setMinUsdFilter(opt.val)}
-              className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all border ${
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all border ${
                 minUsdFilter === opt.val
-                  ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40'
-                  : 'bg-slate-900/60 text-slate-400 border-slate-800 hover:text-slate-200'
+                  ? 'bg-gradient-to-r from-indigo-500 to-purple-500 text-white border-transparent shadow-[0_0_15px_rgba(99,102,241,0.4)]'
+                  : 'bg-slate-800/50 text-slate-400 border-slate-700 hover:bg-slate-700 hover:text-white'
               }`}
             >
               {opt.label}
@@ -72,34 +72,34 @@ export const WhaleFilterBar: React.FC<WhaleFilterBarProps> = ({
         </div>
       </div>
 
-      <div className="pt-2 border-t border-slate-800/60 flex flex-wrap items-center justify-between gap-3">
+      <div className="pt-4 border-t border-slate-700/50 flex flex-wrap items-center justify-between gap-4">
         {/* Search Input */}
-        <div className="relative flex-1 min-w-[240px]">
-          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+        <div className="relative flex-1 min-w-[280px]">
+          <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             type="text"
             placeholder="Search token symbol, entity, wallet or transaction hash..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-slate-950/80 border border-slate-800 rounded-xl pl-9 pr-4 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500/50 focus:ring-1 focus:ring-cyan-500/20 transition-all"
+            className="w-full bg-slate-950/50 border border-slate-700 rounded-xl pl-10 pr-4 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/50 transition-all shadow-inner"
           />
           {searchQuery && (
             <button
               onClick={() => setSearchQuery('')}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
+              className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white transition-colors"
             >
-              <X className="w-3.5 h-3.5" />
+              <X className="w-4 h-4" />
             </button>
           )}
         </div>
 
         {/* Action Type Dropdown / Selector */}
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-slate-400 font-medium">Action:</span>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-slate-400 font-bold tracking-widest uppercase">Action:</span>
           <select
             value={actionFilter}
             onChange={(e) => setActionFilter(e.target.value)}
-            className="bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-cyan-500/50"
+            className="bg-slate-950/50 border border-slate-700 rounded-xl px-3 py-2 text-sm font-semibold text-slate-200 focus:outline-none focus:border-cyan-500 transition-all cursor-pointer"
           >
             <option value="ALL">All Actions</option>
             <option value="TRANSFER">Transfers Only</option>
@@ -116,9 +116,9 @@ export const WhaleFilterBar: React.FC<WhaleFilterBarProps> = ({
               setSearchQuery('');
               setActionFilter('ALL');
             }}
-            className="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200 text-xs font-semibold"
+            className="px-4 py-2 rounded-xl bg-slate-800 border border-slate-700 text-slate-300 hover:text-white hover:bg-slate-700 hover:border-slate-600 transition-all text-xs font-bold"
           >
-            Reset
+            Reset Filters
           </button>
         </div>
       </div>
