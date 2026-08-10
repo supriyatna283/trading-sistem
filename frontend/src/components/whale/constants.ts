@@ -4,7 +4,9 @@ export const CHAINS = [
   { id: 'SOL', name: 'Solana', color: 'bg-purple-500/20 text-purple-400 border-purple-500/30' },
   { id: 'BSC', name: 'BNB Chain', color: 'bg-amber-500/20 text-amber-400 border-amber-500/30' },
   { id: 'BASE', name: 'Base', color: 'bg-blue-500/20 text-blue-400 border-blue-500/30' },
-  { id: 'ARB', name: 'Arbitrum', color: 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30' }
+  { id: 'ARB', name: 'Arbitrum', color: 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30' },
+  { id: 'BITCOIN', name: 'Bitcoin', color: 'bg-orange-500/20 text-orange-400 border-orange-500/30' },
+  { id: 'HYPERLIQUID', name: 'Hyperliquid', color: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' }
 ];
 
 export const ACTION_COLORS: any = {
@@ -49,6 +51,11 @@ export const getBlockExplorerUrl = (chain: string, hash: string) => {
     case 'ARB':
     case 'ARBITRUM':
       return `https://arbiscan.io/tx/${hash}`;
+    case 'BTC':
+    case 'BITCOIN':
+      return `https://mempool.space/tx/${hash}`;
+    case 'HYPERLIQUID':
+      return `https://app.hyperliquid.xyz/explorer/tx/${hash}`;
     default:
       return '#';
   }

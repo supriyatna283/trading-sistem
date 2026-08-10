@@ -192,7 +192,7 @@ def get_whale_dashboard(db: Session = Depends(get_db)):
     settings = get_settings()
     nvidia_key = settings.NVIDIA_API_KEY
     if nvidia_key:
-        prompt = f"Write a 1-sentence punchy narrative for a crypto whale dashboard. Context: Top asset traded is {top_asset}, Net flow bias is {bias_label} ({bias_desc}), Mega moves count: {mega_moves}. Make it sound like an expert on-chain analyst."
+        prompt = f"Tuliskan 1 kalimat narasi singkat dan tajam untuk dasbor crypto whale tracker DALAM BAHASA INDONESIA. Konteks: Aset terbanyak ditransaksikan adalah {top_asset}, bias aliran dana adalah {bias_label} ({bias_desc}), jumlah pergerakan mega: {mega_moves}. Buat agar terdengar seperti analis on-chain ahli berbahasa Indonesia."
         try:
             with httpx.Client() as client:
                 resp = client.post(

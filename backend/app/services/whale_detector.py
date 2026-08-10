@@ -4,6 +4,11 @@ from typing import Callable, Dict, Any
 from sqlalchemy.orm import Session
 import httpx
 import time
+import json
+try:
+    import websockets
+except ImportError:
+    pass
 
 from web3 import AsyncWeb3, AsyncHTTPProvider
 try:
@@ -346,6 +351,124 @@ async def poll_solana_chain(rpc_url: str, db_factory: Callable[[], Session]):
             await asyncio.sleep(5)
 
 
+async def poll_btc_chain(db_factory):
+    """Background task to poll Bitcoin via Mempool.space REST API."""
+    logger.info("Starting btc RPC polling on mempool.space")
+    chain_id = "bitcoin"
+    last_block_hash = None
+
+    async with httpx.AsyncClient() as client:
+        while True:
+            try:
+                # 1. Get Tip Hash
+                tip_resp = await client.get("https://mempool.space/api/blocks/tip/hash", timeout=10.0)
+                if tip_resp.status_code == 200:
+                    current_hash = tip_resp.text.strip()
+                    
+                    if last_block_hash and current_hash != last_block_hash:
+                        # New block detected
+                        txs_resp = await client.get(f"https://mempool.space/api/block/{current_hash}/txs", timeout=15.0)
+                        if txs_resp.status_code == 200:
+                            txs = txs_resp.json()
+                            db = next(db_factory())
+                            try:
+                                threshold_entry = db.query(WhaleThreshold).filter_by(chain_id=chain_id).first()
+                                usd_threshold = min(threshold_entry.usd_threshold if threshold_entry else 500000.0, 500000.0)
+                                
+                                # Fetch BTC price from Dexscreener using WBTC address
+                                wbtc_addr = "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599"
+                                btc_info = await get_token_info('ethereum', wbtc_addr)
+                                btc_price = btc_info.get('price_usd', 60000.0)
+
+                                for tx in txs:
+                                    # Sum all outputs
+                                    total_sats = sum(out.get('value', 0) for out in tx.get('vout', []))
+                                    amount_btc = total_sats / 1e8
+                                    usd_value = amount_btc * btc_price
+                                    
+                                    if usd_value >= usd_threshold:
+                                        tx_hash = tx.get('txid')
+                                        block_time = tx.get('status', {}).get('block_time', int(time.time()))
+                                        
+                                        # Simple heuristic: largest input address as sender
+                                        sender_address = "Unknown Sender"
+                                        if tx.get('vin') and tx['vin'][0].get('prevout'):
+                                            sender_address = tx['vin'][0]['prevout'].get('scriptpubkey_address', 'Unknown BTC Address')
+                                            
+                                        await process_transaction(
+                                            db, chain_id, tx_hash, sender_address, "Multiple Outputs",
+                                            "BTC", "Native", amount_btc, usd_value, block_time
+                                        )
+                            finally:
+                                db.close()
+
+                    last_block_hash = current_hash
+            except asyncio.CancelledError:
+                logger.info("Stopping btc poller")
+                break
+            except Exception as e:
+                pass
+                
+            # Sleep 60 seconds (Bitcoin blocks are slow, ~10m)
+            await asyncio.sleep(60)
+
+
+async def poll_hyperliquid_chain(db_factory):
+    """Background task to poll Hyperliquid Trades via WebSocket."""
+    logger.info("Starting hyperliquid WebSocket polling")
+    chain_id = "hyperliquid"
+    
+    # We will track BTC and ETH perp trades as a proxy for whales
+    coins_to_track = ["BTC", "ETH"]
+
+    while True:
+        try:
+            # Need to check if websockets is available, if not log warning and exit loop
+            if 'websockets' not in globals():
+                logger.warning("websockets library not installed. Cannot poll Hyperliquid.")
+                break
+                
+            async with websockets.connect("wss://api.hyperliquid.xyz/ws") as ws:
+                # Subscribe to trades
+                for coin in coins_to_track:
+                    await ws.send(json.dumps({
+                        "method": "subscribe",
+                        "subscription": {"type": "trades", "coin": coin}
+                    }))
+
+                while True:
+                    msg = await ws.recv()
+                    data = json.loads(msg)
+                    if data.get("channel") == "trades":
+                        trades = data.get("data", [])
+                        for trade in trades:
+                            coin = trade.get("coin")
+                            size = float(trade.get("sz", 0))
+                            price = float(trade.get("px", 0))
+                            side = trade.get("side") # "A" or "B" (Ask/Bid)
+                            hash = trade.get("hash")
+                            time_ms = trade.get("time", int(time.time() * 1000))
+                            
+                            usd_value = size * price
+                            
+                            # Filter for whales > $500k on derivatives
+                            if usd_value >= 500000.0:
+                                db = next(db_factory())
+                                try:
+                                    # We don't have wallet addresses for trades via public WS, so we use placeholders
+                                    sender = f"HL_{side}_Trader_{hash[-6:]}"
+                                    await process_transaction(
+                                        db, chain_id, hash, sender, "Hyperliquid Engine",
+                                        coin, "Perp", size, usd_value, time_ms // 1000
+                                    )
+                                finally:
+                                    db.close()
+        except asyncio.CancelledError:
+            logger.info("Stopping hyperliquid poller")
+            break
+        except Exception as e:
+            logger.error(f"Hyperliquid WS Error: {e}")
+            await asyncio.sleep(5)
 async def process_transaction(db, chain_id, tx_hash, from_addr, to_addr, symbol, token_addr, amount, usd_value, block_timestamp):
     """Helper to enrich wallets and save to DB."""
     existing = db.query(WhaleTransaction).filter_by(chain_id=chain_id, tx_hash=tx_hash, token_symbol=symbol).first()
@@ -400,7 +523,13 @@ def start_whale_pollers(db_factory: Callable[[], Session]):
     try:
         db = next(db_factory())
         from app.models.whale import Chain
-        for c_id, c_name in [("ethereum", "Ethereum"), ("bsc", "Binance Smart Chain"), ("solana", "Solana")]:
+        for c_id, c_name in [
+            ("ethereum", "Ethereum"), 
+            ("bsc", "Binance Smart Chain"), 
+            ("solana", "Solana"),
+            ("bitcoin", "Bitcoin"),
+            ("hyperliquid", "Hyperliquid L1")
+        ]:
             if not db.query(Chain).filter_by(id=c_id).first():
                 db.add(Chain(id=c_id, name=c_name))
         db.commit()
@@ -408,6 +537,7 @@ def start_whale_pollers(db_factory: Callable[[], Session]):
     except Exception as e:
         logger.error(f"Failed to seed chains: {e}")
 
+    # Launch existing pollers
     if settings.ETH_RPC_URL:
         _polling_tasks.append(asyncio.create_task(poll_evm_chain("ethereum", settings.ETH_RPC_URL, db_factory)))
         
@@ -416,6 +546,10 @@ def start_whale_pollers(db_factory: Callable[[], Session]):
         
     if settings.SOL_RPC_URL:
         _polling_tasks.append(asyncio.create_task(poll_solana_chain(settings.SOL_RPC_URL, db_factory)))
+        
+    # Launch new Bitcoin and Hyperliquid pollers
+    _polling_tasks.append(asyncio.create_task(poll_btc_chain(db_factory)))
+    _polling_tasks.append(asyncio.create_task(poll_hyperliquid_chain(db_factory)))
 
 def stop_whale_pollers():
     """Cancel all polling tasks."""
