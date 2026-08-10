@@ -35,14 +35,19 @@ export const getBlockExplorerUrl = (chain: string, hash: string) => {
   const chainUpper = chain.toUpperCase();
   switch (chainUpper) {
     case 'ETH':
+    case 'ETHEREUM':
       return `https://etherscan.io/tx/${hash}`;
     case 'SOL':
+    case 'SOLANA':
       return `https://solscan.io/tx/${hash}`;
     case 'BSC':
+    case 'BINANCE':
+    case 'BNB':
       return `https://bscscan.com/tx/${hash}`;
     case 'BASE':
       return `https://basescan.org/tx/${hash}`;
     case 'ARB':
+    case 'ARBITRUM':
       return `https://arbiscan.io/tx/${hash}`;
     default:
       return '#';
