@@ -23,6 +23,7 @@ export interface WhaleTransaction {
     block_time: string;
     detected_at: string;
     raw_source: string;
+    isNew?: boolean;
 }
 
 const getWsUrl = () => {
@@ -48,6 +49,7 @@ export function useWhaleSocket(url: string = getWsUrl()) {
         ws.onmessage = (event) => {
             try {
                 const tx: WhaleTransaction = JSON.parse(event.data);
+                tx.isNew = true; // Flag for UI highlight
                 // Prepend the new transaction and keep up to 100 items
                 setTransactions((prev) => [tx, ...prev].slice(0, 100));
             } catch (error) {
