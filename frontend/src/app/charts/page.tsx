@@ -508,7 +508,7 @@ function ChartsPageContent() {
                     <div style={{ marginTop: 6, display: "flex", justifyContent: "space-between", fontSize: "0.67rem", color: "var(--text-muted)" }}>
                       <span>{setup.setup_type}</span>
                       <span style={{ color: (setup.confluence_score ?? 0) >= 18 ? "#10b981" : "var(--text-muted)" }}>
-                        ⚡ {setup.confluence_score ?? 0}/{setup.max_score ?? 33}
+                        ⚡ {setup.confluence_score ?? 0}/{setup.max_score ?? 35}
                       </span>
                     </div>
                   </div>

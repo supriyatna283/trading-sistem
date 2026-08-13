@@ -152,12 +152,12 @@ export default function SetupsPage() {
   const filtered = (() => {
     let arr = filter === "ALL" ? setups : setups.filter(s => s.status === filter);
     if (dirFilter !== "ALL") arr = arr.filter(s => s.direction === dirFilter);
-    if (minScore > 0) arr = arr.filter(s => (s.signal_score ?? s.confluence_score ?? 0) >= minScore);
+    if (minScore > 0) arr = arr.filter(s => (s.adjusted_score ?? s.signal_score ?? s.confluence_score ?? 0) >= minScore);
 
     switch (sortKey) {
       case "oldest":     arr = [...arr].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()); break;
-      case "score_desc": arr = [...arr].sort((a, b) => (b.signal_score ?? b.confluence_score ?? 0) - (a.signal_score ?? a.confluence_score ?? 0)); break;
-      case "score_asc":  arr = [...arr].sort((a, b) => (a.signal_score ?? a.confluence_score ?? 0) - (b.signal_score ?? b.confluence_score ?? 0)); break;
+      case "score_desc": arr = [...arr].sort((a, b) => (b.adjusted_score ?? b.signal_score ?? b.confluence_score ?? 0) - (a.adjusted_score ?? a.signal_score ?? a.confluence_score ?? 0)); break;
+      case "score_asc":  arr = [...arr].sort((a, b) => (a.adjusted_score ?? a.signal_score ?? a.confluence_score ?? 0) - (b.adjusted_score ?? b.signal_score ?? b.confluence_score ?? 0)); break;
       case "rr_desc":    arr = [...arr].sort((a, b) => (b.risk_reward ?? 0) - (a.risk_reward ?? 0)); break;
       default: /* newest */ arr = [...arr].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
     }
@@ -253,7 +253,7 @@ export default function SetupsPage() {
         <span style={{ fontSize: "0.72rem", fontWeight: 800, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.1em", whiteSpace: "nowrap" }}>🎯 Score</span>
         {SCORE_PRESETS.map(p => {
           const isActive = minScore === p.value;
-          const count = p.value === 0 ? setups.length : setups.filter(s => (s.signal_score ?? s.confluence_score ?? 0) >= p.value).length;
+          const count = p.value === 0 ? setups.length : setups.filter(s => (s.adjusted_score ?? s.signal_score ?? s.confluence_score ?? 0) >= p.value).length;
           return (
             <button key={p.label} onClick={() => setMinScore(p.value)} style={{ padding: "5px 14px", borderRadius: 8, border: isActive ? `1px solid ${p.color}60` : "1px solid var(--border)", background: isActive ? `${p.color}18` : "transparent", color: isActive ? p.color : "var(--text-muted)", fontWeight: 800, fontSize: "0.78rem", cursor: "pointer", transition: "all 0.15s", display: "flex", alignItems: "center", gap: 5 }}>
               {p.label}<span style={{ opacity: 0.65, fontSize: "0.7rem", fontWeight: 600 }}>{count}</span>
@@ -319,7 +319,10 @@ export default function SetupsPage() {
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(min(420px, 100%), 1fr))", gap: 20 }}>
             {paged.map((s: any, i: number) => {
-              const score = s.signal_score ?? s.confluence_score ?? 0;
+              const rawScore = s.signal_score ?? s.confluence_score ?? 0;
+              const adjScore = s.adjusted_score ?? rawScore;
+              const hasDecay = adjScore < rawScore - 0.4;
+              const score = adjScore;
               const isBuy = s.direction === "BUY";
               const accentColor = isBuy ? "#22c55e" : "#ef4444";
               const accentBg = isBuy ? "rgba(34,197,94,0.05)" : "rgba(239,68,68,0.05)";
@@ -330,6 +333,18 @@ export default function SetupsPage() {
               const macd = details.macd || {};
               const isExpanded = expandedIds.has(s.id || i);
               const isExecuting = executingId === s.id;
+              // Status display
+              const statusColors: Record<string,string> = {
+                "ACTIVE": "#10b981", "TRIGGERED": "#f59e0b",
+                "INVALIDATED": "#ef4444", "CLOSED": "#94a3b8"
+              };
+              const statusBgs: Record<string,string> = {
+                "ACTIVE": "rgba(16,185,129,0.12)", "TRIGGERED": "rgba(245,158,11,0.12)",
+                "INVALIDATED": "rgba(239,68,68,0.08)", "CLOSED": "rgba(255,255,255,0.05)"
+              };
+              // Market regime
+              const regime = s.market_regime;
+              const regimeColor = regime === "TRENDING" ? "#10b981" : regime === "RANGING" ? "#f59e0b" : regime === "TRANSITION" ? "#60a5fa" : null;
 
               return (
                 <div key={s.id || i} className="glass-card setup-card" style={{ padding: 0, overflow: "hidden", border: `1px solid rgba(255,255,255,0.06)` }}>
@@ -342,13 +357,17 @@ export default function SetupsPage() {
                         {isBuy ? "▲ LONG" : "▼ SHORT"}
                       </span>
                       <span style={{ fontSize: "0.7rem", fontWeight: 700, color: "var(--text-muted)", background: "rgba(255,255,255,0.05)", padding: "3px 8px", borderRadius: 6 }}>{s.timeframe}</span>
+                      {regimeColor && (
+                        <span title={`Market Regime: ${regime}`} style={{ fontSize: "0.6rem", fontWeight: 800, color: regimeColor, background: `${regimeColor}15`, padding: "2px 7px", borderRadius: 5, border: `1px solid ${regimeColor}35` }}>
+                          {regime === "TRENDING" ? "📈 TREND" : regime === "RANGING" ? "↔ RANGE" : "⚡ TRANS"}
+                        </span>
+                      )}
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <span style={{ fontSize: "0.65rem", color: "var(--text-muted)" }}>
-                        {/* live timeAgo with tick dependency */}
                         {timeAgo(s.created_at)}{tick > -1 ? "" : ""}
                       </span>
-                      <span style={{ fontSize: "0.65rem", fontWeight: 800, padding: "3px 8px", borderRadius: 6, background: s.status === "ACTIVE" ? "rgba(16,185,129,0.12)" : "rgba(255,255,255,0.05)", color: s.status === "ACTIVE" ? "#10b981" : "var(--text-muted)" }}>
+                      <span style={{ fontSize: "0.65rem", fontWeight: 800, padding: "3px 8px", borderRadius: 6, background: statusBgs[s.status] ?? "rgba(255,255,255,0.05)", color: statusColors[s.status] ?? "var(--text-muted)" }}>
                         {s.status}
                       </span>
                       <Link 
@@ -377,7 +396,12 @@ export default function SetupsPage() {
                   <div style={{ padding: "18px 20px" }}>
                     {/* Score + Levels */}
                     <div style={{ display: "flex", gap: 16, alignItems: "center", marginBottom: 18 }}>
-                      <ScoreRing score={score} />
+                      <div style={{ position: "relative", display: "inline-block" }}>
+                        <ScoreRing score={score} />
+                        {hasDecay && (
+                          <span title={`Raw score: ${rawScore} | Decayed: -${(rawScore - adjScore).toFixed(1)}pts`} style={{ position: "absolute", top: -4, right: -6, fontSize: "0.5rem", fontWeight: 900, background: "rgba(245,158,11,0.9)", color: "#000", borderRadius: "50%", width: 14, height: 14, display: "flex", alignItems: "center", justifyContent: "center" }}>⏱</span>
+                        )}
+                      </div>
                       <div style={{ flex: 1, display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
                         {[
                           { label: "Entry", value: `${formatPrice(s.entry_low)}–${formatPrice(s.entry_high)}`, color: "#fff" },

@@ -217,7 +217,8 @@ export default function ScannerPage() {
                 const price = row.latest_price || 0;
                 const change = row.price_change_24h || 0;
                 const score = row.signal_score ?? 0;
-                const scoreColor = score >= 80 ? "#f59e0b" : score >= 65 ? "#10b981" : score >= 50 ? "#3b82f6" : "#ef4444";
+                const adjScore = row.adjusted_score ?? score;
+                const scoreColor = adjScore >= 80 ? "#f59e0b" : adjScore >= 65 ? "#10b981" : adjScore >= 50 ? "#3b82f6" : "#ef4444";
 
                 return (
                   <tr key={row.symbol} style={{ opacity: row.hard_rejected ? 0.5 : 1, transition: "opacity 0.3s" }}>
