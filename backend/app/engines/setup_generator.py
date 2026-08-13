@@ -69,16 +69,29 @@ def _find_nearest_swing_high(df: pd.DataFrame, reference_price: float, lookback:
     return min(swing_highs) if swing_highs else None
 
 
-def calculate_trade_levels(direction: str, last_price: float, smc, df: pd.DataFrame) -> tuple:
+def calculate_trade_levels(
+    direction: str, last_price: float, smc, df: pd.DataFrame,
+    df_15m: Optional[pd.DataFrame] = None,
+) -> tuple:
     """
     Canonical level calculator — SHARED by Setup Engine AND AI Analysis.
     Uses OB-based entry zones + structure-based SL + 2R/3R/4.5R TP targets.
+
+    V6 Improvements:
+    - Volatility-Adjusted SL: SL = max(structure_sl, entry ± 1.5×ATR) to avoid
+      premature stop-outs in volatile markets (BUG 5 from audit).
+    - MTER 15m: If df_15m is provided, refines entry zone using 15m OB/FVG
+      for tighter entry and better R:R ratio (3x+ instead of 1.8x).
+
     Returns: (entry_low, entry_high, sl, tp1, tp2, tp3)
     """
     recent = df.tail(20)
     atr = _estimate_atr(recent)
     if atr == 0:
         atr = float(df["high"].astype(float).values[-1] - df["low"].astype(float).values[-1]) * 2
+
+    # ATR floor for SL: minimum distance = 1.5 × ATR (prevents SL too tight)
+    atr_sl_floor = atr * 1.5
 
     if direction == "BUY":
         bullish_obs = [ob for ob in smc.order_blocks if ob.type == "BULLISH" and not ob.mitigated]
@@ -91,8 +104,31 @@ def calculate_trade_levels(direction: str, last_price: float, smc, df: pd.DataFr
             entry_low = last_price - atr * 0.3
             entry_high = last_price
 
+        # MTER: Refine entry zone using 15m OB if available
+        if df_15m is not None and not df_15m.empty:
+            try:
+                from app.engines.smart_money import SmartMoneyConceptsEngine
+                smc_15m = SmartMoneyConceptsEngine().analyze(df_15m.tail(100), "", "15m")
+                # Find 15m bullish OB within HTF entry zone
+                htf_zone_obs = [
+                    ob for ob in smc_15m.order_blocks
+                    if ob.type == "BULLISH" and not ob.mitigated
+                    and ob.low >= entry_low * 0.995  # within 0.5% below entry_low
+                    and ob.high <= entry_high * 1.01
+                ]
+                if htf_zone_obs:
+                    refined_ob = htf_zone_obs[-1]
+                    entry_low = refined_ob.low
+                    entry_high = refined_ob.high
+                    logger.debug(f"MTER 15m: Entry refined to [{entry_low:.4f} - {entry_high:.4f}]")
+            except Exception:
+                pass  # MTER is optional enhancement, never block setup generation
+
         swing_low = _find_nearest_swing_low(df, entry_low)
-        sl = (swing_low - atr * 0.15) if (swing_low is not None and swing_low < entry_low) else (entry_low - atr * 1.0)
+        structure_sl = (swing_low - atr * 0.15) if (swing_low is not None and swing_low < entry_low) else (entry_low - atr * 1.0)
+        # Volatility-Adjusted SL: use whichever gives MORE room (further from entry)
+        atr_based_sl = entry_low - atr_sl_floor
+        sl = min(structure_sl, atr_based_sl)  # min = further below for BUY
 
         risk = entry_low - sl
         tp1 = entry_high + risk * 2.0
@@ -110,8 +146,30 @@ def calculate_trade_levels(direction: str, last_price: float, smc, df: pd.DataFr
             entry_low = last_price
             entry_high = last_price + atr * 0.3
 
+        # MTER: Refine entry zone using 15m OB if available
+        if df_15m is not None and not df_15m.empty:
+            try:
+                from app.engines.smart_money import SmartMoneyConceptsEngine
+                smc_15m = SmartMoneyConceptsEngine().analyze(df_15m.tail(100), "", "15m")
+                htf_zone_obs = [
+                    ob for ob in smc_15m.order_blocks
+                    if ob.type == "BEARISH" and not ob.mitigated
+                    and ob.low >= entry_low * 0.99
+                    and ob.high <= entry_high * 1.005
+                ]
+                if htf_zone_obs:
+                    refined_ob = htf_zone_obs[-1]
+                    entry_low = refined_ob.low
+                    entry_high = refined_ob.high
+                    logger.debug(f"MTER 15m: Entry refined to [{entry_low:.4f} - {entry_high:.4f}]")
+            except Exception:
+                pass
+
         swing_high = _find_nearest_swing_high(df, entry_high)
-        sl = (swing_high + atr * 0.15) if (swing_high is not None and swing_high > entry_high) else (entry_high + atr * 1.0)
+        structure_sl = (swing_high + atr * 0.15) if (swing_high is not None and swing_high > entry_high) else (entry_high + atr * 1.0)
+        # Volatility-Adjusted SL: use whichever gives MORE room (further from entry)
+        atr_based_sl = entry_high + atr_sl_floor
+        sl = max(structure_sl, atr_based_sl)  # max = further above for SELL
 
         risk = sl - entry_high
         tp1 = entry_low - risk * 2.0
@@ -141,6 +199,9 @@ class SetupGenerator:
         sentiment_data: Optional[Dict] = None,
         market_intel_data: Optional[Dict] = None,
         volume_delta: Optional[float] = None,
+        df_15m: Optional[pd.DataFrame] = None,
+        rsi_4h: Optional[float] = None,
+        market_regime: Optional[str] = None,
     ) -> Optional[TradeSetupSchema]:
         """Generate a setup ONLY if ALL quality gates pass."""
 
@@ -166,18 +227,40 @@ class SetupGenerator:
 
         direction = "BUY" if confluence.recommendation in ("BUY", "STRONG_BUY") else "SELL"
 
-        # ---- Quality Gate 3: HTF bias must be at least partially aligned ----
-        # For big caps, require at least 1 of 2 HTF timeframes to agree.
-        # (1D+4H both opposite = skip; 1 neutral is OK for entry)
+        # ---- Quality Gate 3: HTF Bias Lock ----
+        # V6: Hardened — 4H is the DOMINANT timeframe for 1H entries.
+        # If 4H is opposite to direction, REJECT unless there's a strong reversal exception:
+        #   - BUY despite 4H BEARISH: only if RSI 4H < 20 (extreme oversold divergence)
+        #   - SELL despite 4H BULLISH: only if RSI 4H > 80 (extreme overbought divergence)
         htf_details = confluence.details.get("htf_bias", {})
         htf_biases = htf_details.get("biases", {})  # e.g. {"1d": "BULLISH", "4h": "BEARISH"}
         if htf_biases:
-            biases_list = list(htf_biases.values())
+            htf_4h_bias = htf_biases.get("4h", "SIDEWAYS")
+            htf_1d_bias = htf_biases.get("1d", "SIDEWAYS")
             opposite = "BEARISH" if direction == "BUY" else "BULLISH"
-            # Reject ONLY if ALL HTF biases are opposite direction (not just one)
-            if all(b == opposite for b in biases_list):
-                _reject("htf_bias", f"ALL htf biases are {opposite}, direction={direction}")
-                return None
+
+            # Dominant bias = 4H (more relevant to 1H entries)
+            dominant_opposite = htf_4h_bias == opposite
+            reinforcing_opposite = htf_1d_bias == opposite
+
+            if dominant_opposite:
+                # 4H is against us — check if RSI extreme provides reversal exception
+                reversal_exception = False
+                if rsi_4h is not None:
+                    if direction == "BUY" and rsi_4h < 20:  # Extreme oversold
+                        reversal_exception = True
+                        logger.debug(f"[{symbol}] HTF lock exception: BUY vs 4H BEARISH allowed (RSI4H={rsi_4h:.1f} < 20)")
+                    elif direction == "SELL" and rsi_4h > 80:  # Extreme overbought
+                        reversal_exception = True
+                        logger.debug(f"[{symbol}] HTF lock exception: SELL vs 4H BULLISH allowed (RSI4H={rsi_4h:.1f} > 80)")
+
+                if not reversal_exception:
+                    _reject("htf_bias_lock", f"4H bias={htf_4h_bias} opposes direction={direction}, no RSI extreme exception (rsi_4h={rsi_4h})")
+                    return None
+
+            elif reinforcing_opposite and not dominant_opposite:
+                # 4H agrees but 1D opposes — allow but flag (partial alignment)
+                logger.debug(f"[{symbol}] HTF partial conflict: 4H={htf_4h_bias}, 1D={htf_1d_bias}, direction={direction} (proceeding)")
 
         # ---- Quality Gate 4: Need SMC edge OR structure confirmation ----
         # (NOT both — big caps may not always be in an OB but still have valid BOS)
@@ -204,7 +287,7 @@ class SetupGenerator:
 
         last_price = float(df.iloc[-1]["close"])
         entry_low, entry_high, sl, tp1, tp2, tp3 = self._calculate_levels(
-            direction, last_price, smc, df
+            direction, last_price, smc, df, df_15m=df_15m
         )
 
         risk = abs(entry_low - sl) if direction == "BUY" else abs(sl - entry_high)
@@ -262,10 +345,11 @@ class SetupGenerator:
 
     def _calculate_levels(
         self, direction: str, last_price: float,
-        smc: SmartMoneyAnalysis, df: pd.DataFrame
+        smc: SmartMoneyAnalysis, df: pd.DataFrame,
+        df_15m: Optional[pd.DataFrame] = None,
     ):
         """Delegate to the shared canonical level calculator."""
-        return calculate_trade_levels(direction, last_price, smc, df)
+        return calculate_trade_levels(direction, last_price, smc, df, df_15m=df_15m)
 
     @staticmethod
     def _find_nearest_swing_low(df: pd.DataFrame, reference_price: float, lookback: int = 20) -> Optional[float]:

@@ -76,6 +76,33 @@ async def _fetch_okx_symbols() -> List[str]:
     return symbols[:MAX_SYMBOLS]
 
 
+async def _detect_market_regime(data_engine) -> str:
+    """
+    Market Regime Filter (V6 — item #3):
+    Detects global market regime using BTC 4H ADX.
+    - ADX > 25 = TRENDING (momentum strategies preferred: OB, BOS)
+    - ADX 18-25 = TRANSITION (both work, be selective)
+    - ADX < 18 = RANGING (reversal strategies preferred: FVG, extreme RSI)
+    """
+    try:
+        from app.utils.indicators import calculate_adx
+        btc_df = await data_engine.get_candles("BTCUSDT", "4h", 100)
+        if btc_df is None or btc_df.empty:
+            return "UNKNOWN"
+        adx = calculate_adx(btc_df)
+        if adx is None:
+            return "UNKNOWN"
+        if adx > 25:
+            return "TRENDING"
+        elif adx >= 18:
+            return "TRANSITION"
+        else:
+            return "RANGING"
+    except Exception as e:
+        logger.warning(f"Market regime detection failed: {e}")
+        return "UNKNOWN"
+
+
 async def _run_once(db_factory) -> int:
     """Run a full generation cycle. Returns number of setups generated."""
     from app.engines.market_data import MarketDataEngine
@@ -94,7 +121,11 @@ async def _run_once(db_factory) -> int:
     confluence_engine = ConfluenceEngine()
     smc_engine = SmartMoneyConceptsEngine()
     structure_analyzer = MarketStructureAnalyzer()
-    setup_gen = SetupGenerator(min_confluence_score=14, min_rr=1.8)
+    setup_gen = SetupGenerator(min_confluence_score=18, min_rr=1.8)  # V6: fixed from 14
+
+    # V6: Detect global market regime ONCE per cycle (uses BTC 4H ADX)
+    market_regime = await _detect_market_regime(data_engine)
+    logger.info(f"🌎 Market Regime: {market_regime} (BTC 4H ADX)")
 
     generated = 0
     semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
@@ -129,7 +160,37 @@ async def _run_once(db_factory) -> int:
                 smc = smc_engine.analyze(entry_df, symbol, timeframe)
                 structure = structure_analyzer.analyze(entry_df, symbol, timeframe)
 
-                setup_schema = setup_gen.generate(symbol, timeframe, confluence, smc, structure, entry_df)
+                # V6: Extract RSI 4H for HTF Bias Lock exception logic
+                rsi_4h = None
+                df_4h = candles_by_tf.get("4h")
+                if df_4h is not None and not df_4h.empty:
+                    try:
+                        from app.utils.indicators import calculate_rsi
+                        rsi_4h = float(calculate_rsi(df_4h) or 50)
+                    except Exception:
+                        pass
+
+                # V6: Extract ATR for DB logging
+                atr_val = None
+                try:
+                    from app.engines.setup_generator import _estimate_atr
+                    atr_val = float(_estimate_atr(entry_df.tail(20)))
+                except Exception:
+                    pass
+
+                # V6: HTF biases for DB logging
+                htf_bias_4h = confluence.details.get("htf_bias", {}).get("biases", {}).get("4h")
+                htf_bias_1d = confluence.details.get("htf_bias", {}).get("biases", {}).get("1d")
+
+                # V6: Get 15m candles for MTER entry refinement
+                df_15m = candles_by_tf.get("15m")
+
+                setup_schema = setup_gen.generate(
+                    symbol, timeframe, confluence, smc, structure, entry_df,
+                    df_15m=df_15m,
+                    rsi_4h=rsi_4h,
+                    market_regime=market_regime,
+                )
                 if setup_schema is None:
                     return
 
@@ -161,6 +222,12 @@ async def _run_once(db_factory) -> int:
                         status="ACTIVE",
                         timeframe=timeframe,
                         explanation=setup_schema.explanation,
+                        # V6: Signal DB Logging
+                        entry_price_at_signal=float(entry_df.iloc[-1]["close"]) if not entry_df.empty else None,
+                        market_regime=market_regime,
+                        htf_bias_4h=htf_bias_4h,
+                        htf_bias_1d=htf_bias_1d,
+                        atr_at_signal=atr_val,
                     )
                     db.add(new_setup)
                     db.commit()

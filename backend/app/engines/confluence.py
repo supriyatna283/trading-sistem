@@ -35,7 +35,7 @@ SCORE_WEIGHTS = {
     "structure_confirmed": 1,    # BOS or CHOCH on entry TF
     "premium_discount": 1,       # Buying in discount / selling in premium
     "volume_confirmation": 1,    # Volume spike confirms move (2.0x threshold)
-    "session_quality": 1,        # Trading during London/NY active sessions
+    "session_quality": 3,        # Session weighting: +2 prime, +1 active, 0 asian, -3 dead
     "mtf_confirmation": 1,       # Multi-TF confirmation level >= MODERATE
     "news_clear": 1,             # No high-impact news within 2 hours
     "sentiment_aligned": 1,      # Macro sentiment supports direction (F&G + Funding)
@@ -61,11 +61,13 @@ SCORE_WEIGHTS = {
     "open_interest_increasing": 1,# Fresh capital supports move
 }
 
-MAX_SCORE = sum(SCORE_WEIGHTS.values())  # 33
+MAX_SCORE = sum(v for v in SCORE_WEIGHTS.values() if v > 0)  # ~35 (excludes possible negatives)
 
 # Session windows (UTC hours)
-LONDON_SESSION = (8, 16)   # 08:00 - 16:00 UTC
-NY_SESSION = (13, 21)      # 13:00 - 21:00 UTC
+LONDON_SESSION   = (8, 16)    # 08:00 - 16:00 UTC
+NY_SESSION       = (13, 21)   # 13:00 - 21:00 UTC
+PRIME_HOURS      = {8, 9, 13, 14}   # London Open + NY Open: highest follow-through
+DEAD_HOURS       = set(range(0, 6)) # 00:00-05:59 UTC: lowest liquidity, most noise
 
 
 class ConfluenceEngine:
@@ -220,13 +222,14 @@ class ConfluenceEngine:
         # NEW V3 CRITERIA
         # ============================================================
 
-        # 9. Session quality — only trade during London or NY session
-        session_ok = self._check_session_quality(entry_df)
-        if session_ok:
-            total_score += SCORE_WEIGHTS["session_quality"]
+        # 9. Session quality — weighted by trading session quality (V6)
+        session_score = self._get_session_score(entry_df)
+        adjusted_session = max(-3, min(SCORE_WEIGHTS["session_quality"], session_score))
+        total_score += adjusted_session
         details["session"] = {
-            "in_session": session_ok,
-            "score": SCORE_WEIGHTS["session_quality"] if session_ok else 0,
+            "in_session": session_score > 0,
+            "score": adjusted_session,
+            "session_weight": session_score,
         }
 
         # 10. MTF confirmation level — must be at least MODERATE
@@ -592,23 +595,43 @@ class ConfluenceEngine:
         
         return last_vol > median_vol * threshold_multiplier
 
-    def _check_session_quality(self, df: pd.DataFrame) -> bool:
-        """Check if the latest candle falls within London or NY session (UTC)."""
+    def _get_session_score(self, df: pd.DataFrame) -> int:
+        """
+        Weighted session scoring (V6 — Liquid Session Weighting).
+
+        Returns:
+          +2  = Prime session (London Open 08-10 UTC, NY Open 13-15 UTC)
+          +1  = Active session (London 10-16, NY 15-21 UTC overlap region)
+           0  = Asian session or weekend (neutral — not penalised)
+          -3  = Dead hours (00:00-05:59 UTC) — low liquidity, high noise
+
+        Rationale: Signals in dead hours have historically lower follow-through
+        probability because spreads are wider and institutional desks are offline.
+        """
         if df.empty or "open_time" not in df.columns:
-            return False  # V3 FIX: No timestamp = cannot confirm session quality, do not reward
+            return 0  # No timestamp = no bonus/penalty
         try:
             last_time = pd.Timestamp(df.iloc[-1]["open_time"])
             if last_time.tzinfo is None:
                 hour = last_time.hour
             else:
                 hour = last_time.tz_convert("UTC").hour
-            # London 08-16 UTC or NY 13-21 UTC
+
+            if hour in DEAD_HOURS:
+                return -3  # Dead hours penalty
+            if hour in PRIME_HOURS:
+                return 2   # Prime session bonus
             in_london = LONDON_SESSION[0] <= hour < LONDON_SESSION[1]
             in_ny = NY_SESSION[0] <= hour < NY_SESSION[1]
-            return in_london or in_ny
+            if in_london or in_ny:
+                return 1   # Active session
+            return 0       # Asian session — neutral
         except Exception:
-            return False  # V3 FIX: Do not reward session score on error
+            return 0
 
+    def _check_session_quality(self, df: pd.DataFrame) -> bool:
+        """Legacy boolean wrapper for backward compatibility."""
+        return self._get_session_score(df) > 0
     def _check_news_clear(self, news_events: Optional[List[Dict]]) -> bool:
         """Check that no high-impact events are within 2 hours of now."""
         if news_events is None:

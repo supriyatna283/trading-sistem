@@ -38,6 +38,7 @@ from app.routers import (
 )
 from app.services.auto_scheduler import run_scheduler, stop_scheduler, scheduler_state
 from app.services.whale_detector import start_whale_pollers, stop_whale_pollers
+from app.services.signal_watchdog import run_signal_watchdog
 from app.security import require_api_key
 from fastapi import Depends
 
@@ -75,9 +76,11 @@ async def lifespan(app: FastAPI):
     elif not cfg.API_KEY:
         logger.warning("⚠️ API_KEY not set — write endpoints are open (development only)")
 
-    # 2. Start Auto Signal Scheduler as background asyncio task
+    # 2. Start Auto Signal Scheduler + Signal Watchdog as background asyncio tasks
     try:
         _scheduler_task = asyncio.create_task(run_scheduler(get_db))
+        asyncio.create_task(run_signal_watchdog(get_db))
+        logger.info("✅ Auto Signal Scheduler + Signal Watchdog started")
         logger.info("🤖 Auto Signal Scheduler launched (every 30 minutes)")
     except Exception as e:
         logger.error(f"❌ Scheduler failed to start: {e}")
