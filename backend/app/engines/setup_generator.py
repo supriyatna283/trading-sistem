@@ -72,16 +72,19 @@ def _find_nearest_swing_high(df: pd.DataFrame, reference_price: float, lookback:
 def calculate_trade_levels(
     direction: str, last_price: float, smc, df: pd.DataFrame,
     df_15m: Optional[pd.DataFrame] = None,
+    sr_data: Optional[Dict] = None,
 ) -> tuple:
     """
     Canonical level calculator — SHARED by Setup Engine AND AI Analysis.
     Uses OB-based entry zones + structure-based SL + 2R/3R/4.5R TP targets.
 
-    V6 Improvements:
-    - Volatility-Adjusted SL: SL = max(structure_sl, entry ± 1.5×ATR) to avoid
-      premature stop-outs in volatile markets (BUG 5 from audit).
-    - MTER 15m: If df_15m is provided, refines entry zone using 15m OB/FVG
-      for tighter entry and better R:R ratio (3x+ instead of 1.8x).
+    V7 Improvements:
+    - S/R-Aware Entry: Entry zone snapped to nearest Support (BUY) or
+      Resistance (SELL) if it falls within 1.5×ATR of the OB zone.
+      Institutional players accumulate/distribute exactly AT these levels.
+    - S/R TP Snap: TP1/TP2 automatically snapped to the nearest S/R target
+      within 3% of the default 2R/3R levels — more realistic profit targets.
+    - V6: Volatility-Adjusted SL + MTER 15m (still active).
 
     Returns: (entry_low, entry_high, sl, tp1, tp2, tp3)
     """
@@ -175,6 +178,70 @@ def calculate_trade_levels(
         tp1 = entry_low - risk * 2.0
         tp2 = entry_low - risk * 3.0
         tp3 = entry_low - risk * 4.5
+
+    # ── S/R SNAP HELPER ──────────────────────────────────────────────────────
+    def _snap_to_sr(price: float, levels: list, threshold_pct: float = 3.0) -> float:
+        """Snap a price to the nearest S/R level if within threshold_pct."""
+        if not levels:
+            return price
+        nearest = min(levels, key=lambda lvl: abs(lvl - price))
+        if abs(nearest - price) / price * 100 <= threshold_pct:
+            logger.debug(f"S/R Snap: {price:.6f} → {nearest:.6f} (within {threshold_pct}%)")
+            return nearest
+        return price
+
+    # Parse S/R levels from market intel data
+    supports = sr_data.get("supports", []) if sr_data else []
+    resistances = sr_data.get("resistances", []) if sr_data else []
+    nearest_support = sr_data.get("nearest_support", 0) if sr_data else 0
+    nearest_resistance = sr_data.get("nearest_resistance", 0) if sr_data else 0
+
+    if direction == "BUY":
+        # ── BUY Entry: Snap entry_low to nearest Support within 1.5×ATR ──────
+        if nearest_support > 0 and abs(nearest_support - entry_low) <= atr * 1.5:
+            old = entry_low
+            entry_low = nearest_support
+            # Keep entry_high slightly above support zone
+            entry_high = max(entry_high, entry_low + atr * 0.2)
+            logger.debug(f"S/R BUY Entry Snap: {old:.6f} → entry_low={entry_low:.6f} (Support)")
+
+        # ── BUY TP Snap: Snap TP1 to nearest Resistance ───────────────────────
+        # TP1 should stop just BELOW resistance (−0.1% buffer), not above it
+        tp_resistances = [r for r in resistances if r > entry_high]
+        if tp_resistances:
+            nearest_tp_r = min(tp_resistances, key=lambda r: abs(r - tp1))
+            if abs(nearest_tp_r - tp1) / max(tp1, 1) * 100 <= 5.0:  # within 5%
+                tp1 = nearest_tp_r * 0.999  # just below resistance
+                logger.debug(f"S/R BUY TP1 Snap: → {tp1:.6f} (below Resistance {nearest_tp_r:.6f})")
+            # TP2 snap to next resistance level
+            tp2_resistances = [r for r in resistances if r > tp1 * 1.005]
+            if tp2_resistances:
+                nearest_tp2_r = min(tp2_resistances, key=lambda r: abs(r - tp2))
+                if abs(nearest_tp2_r - tp2) / max(tp2, 1) * 100 <= 8.0:
+                    tp2 = nearest_tp2_r * 0.999
+                    logger.debug(f"S/R BUY TP2 Snap: → {tp2:.6f}")
+
+    else:  # SELL
+        # ── SELL Entry: Snap entry_high to nearest Resistance within 1.5×ATR ─
+        if nearest_resistance > 0 and abs(nearest_resistance - entry_high) <= atr * 1.5:
+            old = entry_high
+            entry_high = nearest_resistance
+            entry_low = min(entry_low, entry_high - atr * 0.2)
+            logger.debug(f"S/R SELL Entry Snap: {old:.6f} → entry_high={entry_high:.6f} (Resistance)")
+
+        # ── SELL TP Snap: Snap TP1 to nearest Support ────────────────────────
+        tp_supports = [s for s in supports if s < entry_low]
+        if tp_supports:
+            nearest_tp_s = min(tp_supports, key=lambda s: abs(s - tp1))
+            if abs(nearest_tp_s - tp1) / max(abs(tp1), 1) * 100 <= 5.0:
+                tp1 = nearest_tp_s * 1.001  # just above support
+                logger.debug(f"S/R SELL TP1 Snap: → {tp1:.6f} (above Support {nearest_tp_s:.6f})")
+            tp2_supports = [s for s in supports if s < tp1 * 0.995]
+            if tp2_supports:
+                nearest_tp2_s = min(tp2_supports, key=lambda s: abs(s - tp2))
+                if abs(nearest_tp2_s - tp2) / max(abs(tp2), 1) * 100 <= 8.0:
+                    tp2 = nearest_tp2_s * 1.001
+                    logger.debug(f"S/R SELL TP2 Snap: → {tp2:.6f}")
 
     return entry_low, entry_high, sl, tp1, tp2, tp3
 
@@ -286,8 +353,10 @@ class SetupGenerator:
                 return None
 
         last_price = float(df.iloc[-1]["close"])
-        entry_low, entry_high, sl, tp1, tp2, tp3 = self._calculate_levels(
-            direction, last_price, smc, df, df_15m=df_15m
+        # V7: Extract S/R data from market intel for entry/TP snapping
+        sr_data = market_intel_data.get("support_resistance") if market_intel_data else None
+        entry_low, entry_high, sl, tp1, tp2, tp3 = calculate_trade_levels(
+            direction, last_price, smc, df, df_15m=df_15m, sr_data=sr_data
         )
 
         risk = abs(entry_low - sl) if direction == "BUY" else abs(sl - entry_high)
@@ -477,10 +546,17 @@ class SetupGenerator:
                 ob_label = "buy wall dominant" if ratio > 1.2 else "sell wall dominant" if ratio < 0.8 else "balanced"
                 parts.append(f"Order Book: {ratio:.2f}x ({ob_label})")
 
-            # Support & Resistance
+            # Support & Resistance (V7: show snap info if S/R was used)
             sr = mi.get("support_resistance", {})
-            if sr.get("nearest_support", 0) > 0:
-                parts.append(f"Support: {sr['nearest_support']:.2f} | Resistance: {sr.get('nearest_resistance', 0):.2f}")
+            nearest_s = sr.get("nearest_support", 0)
+            nearest_r = sr.get("nearest_resistance", 0)
+            if nearest_s > 0 or nearest_r > 0:
+                sr_msg = f"S/R Reference — Support: {nearest_s:.4f} | Resistance: {nearest_r:.4f}"
+                if direction == "BUY" and nearest_s > 0:
+                    sr_msg += f" (Entry anchored near Support {nearest_s:.4f}; TP targets Resistance)"
+                elif direction == "SELL" and nearest_r > 0:
+                    sr_msg += f" (Entry anchored near Resistance {nearest_r:.4f}; TP targets Support)"
+                parts.append(sr_msg)
 
             # Liquidation
             liq = mi.get("liquidation", {})

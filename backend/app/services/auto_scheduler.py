@@ -185,11 +185,22 @@ async def _run_once(db_factory) -> int:
                 # V6: Get 15m candles for MTER entry refinement
                 df_15m = candles_by_tf.get("15m")
 
+                # V7: Calculate S/R data for entry/TP snapping
+                market_intel_data = None
+                try:
+                    from app.engines.market_intel import MarketIntelEngine
+                    intel = MarketIntelEngine()
+                    sr_data = intel.calculate_support_resistance(entry_df, symbol)
+                    market_intel_data = {"support_resistance": sr_data}
+                except Exception as e:
+                    logger.debug(f"S/R calc failed for {symbol}: {e}")
+
                 setup_schema = setup_gen.generate(
                     symbol, timeframe, confluence, smc, structure, entry_df,
                     df_15m=df_15m,
                     rsi_4h=rsi_4h,
                     market_regime=market_regime,
+                    market_intel_data=market_intel_data,
                 )
                 if setup_schema is None:
                     return
