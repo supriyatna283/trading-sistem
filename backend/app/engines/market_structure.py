@@ -42,7 +42,10 @@ class MarketStructureAnalyzer:
     # Swing point detection
     # ------------------------------------------------------------------
     def _find_swing_points(self, df: pd.DataFrame) -> List[SwingPoint]:
-        """Identify swing highs and lows using local extremes."""
+        """Identify swing highs and lows using local extremes.
+        V2 FIX: Use >= instead of == for float comparison to avoid missing
+        valid swing points due to floating-point representation differences.
+        """
         highs = df["high"].values
         lows = df["low"].values
         n = len(df)
@@ -50,15 +53,15 @@ class MarketStructureAnalyzer:
         swings: List[SwingPoint] = []
 
         for i in range(lb, n - lb):
-            # Swing High: high[i] is the max of the surrounding window
-            if highs[i] == max(highs[i - lb : i + lb + 1]):
+            # Swing High: high[i] is the max (or tied for max) of the surrounding window
+            if highs[i] >= max(highs[i - lb : i + lb + 1]):
                 time_val = df.iloc[i]["open_time"] if "open_time" in df.columns else None
                 swings.append(SwingPoint(
                     index=i, price=float(highs[i]), type="HIGH",
                     time=time_val,
                 ))
-            # Swing Low: low[i] is the min of the surrounding window
-            if lows[i] == min(lows[i - lb : i + lb + 1]):
+            # Swing Low: low[i] is the min (or tied for min) of the surrounding window
+            if lows[i] <= min(lows[i - lb : i + lb + 1]):
                 time_val = df.iloc[i]["open_time"] if "open_time" in df.columns else None
                 swings.append(SwingPoint(
                     index=i, price=float(lows[i]), type="LOW",

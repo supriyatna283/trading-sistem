@@ -288,10 +288,10 @@ def detect_divergence(df: pd.DataFrame, swing_lookback: int = 3, max_bars: int =
     """
     Detect RSI & MACD Divergence using genuine swing pivot comparison.
 
-    V2 FIX: Divergence must be measured between two SWING POINTS (pivot
-    highs/lows), NOT between two arbitrary candles n bars apart.
-    Comparing closes[-1] vs closes[-n-1] produces false divergence signals
-    because those points are not structural turning points.
+    V3 FIX: Correct RSI series alignment.
+    `rsi_aligned` now has length == len(closes), with index 0 = nan and
+    index i = RSI value for bar i. This ensures `rsi_aligned[swing_idx]`
+    returns the RSI corresponding to the correct price bar.
 
     Method:
     - Regular Bullish: price makes LOWER LOW at pivot, RSI makes HIGHER LOW
@@ -308,44 +308,39 @@ def detect_divergence(df: pd.DataFrame, swing_lookback: int = 3, max_bars: int =
         lows = df["low"].astype(float).values
         n = len(closes)
 
-        # Build RSI series
+        # Build RSI series — length == n (aligned with closes)
+        # Use pandas EWM for proper Wilder's smoothing (same as calculate_rsi)
         period = 14
-        deltas = np.diff(closes)
-        gains = np.where(deltas > 0, deltas, 0.0)
-        losses = np.where(deltas < 0, -deltas, 0.0)
-        avg_gain = np.zeros_like(gains)
-        avg_loss = np.zeros_like(losses)
-        avg_gain[period - 1] = np.mean(gains[:period])
-        avg_loss[period - 1] = np.mean(losses[:period])
-        for i in range(period, len(gains)):
-            avg_gain[i] = (avg_gain[i - 1] * (period - 1) + gains[i]) / period
-            avg_loss[i] = (avg_loss[i - 1] * (period - 1) + losses[i]) / period
+        close_series = pd.Series(closes)
+        deltas = close_series.diff()
+        gains = deltas.clip(lower=0)
+        losses = (-deltas).clip(lower=0)
+        avg_gain = gains.ewm(com=period - 1, min_periods=period).mean()
+        avg_loss = losses.ewm(com=period - 1, min_periods=period).mean()
         with np.errstate(divide="ignore", invalid="ignore"):
-            rs = np.where(avg_loss != 0, avg_gain / avg_loss, 100.0)
-        rsi_series = 100 - (100 / (1 + rs))
-        # Pad to align with closes (rsi_series is len(closes)-1)
-        rsi_aligned = np.concatenate([[np.nan], rsi_series])
+            rs = avg_gain / avg_loss.replace(0, np.nan)
+        rsi_series = (100 - (100 / (1 + rs))).values  # length == n, index-aligned with closes
 
         # Find swing lows (for bullish divergence) using 3-bar pivot
         lb = swing_lookback
         search_start = max(lb, n - max_bars)
-        swing_lows = []   # (bar_index, close_price, rsi_value)
-        swing_highs = []  # (bar_index, close_price, rsi_value)
+        swing_lows = []   # (bar_index, low_price, rsi_value)
+        swing_highs = []  # (bar_index, high_price, rsi_value)
 
         for i in range(search_start, n - lb):
+            rsi_val = rsi_series[i]
+            if np.isnan(rsi_val):
+                continue
+
             # Swing Low: current low is lower than lb bars on each side
-            if all(lows[i] < lows[i - j] for j in range(1, lb + 1)) and \
-               all(lows[i] < lows[i + j] for j in range(1, lb + 1)):
-                rsi_val = rsi_aligned[i] if not np.isnan(rsi_aligned[i]) else None
-                if rsi_val is not None:
-                    swing_lows.append((i, float(lows[i]), float(rsi_val)))
+            if all(lows[i] <= lows[i - j] for j in range(1, lb + 1)) and \
+               all(lows[i] <= lows[i + j] for j in range(1, lb + 1)):
+                swing_lows.append((i, float(lows[i]), float(rsi_val)))
 
             # Swing High: current high is higher than lb bars on each side
-            if all(highs[i] > highs[i - j] for j in range(1, lb + 1)) and \
-               all(highs[i] > highs[i + j] for j in range(1, lb + 1)):
-                rsi_val = rsi_aligned[i] if not np.isnan(rsi_aligned[i]) else None
-                if rsi_val is not None:
-                    swing_highs.append((i, float(highs[i]), float(rsi_val)))
+            if all(highs[i] >= highs[i - j] for j in range(1, lb + 1)) and \
+               all(highs[i] >= highs[i + j] for j in range(1, lb + 1)):
+                swing_highs.append((i, float(highs[i]), float(rsi_val)))
 
         rsi_div = False
         div_type = "none"
@@ -382,9 +377,9 @@ def detect_divergence(df: pd.DataFrame, swing_lookback: int = 3, max_bars: int =
         # --- MACD Divergence Confirmation ---
         macd_div = False
         if rsi_div and len(df) >= 35:
-            close_series = pd.Series(closes)
-            fast_ema = close_series.ewm(span=12, adjust=False).mean()
-            slow_ema = close_series.ewm(span=26, adjust=False).mean()
+            close_s = pd.Series(closes)
+            fast_ema = close_s.ewm(span=12, adjust=False).mean()
+            slow_ema = close_s.ewm(span=26, adjust=False).mean()
             macd_line = fast_ema - slow_ema
             signal_line = macd_line.ewm(span=9, adjust=False).mean()
             hist = (macd_line - signal_line).values
@@ -393,14 +388,14 @@ def detect_divergence(df: pd.DataFrame, swing_lookback: int = 3, max_bars: int =
                 # MACD hist should also be making higher lows at the same pivots
                 h_prev = hist[swing_lows[-2][0]] if swing_lows[-2][0] < len(hist) else None
                 h_curr = hist[swing_lows[-1][0]] if swing_lows[-1][0] < len(hist) else None
-                if h_prev is not None and h_curr is not None and h_curr > h_prev:
+                if h_prev is not None and h_curr is not None and not np.isnan(h_prev) and not np.isnan(h_curr) and h_curr > h_prev:
                     macd_div = True
                     strength = min(100, strength + 10)
 
             elif div_type == "bearish" and len(swing_highs) >= 2:
                 h_prev = hist[swing_highs[-2][0]] if swing_highs[-2][0] < len(hist) else None
                 h_curr = hist[swing_highs[-1][0]] if swing_highs[-1][0] < len(hist) else None
-                if h_prev is not None and h_curr is not None and h_curr < h_prev:
+                if h_prev is not None and h_curr is not None and not np.isnan(h_prev) and not np.isnan(h_curr) and h_curr < h_prev:
                     macd_div = True
                     strength = min(100, strength + 10)
 

@@ -41,7 +41,7 @@ class MarketScanner:
         self.structure = MarketStructureAnalyzer()
         self.smc = SmartMoneyConceptsEngine()
         self.confluence = ConfluenceEngine()
-        self.setup_gen = SetupGenerator(min_confluence_score=16, min_rr=1.8)
+        self.setup_gen = SetupGenerator(min_confluence_score=18, min_rr=1.8)
         self.mtf_engine = MTFConfirmationEngine()
         self.sentiment_engine = SentimentEngine()
         self.news_engine = NewsCalendarEngine()
@@ -302,15 +302,24 @@ class MarketScanner:
         rejection_reasons = []
         hard_rejected = False
         
+        # Use dominant_bias from confluence scoring (HTF-weighted), not just 1H structure
+        # This prevents false rejection when 1H is pulling back but HTF is still bullish
+        dominant_bias = conf.details.get("htf_bias", {}).get("biases", {})
+        htf_non_sw = [b for b in dominant_bias.values() if b != "SIDEWAYS"]
+        if len(htf_non_sw) >= 1 and len(set(htf_non_sw)) == 1:
+            effective_bias = htf_non_sw[0]
+        else:
+            effective_bias = structure.bias
+        
         if signal_score < 25:
             hard_rejected = True
             rejection_reasons.append("Low confluence")
         
         if rsi_1h is not None:
-            if structure.bias == "BULLISH" and rsi_1h > 75:
+            if effective_bias == "BULLISH" and rsi_1h > 75:
                 hard_rejected = True
                 rejection_reasons.append("Overbought RSI")
-            if structure.bias == "BEARISH" and rsi_1h < 25:
+            if effective_bias == "BEARISH" and rsi_1h < 25:
                 hard_rejected = True
                 rejection_reasons.append("Oversold RSI")
 

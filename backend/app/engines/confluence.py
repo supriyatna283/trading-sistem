@@ -71,7 +71,7 @@ NY_SESSION = (13, 21)      # 13:00 - 21:00 UTC
 class ConfluenceEngine:
     """V4 — Scores trade setups with market intelligence + multi-timeframe confluence."""
 
-    def __init__(self, min_confluence_score: int = 16):
+    def __init__(self, min_confluence_score: int = 18):
         self.structure_analyzer = MarketStructureAnalyzer()
         self.smc_engine = SmartMoneyConceptsEngine()
         self.min_confluence_score = min_confluence_score
@@ -412,8 +412,8 @@ class ConfluenceEngine:
         vp_data = calculate_volume_profile(entry_df)
         vp_ok = False
         if vp_data["poc"] is not None:
-            # Score if in value area OR very close to POC (<1%)
-            poc_close = (vp_data.get("poc_distance_pct") or 999) < 1.0
+            # Score if in value area OR very close to POC (< 2%) — raised from 1% for volatile assets
+            poc_close = (vp_data.get("poc_distance_pct") or 999) < 2.0
             vp_ok = vp_data["in_value_area"] or poc_close
         if vp_ok:
             total_score += SCORE_WEIGHTS["volume_profile_poc"]
@@ -563,32 +563,39 @@ class ConfluenceEngine:
     def _check_volume_confirmation(self, df: pd.DataFrame, symbol: str = "") -> bool:
         """
         Check if recent candle has above-average volume.
-        - BTC/ETH/BNB (Majors): 1.3x threshold (very liquid, 2x is extremely rare)
-        - Tier2 large caps (SOL/XRP/ADA): 1.5x threshold
-        - Alts: 1.8x threshold
+        V3 FIX: Uses MEDIAN as the baseline (robust against previous spikes)
+        instead of MEAN which is inflated by single large volume events.
+        - BTC/ETH/BNB (Majors): 1.5x median threshold
+        - Tier2 large caps (SOL/XRP/ADA): 1.8x median threshold
+        - Alts: 2.0x median threshold
         """
         if df.empty or len(df) < 20 or "volume" not in df.columns:
             return False
         
         volumes = df["volume"].astype(float).values
-        avg_vol = np.mean(volumes[-20:])
+        # Use median of the last 50 candles (excluding the last one being evaluated)
+        lookback_vol = volumes[-51:-1] if len(volumes) > 51 else volumes[:-1]
+        median_vol = float(np.median(lookback_vol)) if len(lookback_vol) > 0 else 1.0
         last_vol = volumes[-1]
+        
+        if median_vol <= 0:
+            return False
         
         tier1 = {"BTCUSDT", "ETHUSDT", "BNBUSDT"}
         tier2 = {"SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT"}
         if symbol.upper() in tier1:
-            threshold_multiplier = 1.3
-        elif symbol.upper() in tier2:
             threshold_multiplier = 1.5
-        else:
+        elif symbol.upper() in tier2:
             threshold_multiplier = 1.8
+        else:
+            threshold_multiplier = 2.0
         
-        return last_vol > avg_vol * threshold_multiplier
+        return last_vol > median_vol * threshold_multiplier
 
     def _check_session_quality(self, df: pd.DataFrame) -> bool:
         """Check if the latest candle falls within London or NY session (UTC)."""
         if df.empty or "open_time" not in df.columns:
-            return True  # If we can't determine, don't penalize
+            return False  # V3 FIX: No timestamp = cannot confirm session quality, do not reward
         try:
             last_time = pd.Timestamp(df.iloc[-1]["open_time"])
             if last_time.tzinfo is None:
@@ -600,7 +607,7 @@ class ConfluenceEngine:
             in_ny = NY_SESSION[0] <= hour < NY_SESSION[1]
             return in_london or in_ny
         except Exception:
-            return True  # Don't penalize on error
+            return False  # V3 FIX: Do not reward session score on error
 
     def _check_news_clear(self, news_events: Optional[List[Dict]]) -> bool:
         """Check that no high-impact events are within 2 hours of now."""
@@ -677,9 +684,9 @@ class ConfluenceEngine:
     def _check_ema_aligned(self, df: pd.DataFrame, ema_value: Optional[float], bias: str) -> bool:
         """
         Check if price is on the correct side of the 200 EMA for trend alignment.
-        Allows up to 8% pullback through the EMA for altcoins in trending markets.
-        This handles the common scenario: alt coin pulls back through EMA200
-        during a broader bullish trend — still a valid HTF-aligned entry.
+        V3 FIX: Toleransi dikurangi dari 8% ke 3% agar tidak memberikan sinyal BUY
+        saat harga sudah jauh di bawah EMA200 (bearish territory yang sebenarnya).
+        3% di bawah EMA200 masih dianggap valid pullback/retest yang wajar.
         """
         if ema_value is None or df.empty:
             return False
@@ -688,11 +695,11 @@ class ConfluenceEngine:
         ema_distance_pct = (last_close - ema_value) / ema_value * 100  # + = above EMA
 
         if bias == "BULLISH":
-            # Price above EMA OR within 8% below EMA (deep pullback allowed)
-            return ema_distance_pct > -8.0
+            # Price above EMA OR within 3% below EMA (shallow pullback allowed)
+            return ema_distance_pct > -3.0
         elif bias == "BEARISH":
-            # Price below EMA OR within 8% above EMA
-            return ema_distance_pct < 8.0
+            # Price below EMA OR within 3% above EMA
+            return ema_distance_pct < 3.0
         return False
 
     def _check_macd_aligned(self, hist: Optional[float], bias: str) -> bool:
@@ -735,32 +742,35 @@ class ConfluenceEngine:
 
     def _check_stoch_rsi_aligned(self, k: Optional[float], d: Optional[float], bias: str) -> bool:
         """
-        Stochastic RSI alignment — V2 Relaxed for trending markets:
-        - BUY: %K < 50 (not overbought) AND %K >= %D (bullish momentum direction)
-        - SELL: %K > 50 (not oversold) AND %K <= %D (bearish momentum direction)
-        Previously used strict 40/60 zones, which excluded trending big caps.
+        Stochastic RSI alignment — V3 Tightened for quality signals:
+        - BUY: %K between 20-50 (rising from oversold, not yet overbought) AND %K >= %D (crossover)
+          Rationale: k < 20 might indicate further downside; k >= 50 is already elevated.
+          The sweet spot for BUY entry is 20-50 with bullish momentum.
+        - SELL: %K between 50-80 (falling from overbought, not yet oversold) AND %K <= %D
+          Rationale: k > 80 might bounce; k <= 50 already bearish-extended.
+        Previously used k < 60 which let in too many marginal setups.
         """
         if k is None or d is None:
-            return True  # Don't penalize if Stoch RSI unavailable
+            return False  # V3 FIX: Don't reward if Stoch RSI unavailable
         
         if bias == "BULLISH":
-            # Not overbought, with bullish momentum crossover
-            return k < 60 and k >= d
+            # Rising from oversold zone, bullish momentum crossover confirmed
+            return 20 <= k <= 55 and k >= d
         elif bias == "BEARISH":
-            # Not oversold, with bearish momentum crossover
-            return k > 40 and k <= d
+            # Falling from overbought zone, bearish momentum crossover confirmed
+            return 45 <= k <= 80 and k <= d
         return False
 
     def _get_recommendation(
         self, score: int, entry_bias: str, htf_biases: Dict[str, str]
     ) -> str:
-        """Map score to recommendation — V4.1 thresholds adjusted for wider acceptance."""
-        if score >= 16:  # ~48% of max score
+        """Map score to recommendation — V4.2 thresholds aligned with min_score=18."""
+        if score >= 20:  # ~60% of max score = high-quality signal
             if entry_bias == "BULLISH":
                 return "STRONG_BUY"
             elif entry_bias == "BEARISH":
                 return "STRONG_SELL"
-        if score >= 12:  # ~36% of max score 
+        if score >= 16:  # ~48% of max score = acceptable signal
             if entry_bias == "BULLISH":
                 return "BUY"
             elif entry_bias == "BEARISH":
