@@ -55,7 +55,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/ai", tags=["AI Analysis"])
 
-AI_MODEL_NAME = "nvidia/nemotron-3-ultra-550b-a55b"
+AI_MODEL_NAME = "meta/llama-3.1-70b-instruct"
 
 def _get_nvidia_client() -> AsyncOpenAI:
     settings = get_settings()
@@ -455,17 +455,20 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
         conf_details = {}
         recommendation = "NEUTRAL"
 
-    # 5. Technical indicators
+    # 5. Technical indicators (ONLY RSI, MACD, and Fibonacci as requested)
+    from app.utils.indicators import calculate_fibonacci
     try:
         rsi_val = calculate_rsi(entry_df)
-        ema20 = calculate_ema(entry_df, 20)
-        ema50 = calculate_ema(entry_df, 50)
-        ema200 = calculate_ema(entry_df, 200)
         macd_line, signal_line, macd_hist = calculate_macd(entry_df)
-        bb_upper, bb_mid, bb_lower, bb_bw = calculate_bollinger_bands(entry_df)
-        stoch_k, stoch_d = calculate_stoch_rsi(entry_df)
-        vwap_data = calculate_vwap(entry_df)
-        adx_val = calculate_adx(entry_df)
+        fib_data = calculate_fibonacci(entry_df)
+        
+        # Ignored indicators:
+        ema20 = ema50 = ema200 = None
+        bb_upper = bb_mid = bb_lower = bb_bw = None
+        stoch_k = stoch_d = None
+        vwap_data = {}
+        adx_val = None
+        
         # ATR calculation (manual since no standalone function in indicators.py)
         if len(entry_df) >= 2:
             _h = entry_df["high"].astype(float).values
@@ -477,8 +480,8 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
             atr_val = None
     except Exception as e:
         logger.warning(f"Indicators error: {e}")
-        rsi_val = ema20 = ema50 = ema200 = macd_hist = macd_line = signal_line = None
-        bb_upper = bb_mid = bb_lower = bb_bw = stoch_k = stoch_d = adx_val = atr_val = None
+        rsi_val = macd_hist = macd_line = signal_line = fib_data = atr_val = None
+        ema20 = ema50 = ema200 = bb_upper = bb_mid = bb_lower = bb_bw = stoch_k = stoch_d = adx_val = None
         vwap_data = {}
 
     # 5b. Divergence detection
@@ -568,6 +571,24 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
         {"type": f.type, "high": _safe_float(f.high), "low": _safe_float(f.low)}
         for f in unfilled_fvgs[:5]
     ]
+    
+    # Confluence highlights — V5 (Fibonacci + MACD + RSI as primary signal generators)
+    fib_det  = conf_details.get("fibonacci", {})
+    macd_det = conf_details.get("macd", {})
+    rsi_det  = conf_details.get("rsi", {})
+    confluence_highlights = {
+        # Signal Generators (12 pts max)
+        "fibonacci_near_key_level": bool(fib_det.get("is_near_key_level", False)),
+        "macd_momentum_aligned":    bool(macd_det.get("aligned", False)),
+        "rsi_zone_aligned":         bool(rsi_det.get("aligned", False)),
+        # Context Filters (6 pts max)
+        "htf_bias_aligned":         bool(conf_details.get("htf_bias", {}).get("aligned", False)),
+        "bos_choch_confirmed":      bool(conf_details.get("structure", {}).get("confirmed", False)),
+        "volume_confirmed":         bool(conf_details.get("volume", {}).get("confirmed", False)),
+        "session_quality":          bool(conf_details.get("session", {}).get("in_session", False)),
+        "news_clear":               bool(conf_details.get("news", {}).get("clear", False)),
+    }
+
     liq_prices = [_safe_float(l.price) for l in liq_levels if hasattr(l, "price")][:10]
 
     # Recent structure labels (last 8)
@@ -588,22 +609,21 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
     pd_mid = _safe_float(smc.premium_discount_mid if smc and hasattr(smc, "premium_discount_mid") else None)
     pd_zone = "PREMIUM" if pd_mid and last_close > pd_mid else ("DISCOUNT" if pd_mid else "UNKNOWN")
 
-    # Confluence highlights (force bool for JSON serialization)
+    # Confluence highlights — V5 keys (Fibonacci + MACD + RSI as primary signals)
+    fib_det  = conf_details.get("fibonacci", {})
+    macd_det = conf_details.get("macd", {})
+    rsi_det  = conf_details.get("rsi", {})
     confluence_highlights = {
-        "htf_bias_aligned": bool(conf_details.get("htf_bias", {}).get("aligned", False)),
-        "liquidity_swept": bool(conf_details.get("liquidity", {}).get("swept", False)),
-        "in_order_block": bool(conf_details.get("order_block", {}).get("in_zone", False)),
-        "fvg_present": bool(conf_details.get("fvg", {}).get("present", False)),
-        "bos_choch_confirmed": bool(conf_details.get("structure", {}).get("confirmed", False)),
-        "rsi_aligned": bool(conf_details.get("rsi", {}).get("aligned", False)),
-        "ema_aligned": bool(conf_details.get("ema", {}).get("aligned", False)),
-        "macd_aligned": bool(conf_details.get("macd", {}).get("aligned", False)),
-        "stoch_rsi_aligned": bool(conf_details.get("stoch_rsi", {}).get("aligned", False)),
-        "volume_confirmed": bool(conf_details.get("volume", {}).get("confirmed", False)),
-        "vwap_aligned": bool(conf_details.get("vwap", {}).get("aligned", False)),
-        "premium_discount_correct": bool(conf_details.get("premium_discount", {}).get("correct", False)),
-        "session_quality": bool(conf_details.get("session_quality", {}).get("active", False)),
-        "support_resistance_aligned": bool(conf_details.get("support_resistance_aligned", {}).get("aligned", False)),
+        # ── Signal Generators (12 pts) ──
+        "📐 Fibonacci (dekat level kunci)": bool(fib_det.get("is_near_key_level", False)),
+        "📊 MACD (momentum aligned)":        bool(macd_det.get("aligned", False)),
+        "📉 RSI (zona optimal)":             bool(rsi_det.get("aligned", False)),
+        # ── Context Filters (6 pts) ──
+        "🧭 HTF Bias Aligned":              bool(conf_details.get("htf_bias", {}).get("aligned", False)),
+        "🏗️ Struktur BOS/CHOCH Confirmed":  bool(conf_details.get("structure", {}).get("confirmed", False)),
+        "📦 Volume Confirmation":            bool(conf_details.get("volume", {}).get("confirmed", False)),
+        "⏰ Session Quality (London/NY)":    bool(conf_details.get("session", {}).get("in_session", False)),
+        "📰 News Clear (no high impact)":   bool(conf_details.get("news", {}).get("clear", False)),
     }
 
     ctx = {
@@ -628,29 +648,26 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
             "highlights": confluence_highlights,
         },
         "indicators": {
+            # ── Primary Signal Generators (Fibonacci + MACD + RSI) ──
             "rsi": _safe_float(rsi_val, 1),
-            "ema20": _safe_float(ema20),
-            "ema50": _safe_float(ema50),
-            "ema200": _safe_float(ema200),
             "macd_line": _safe_float(macd_line, 6),
             "macd_signal": _safe_float(signal_line, 6),
             "macd_histogram": _safe_float(macd_hist, 6),
-            "bb_upper": _safe_float(bb_upper),
-            "bb_mid": _safe_float(bb_mid),
-            "bb_lower": _safe_float(bb_lower),
-            "bb_bandwidth": _safe_float(bb_bw, 4),
-            "stoch_k": _safe_float(stoch_k, 1),
-            "stoch_d": _safe_float(stoch_d, 1),
-            "adx": _safe_float(adx_val, 1),
+            # Fibonacci levels
+            "fib_swing_high": _safe_float(fib_data.get("swing_high")) if fib_data else None,
+            "fib_swing_low": _safe_float(fib_data.get("swing_low")) if fib_data else None,
+            "fib_direction": fib_data.get("direction") if fib_data else None,
+            "fib_price_zone": fib_data.get("price_zone") if fib_data else None,
+            "fib_nearest_level": fib_data.get("nearest_level") if fib_data else None,
+            "fib_nearest_dist_pct": _safe_float(fib_data.get("nearest_distance_pct"), 3) if fib_data else None,
+            "fib_is_near_key": fib_data.get("is_near_key_level") if fib_data else None,
+            "fib_retracements": fib_data.get("retracement_levels") if fib_data else {},
+            "fib_extensions": fib_data.get("extension_levels") if fib_data else {},
+            # ── Context (non-signal) ──
             "atr": _safe_float(atr_val),
-            "vwap": _safe_float(vwap_data.get("vwap")) if vwap_data else None,
-            "vwap_position": vwap_data.get("position") if vwap_data else None,
             "rsi_divergence": str(rsi_div) if rsi_div else None,
             "macd_divergence": str(macd_div) if macd_div else None,
             "candle_pattern": candle_pattern.get("pattern") if isinstance(candle_pattern, dict) and candle_pattern.get("pattern") else None,
-            "volume_profile_poc": poc,
-            "va_high": va_high,
-            "va_low": va_low,
             "market_regime": market_regime,
         },
         "smc": {
@@ -885,19 +902,42 @@ def _build_prompt(ctx: dict, setup: dict, active_signal: Optional[dict] = None) 
     wr_str = f"{wr_val}% ({wr_data.get('wins',0)}W/{wr_data.get('losses',0)}L dari {wr_total} setup)" if wr_val is not None else "N/A"
 
     # ── SYSTEM MESSAGE (persona) ──────────────────────────────
-    system_msg = """Kamu adalah AI Analyst Trading Senior yang ahli dalam:
-- Smart Money Concepts (SMC/ICT): Order Blocks, FVG, BOS/CHOCH, Liquidity Sweep
-- Analisis Multi-Timeframe (HTF bias → LTF entry)
-- Analisis Makro: BTC Dominance, DXY, Fear & Greed, Funding Rate, Long/Short Ratio
-- Manajemen Risiko Institusional
+    system_msg = """Kamu adalah seorang PROPRIETARY TRADER INSTITUSIONAL dengan pengalaman 15+ tahun di pasar kripto dan forex. Keahlian utamamu:
 
-PRINSIP UTAMA:
-1. Kamu MENJELASKAN keputusan engine, BUKAN menggantikannya
-2. Selalu referensikan level harga yang SPESIFIK dari data yang diberikan
-3. Jawab dalam Bahasa Indonesia yang profesional dan tajam
-4. Akui jika ada ketidakpastian — jangan over-confident
-5. Sebelum kesimpulan, tantang sendiri analisismu dengan 2 skenario risiko
-6. PENTING: Data metrik dan harga yang diberikan kepadamu ADALAH DATA REAL-TIME (Live Market Data). JANGAN PERNAH mengatakan bahwa kamu tidak memiliki akses data real-time."""
+🎯 METODOLOGI TRADING:
+- Fibonacci Retracement & Extension: Primary tool untuk entry precision dan target TP
+  * Level kunci: 0.382, 0.5, 0.618 (retracement) | 1.272, 1.414, 1.618 (extension)
+  * Selalu identifikasi apakah harga MENDEKAT ke level Fibonacci penting
+  * Confluence Fibonacci + S/R = entry probabilitas tinggi
+- MACD (12,26,9): Primary momentum & trend confirmation tool
+  * Histogram crossing zero = momen entry paling kuat
+  * Divergence MACD vs price = sinyal reversal terkuat
+  * Signal line crossover = konfirmasi momentum
+- RSI (14): Primary oscillator untuk timing dan divergence
+  * RSI < 30 di zona Fib 0.618 = setup buy premium
+  * RSI > 70 di zona Fib extension 1.618 = area profit-taking
+  * Divergence RSI Bearish/Bullish = early warning reversal
+
+📊 FRAMEWORK ANALISIS (selalu gunakan urutan ini):
+1. HTF Bias → tentukan arah dominan (Bullish/Bearish/Sideways)
+2. Fibonacci Swing → identifikasi swing high/low, proyeksikan level retracement
+3. MACD Confirmation → konfirmasi momentum searah dengan HTF bias
+4. RSI Timing → gunakan untuk timing entry (overbought/oversold/divergence)
+5. Confluence Check → entry HANYA jika min 2 dari 3 signal generator align
+
+🏦 PRINSIP INSTITUSIONAL:
+- Smart Money SELALU entry di zona Fibonacci premium (0.5–0.618)
+- Target TP menggunakan Fibonacci extension (1.272, 1.618)
+- Stop Loss SELALU di luar swing point (below 0.786 untuk buy, above 0.236 untuk sell)
+- Risk:Reward minimum 1:2, ideal 1:3
+- Tidak pernah entry jika MACD dan RSI diverge dari HTF bias
+
+📐 STANDAR KOMUNIKASI:
+- Selalu sebut LEVEL HARGA SPESIFIK dari data yang diberikan
+- Gunakan bahasa Indonesia profesional dan tajam — tidak bertele-tele
+- Akui ketidakpastian dengan jelas
+- DATA YANG DIBERIKAN = LIVE REAL-TIME. Jangan pernah katakan tidak punya akses data real-time.
+- Sebelum kesimpulan, WAJIB cek apakah ada divergence antara Fibonacci, MACD, dan RSI"""
 
     # ── Build active_signal block ─────────────────────────────
     if active_signal:
@@ -912,154 +952,247 @@ PRINSIP UTAMA:
     else:
         active_block = "  (Tidak ada sinyal aktif di database untuk pair ini)\n"
 
+    # ── Fibonacci level formatter ─────────────────────────────
+    def _fmt_fib_levels(levels: dict) -> str:
+        if not levels:
+            return "N/A"
+        return "  |  ".join([f"{k} = {v}" for k, v in sorted(levels.items(), key=lambda x: float(x[0]))])
+
+    fib_ret = ind.get("fib_retracements", {})
+    fib_ext = ind.get("fib_extensions", {})
+    fib_dir = ind.get("fib_direction", "N/A")
+    fib_high = ind.get("fib_swing_high", "N/A")
+    fib_low = ind.get("fib_swing_low", "N/A")
+    fib_zone = ind.get("fib_price_zone", "N/A")
+    fib_near = ind.get("fib_nearest_level", "N/A")
+    fib_near_dist = ind.get("fib_nearest_dist_pct", "N/A")
+    fib_is_key = ind.get("fib_is_near_key", False)
+    fib_key_label = "⚡ DEKAT LEVEL KUNCI!" if fib_is_key else ""
+
+    # Determine RSI state with more detail
+    rsi_v = ind.get("rsi") or 50
+    if rsi_v >= 70:
+        rsi_state = f"OVERBOUGHT ({rsi_v}) — potensi reversal bearish / profit-taking"
+    elif rsi_v <= 30:
+        rsi_state = f"OVERSOLD ({rsi_v}) — potensi reversal bullish / akumulasi"
+    elif 50 < rsi_v < 70:
+        rsi_state = f"BULLISH ZONE ({rsi_v}) — momentum naik, belum overbought"
+    elif 30 < rsi_v <= 50:
+        rsi_state = f"BEARISH ZONE ({rsi_v}) — momentum turun, belum oversold"
+    else:
+        rsi_state = f"NEUTRAL ({rsi_v})"
+
+    # MACD detail
+    macd_h = ind.get("macd_histogram") or 0
+    macd_l = ind.get("macd_line") or 0
+    macd_s = ind.get("macd_signal") or 0
+    if macd_h > 0 and macd_l > 0:
+        macd_state = f"BULLISH — Histogram positif ({macd_h:+.6f}), MACD di atas signal"
+    elif macd_h > 0 and macd_l < 0:
+        macd_state = f"CROSSOVER BULLISH — Histogram baru naik ({macd_h:+.6f}), momentum berbalik naik"
+    elif macd_h < 0 and macd_l < 0:
+        macd_state = f"BEARISH — Histogram negatif ({macd_h:+.6f}), MACD di bawah signal"
+    elif macd_h < 0 and macd_l > 0:
+        macd_state = f"CROSSOVER BEARISH — Histogram baru negatif ({macd_h:+.6f}), momentum berbalik turun"
+    else:
+        macd_state = f"NETRAL — Histogram: {macd_h:+.6f}"
+    macd_dir_icon = "📈" if macd_h > 0 else "📉"
+
+    # Market cap change string (pre-computed to avoid backslash in f-string)
+    if mcap_chg and mcap_chg > 0:
+        mcap_chg_str = f"+{mcap_chg}%"
+    elif mcap_chg:
+        mcap_chg_str = f"{mcap_chg}%"
+    else:
+        mcap_chg_str = "N/A"
+
+    # BTC dominance label
+    if btc_d and btc_d > 52:
+        btc_d_label = "(tinggi, altcoin tertekan)"
+    elif btc_d and btc_d < 45:
+        btc_d_label = "(rendah, altcoin season)"
+    else:
+        btc_d_label = "(neutral)"
+
+    # DXY string
+    if dxy_val:
+        dxy_str = f"{dxy_val} ({dxy_chg:+.2f}% 1d, {macro.get('dxy_trend_5d','N/A')})"
+    else:
+        dxy_str = "N/A"
+
+    # Section 3 — entry plan block (pre-computed to avoid nested f-string/backslash)
+    if signal == "WAIT":
+        entry_plan_block = (
+            "**Sinyal WAIT** \u2014 Jelaskan kondisi spesifik yang harus dipenuhi sebelum entry:\n"
+            "- Level Fibonacci mana yang harus ditembus atau ditahan?\n"
+            "- Kondisi MACD apa yang harus terjadi (crossover/histogram)?\n"
+            "- RSI harus di level berapa untuk konfirmasi entry?\n"
+            "- Berikan skenario BUY trigger dan SELL trigger secara konkret."
+        )
+    else:
+        entry_low = setup.get('entry_low')
+        entry_high = setup.get('entry_high')
+        sl = setup.get('stop_loss')
+        tp1 = setup.get('tp1')
+        tp2 = setup.get('tp2')
+        tp3 = setup.get('tp3')
+        entry_plan_block = (
+            f"Konfirmasi atau sesuaikan level yang dihitung engine. WAJIB gunakan perspektif Fibonacci:\n\n"
+            f"**BIAS: {signal}**\n"
+            f"- **Area Entry Optimal:** Level Fib [X] ({entry_low} \u2013 {entry_high}) \u2014 jelaskan kenapa zona ini\n"
+            f"- **Stop Loss:** {sl} \u2014 di luar [Fib level / swing point]\n"
+            f"- **TP1 (Fibonacci 1.272):** {tp1} \u2014 [nearest extension level]\n"
+            f"- **TP2 (Fibonacci 1.414):** {tp2} \u2014 [confluence dengan liquidity]\n"
+            f"- **TP3 (Fibonacci 1.618):** {tp3} \u2014 [full extension target]\n"
+            f"- **R:R Ratio:** [kalkulasikan berdasarkan SL dan TP1]\n"
+            f"- **Sizing:** Berikan saran risk % berdasarkan confidence {conf['pct']}%"
+        )
+
     # ── USER MESSAGE (data + task) ────────────────────────────
     user_msg = f"""Analisis trading berikut dan berikan pandangan expert-mu:
 
-═══════════════════════════════════════════
-MARKET SNAPSHOT — {sym} / {tf.upper()}
-═══════════════════════════════════════════
-Current Price:     {price}
-Session:           {session}
-Engine Signal:     {signal}
-Signal Grade:      {grade} — {grade_desc}
-Confluence Score:  {conf['score']}/{conf['max_score']} ({conf['pct']}%) — {conf['recommendation']}
-HTF Alignment:     {aligned_count}/{total_htf} timeframes aligned with {signal}
+╔══════════════════════════════════════════════════╗
+║     MARKET BRIEF — {sym} / {tf.upper()}{'':>20}
+╚══════════════════════════════════════════════════╝
+Harga Saat Ini:     {price}
+Sesi Pasar:         {session}
+Sinyal Engine:      {signal}
+Grade Sinyal:       {grade} — {grade_desc}
+Confluence Score:   {conf['score']}/{conf['max_score']} ({conf['pct']}%) — {conf['recommendation']}
+HTF Alignment:      {aligned_count}/{total_htf} timeframe selaras dengan {signal}
 
-─── MULTI-TIMEFRAME BIAS ───────────────────
-  Daily (1D):  {htf.get('1d', 'N/A')}
-  4-Hour (4H): {htf.get('4h', 'N/A')}
-  1-Hour (1H): {htf.get('1h', 'N/A')}
-  15-Min (15M):{htf.get('15m', 'N/A')}
-  MTF Aligned: {ctx.get('_mtf_raw', {}).get('aligned', False) if isinstance(ctx.get('_mtf_raw'), dict) else 'N/A'}
+━━━ 📈 MULTI-TIMEFRAME BIAS ━━━━━━━━━━━━━━━━━━━━━━
+  Harian (1D):  {htf.get('1d', 'N/A')}
+  4-Jam  (4H):  {htf.get('4h', 'N/A')}
+  1-Jam  (1H):  {htf.get('1h', 'N/A')}
+  15-Min (15M): {htf.get('15m', 'N/A')}
+  Konfirmasi MTF: {ctx.get('_mtf_raw', {}).get('aligned', False) if isinstance(ctx.get('_mtf_raw'), dict) else 'N/A'}
+  Bias Entry TF:  {ctx['entry_bias']}
+  Market Regime:  {ind.get('market_regime', 'UNKNOWN')}
 
-─── MARKET STRUCTURE ───────────────────────
-  Market Bias:      {ctx['entry_bias']}
-  Market Regime:    {ind.get('market_regime', 'UNKNOWN')}
-  Structure Labels: {struct_str}
-  Premium/Discount: Price in {smc.get('pd_zone', 'N/A')} zone (mid: {smc.get('pd_mid', 'N/A')})
+━━━ 📐 FIBONACCI ANALYSIS (PRIMARY SIGNAL) ━━━━━━━
+  Swing High:     {fib_high}
+  Swing Low:      {fib_low}
+  Arah Swing:     {fib_dir}
+  Zona Harga:     {fib_zone} {fib_key_label}
+  Level Terdekat: {fib_near} (jarak {fib_near_dist}%)
 
-─── SMART MONEY CONCEPTS (SMC/ICT) ─────────
-  Active Order Blocks ({smc['unmitigated_ob_count']}):
+  RETRACEMENT LEVELS:
+  {_fmt_fib_levels(fib_ret)}
+
+  EXTENSION LEVELS (Target TP):
+  {_fmt_fib_levels(fib_ext)}
+
+  📌 FIBONACCI CONFLUENCES:
+  • Apakah harga mendekati Fib 0.382/0.5/0.618? → Level kritis untuk entry
+  • Extension 1.272 / 1.414 / 1.618 → Target TP Institusional
+  • Setup PREMIUM: Fib 0.618 + SMC Order Block + MACD crossing
+
+━━━ 📊 MACD (12,26,9) — PRIMARY MOMENTUM ━━━━━━━━
+  Status:         {macd_state}
+  MACD Line:      {macd_l:.6f}
+  Signal Line:    {macd_s:.6f}
+  Histogram:      {macd_h:+.6f} {macd_dir_icon}
+  Divergence:     {ind.get('macd_divergence', 'Tidak terdeteksi')}
+
+━━━ 📉 RSI (14) — PRIMARY OSCILLATOR ━━━━━━━━━━━━
+  Status:         {rsi_state}
+  Divergence:     {ind.get('rsi_divergence', 'Tidak terdeteksi')}
+  Candle Pattern: {ind.get('candle_pattern', 'Tidak ada')}
+
+━━━ 🏦 SMART MONEY CONCEPTS (CONTEXT) ━━━━━━━━━━
+  Order Blocks Aktif ({smc['unmitigated_ob_count']}):
 {ob_str}
 
-  Unfilled Fair Value Gaps ({smc['unfilled_fvg_count']}):
+  Fair Value Gaps ({smc['unfilled_fvg_count']}):
 {fvg_str}
 
-  Key Liquidity Levels: {liq_str}
-  Total Liquidity Points: {smc['liquidity_levels_count']}
+  Struktur Terbaru: {struct_str}
+  Premium/Discount: Harga di zona {smc.get('pd_zone', 'N/A')} (mid: {smc.get('pd_mid', 'N/A')})
+  Liquidity Levels: {liq_str}
 
-─── TECHNICAL INDICATORS ───────────────────
-  RSI(14):      {ind.get('rsi', 'N/A')} → {rsi_label}
-  EMA Trend:    {ema_trend}
-  EMA20/50/200: {ind.get('ema20', 'N/A')} / {ind.get('ema50', 'N/A')} / {ind.get('ema200', 'N/A')}
-  MACD:         Histogram {ind.get('macd_histogram', 'N/A')} → {macd_mom} momentum
-  Bollinger BB: Upper={ind.get('bb_upper','N/A')} | Mid={ind.get('bb_mid','N/A')} | Lower={ind.get('bb_lower','N/A')} | BW={ind.get('bb_bandwidth','N/A')}
-  Stoch RSI:    K={ind.get('stoch_k','N/A')} D={ind.get('stoch_d','N/A')}
-  ADX:          {ind.get('adx', 'N/A')} ({'Strong trend' if (ind.get('adx') or 0) > 25 else 'Weak/ranging'})
-  ATR:          {ind.get('atr', 'N/A')}
-  VWAP:         {ind.get('vwap','N/A')} (Price is {ind.get('vwap_position','N/A')} VWAP)
-
-─── VOLUME ANALYSIS ────────────────────────
-  Current Volume: {ctx['price']['volume']} ({vol_label})
-  Volume Confirmation: {'✅ YES' if highlights.get('volume_confirmed') else '❌ NO'}
-  Vol Profile POC: {ind.get('volume_profile_poc', 'N/A')} | VA: {ind.get('va_low','N/A')} – {ind.get('va_high','N/A')}
-
-─── DIVERGENCE & PATTERNS ──────────────────
-  RSI Divergence:  {ind.get('rsi_divergence', 'None detected')}
-  MACD Divergence: {ind.get('macd_divergence', 'None detected')}
-  Candle Pattern:  {ind.get('candle_pattern', 'None detected')}
-
-─── ANALISIS MAKRO & CROSS-ASSET ───────────
-  BTC Dominance:   {btc_d}% {"(tinggi, altcoin tertekan)" if btc_d and btc_d > 52 else "(rendah, altcoin season)" if btc_d and btc_d < 45 else ""}
-  Relative Str:    {macro.get('rs_vs_btc', 'N/A')}
-  Total Market Cap:{total_mcap}B USD ({f"+{mcap_chg}%" if mcap_chg and mcap_chg > 0 else f"{mcap_chg}%" if mcap_chg else "N/A"} 24h)
-  DXY:             {f"{dxy_val} ({'+' if dxy_chg and dxy_chg > 0 else ''}{dxy_chg}% 1d, tren 5d: {macro.get('dxy_trend_5d','N/A')})" if dxy_val else "N/A"}
-  DXY Impact:      {dxy_impact}
+━━━ 🌐 MACRO & SENTIMENT ━━━━━━━━━━━━━━━━━━━━━━
+  BTC Dominance:   {btc_d}% {btc_d_label}
+  Total Market Cap:{total_mcap}B ({mcap_chg_str} 24h)
   Fear & Greed:    {fng_val}/100 — {fng_lbl}{fng_trend}
   Funding Rate:    {fund_rate:+.6f} → {fund_lbl}
   L/S Ratio:       {ls_str}
+  DXY:             {dxy_str}
+  DXY Impact:      {dxy_impact}
 
-─── ORDER FLOW DELTA (Binance Agg Trades) ──
-  Tekanan:         {of_str}
-  Analisis:        {of_interp}
-
-─── ESTIMASI WIN RATE HISTORIS ─────────────
-  Win Rate:        {wr_str}
-  Kesimpulan:      {wr_verdict}
-
-─── BERITA HIGH IMPACT FOREX (24 JAM) ──────
+━━━ 📰 BERITA HIGH IMPACT (24H) ━━━━━━━━━━━━━━━
 {fx_lines}
-
-─── BERITA KRIPTO TERKINI ──────────────────
 {crypto_lines}
 
-─── CONFLUENCE CHECKLIST ───────────────────
+━━━ ⚡ ORDER FLOW & WIN RATE ━━━━━━━━━━━━━━━━━━
+  Order Flow:  {of_str}
+  Analisis:    {of_interp}
+  Win Rate Est:{wr_str} — {wr_verdict}
+
+━━━ ✅ CONFLUENCE CHECKLIST ━━━━━━━━━━━━━━━━━━━
 {hi_str}
 
-─── ENGINE-CALCULATED SETUP LEVELS ─────────
+━━━ 🎯 SETUP LEVELS (Engine-Calculated) ━━━━━━━━
 {setup_block}
-
-═══════════════════════════════════════════
-SINYAL ENGINE & ARAH YANG HARUS DIIKUTI
-═══════════════════════════════════════════
-
-⚡ ARAH SINYAL ENGINE: **{signal}**
-⚡ KONFLUENSI: {conf['score']}/{conf['max_score']} ({conf['pct']}%)
-⚡ LEVEL CANONICAL (dihitung oleh SetupEngine, gunakan ini sebagai referensi utama):
-  • Entry: {setup.get('entry_low')} – {setup.get('entry_high')}
-  • Stop Loss: {setup.get('stop_loss')}
-  • TP1: {setup.get('tp1')} | TP2: {setup.get('tp2')} | TP3: {setup.get('tp3')}
 {active_block}
-⚠️ INSTRUKSI KOHERENSI: Referensikan sinyal engine ({signal}), namun kamu BOLEH menentangnya/memberikan peringatan jika confidence di bawah 45% atau ada divergensi teknikal yang parah. Berikan pandangan yang objektif.
+╔══════════════════════════════════════════════════╗
+║  ⚡ SINYAL: {signal:8} | Grade: {grade} | Score: {conf['score']}/{conf['max_score']} ({conf['pct']}%)
+╚══════════════════════════════════════════════════╝
 
-═══════════════════════════════════════════
-TASK: WRITE YOUR ANALYSIS
-═══════════════════════════════════════════
+INSTRUKSI KOHERENSI:
+- Gunakan Fibonacci + MACD + RSI sebagai 3 validator UTAMA analisismu
+- Level Entry IDEAL = konfluensi level Fibonacci dengan OB/FVG terdekat
+- TP OPTIMAL = Extension Fibonacci 1.272/1.618 yang bertepatan dengan liquidity
+- Kamu BOLEH menentang sinyal engine jika ada divergence parah antara Fibonacci, MACD, dan RSI
 
-Using ALL the data above as your foundation, provide an expert-level trading analysis IN INDONESIAN (Bahasa Indonesia). Be specific, precise, and reference actual price levels and indicator values.
+═══════════════════════════════════════════════════
+              TUGAS ANALISIS KAMU
+═══════════════════════════════════════════════════
 
----
-
-### 1. 📊 Narasi Pasar
-In 3–4 sentences, describe the current market structure in Indonesian. Reference the SMC sequence (liquidity sweep → displacement → OB formation → BOS/CHOCH). Use specific price levels from the data above.
-
-### 2. 🎯 Justifikasi Sinyal
-Explain the **{signal}** signal in depth in Indonesian. Which 3–4 confluence factors carry the most weight? How do they reinforce each other? What is the institutional narrative behind this setup?
-
-### 3. 📐 Setup Trading
-{'**Karena sinyal adalah WAIT**, jelaskan secara spesifik level harga mana yang harus dijebol atau dikonfirmasi agar sinyal berubah menjadi BUY atau SELL. Sebutkan kondisi teknikal yang kamu tunggu (contoh: close candle 1H di atas X).' if signal == 'WAIT' else f'''Confirm or refine the engine-calculated levels. Be explicit in Indonesian:
-- **Bias:** {signal}
-- **Area Entry:** [price range — be specific]
-- **Stop Loss:** [level] — [reason: below OB / below swing low / beyond invalidation level]
-- **TP1:** [level] — [reason: liquidity target / FVG fill / resistance]
-- **TP2:** [level] — [reason]
-- **TP3:** [level] — [reason: major liquidity / HTF target]'''}
-- **R:R Ratio:** [ratio]
-- **Manajemen Risiko:** [how much risk given {conf['pct']}% confidence]
-
-### 4. 🧠 Self-Critique — Devil's Advocate
-Sebelum lanjut ke risiko teknis, hadapi dirimu sendiri: apa 2 alasan TERKUAT mengapa narasi utama di atas bisa GAGAL secara fundamental atau teknikal?
-1. [skenario risiko spesifik 1 — dengan level harga yang konkret]
-2. [skenario risiko spesifik 2 — faktor makro atau teknikal yang berlawanan]
-Kemudian nyatakan apakah kedua risiko tersebut mengubah atau mempertegas rekomendasimu.
-
-### 5. ⚠️ Risiko & Pembatalan
-List 3 concrete price levels or events that would INVALIDATE this setup in Indonesian:
-1. [specific level + reason]
-2. [specific level + reason]  
-3. [specific level + reason]
-
-### 6. ⏰ Waktu & Eksekusi
-- **Waktu terbaik:** Based on the {session} session and current structure
-- **Konfirmasi:** What should traders see before entering? (candle close, volume, retest?)
-- **Kadaluarsa Setup:** When does this setup become invalid?
-
-### 7. 🔑 Kesimpulan
-Satu kalimat powerful yang merangkum setup dalam Bahasa Indonesia: sinyal, tingkat keyakinan (grade {grade}), dan kondisi utama yang harus dipenuhi sebelum masuk.
+Berikan analisis trading expert-level dalam BAHASA INDONESIA. Setiap pernyataan HARUS merujuk ke harga atau nilai indikator yang spesifik dari data di atas.
 
 ---
-**DISCLAIMER**: Tambahkan teks ini persis di baris terakhir:
-*"⚠️ Analisis ini dihasilkan oleh AI berdasarkan probabilitas teknikal & makro. Bukan nasihat finansial. Selalu gunakan Stop Loss dan kelola risiko Anda sendiri."*
+
+### 1. 🔍 Pembacaan Kondisi Pasar Saat Ini
+Deskripsikan kondisi pasar dalam 3-4 kalimat tajam. Jelaskan:
+- Di level Fibonacci mana harga saat ini berada? Apakah mendekati level kunci?
+- Momentum MACD menunjukkan apa? Apakah ada crossover atau divergence?
+- RSI menunjukkan kondisi apa? Apakah ada divergence?
+- Apa implikasi HTF bias terhadap setup saat ini?
+
+### 2. 🎯 Justifikasi Sinyal {signal}
+Jelaskan sinyal **{signal}** dari perspektif Fibonacci, MACD, dan RSI:
+- **Fibonacci:** Apakah harga berada di zona optimal entry (0.5-0.618)? Level mana yang paling signifikan?
+- **MACD:** Apakah momentum mendukung sinyal? Adakah crossover atau divergence?
+- **RSI:** Apakah timing tepat? Adakah divergence yang memperkuat setup?
+- **Confluence:** Berapa banyak dari 3 signal generators align? Apa institutional narrative-nya?
+
+### 3. 📐 Rencana Trading Presisi
+{entry_plan_block}
+
+### 4. 🧠 Devil's Advocate — Skenario Gagal
+Institusional trader SELALU mempertimbangkan skenario terburuk:
+1. **Skenario Gagal 1:** [Apa yang terjadi jika Fibonacci level ini gagal sebagai support/resistance? Di level berapa setup invalidasi?]
+2. **Skenario Gagal 2:** [Bagaimana jika MACD diverge atau RSI memberikan sinyal berlawanan?]
+→ Apakah kedua risiko ini mengubah rekomendasi? Jelaskan.
+
+### 5. ⚠️ Invalidasi Setup
+3 kondisi yang MEMBATALKAN setup ini:
+1. [Level harga + indikator spesifik]
+2. [Level harga + indikator spesifik]
+3. [Level harga + indikator spesifik]
+
+### 6. ⏱️ Timing & Eksekusi
+- **Entry Trigger:** Kondisi MACD + RSI + Fibonacci apa yang harus terpenuhi sebelum masuk?
+- **Waktu Optimal:** Berdasarkan sesi {session} dan struktur saat ini
+- **Konfirmasi Candle:** Apa yang harus dilihat di candle terakhir?
+- **Kadaluarsa Setup:** Kapan setup ini tidak valid lagi?
+
+### 7. 🔑 Kesimpulan Trader
+Satu paragraf ringkas (max 3 kalimat) yang langsung ke poin: sinyal, level kunci Fibonacci untuk entry dan TP, kondisi MACD & RSI yang harus terpenuhi, dan grade kepercayaan ({grade}).
+
+---
+*⚠️ Analisis ini dihasilkan oleh AI berdasarkan probabilitas teknikal & makro menggunakan Fibonacci, MACD, dan RSI sebagai signal generator utama. Bukan nasihat finansial. Selalu gunakan Stop Loss dan kelola risiko Anda sendiri.*
 
 END_OF_ANALYSIS"""
 
@@ -1236,11 +1369,7 @@ async def _stream_ai_analysis(
                 ],
                 temperature=0.5,
                 top_p=0.85,
-                max_tokens=6144,
-                extra_body={
-                    "chat_template_kwargs": {"enable_thinking": True},
-                    "reasoning_budget": 8192,
-                },
+                max_tokens=2048,
                 stream=True,
             )
 

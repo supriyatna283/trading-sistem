@@ -31,7 +31,9 @@ export interface PositionSizeResult {
 
 // Server-side (SSR) requires absolute URL to backend.
 // Client-side (Browser) now uses absolute URL as well to bypass proxy hang up issues.
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+const API_URL = typeof window !== "undefined" 
+  ? `http://${window.location.hostname}:8000` 
+  : (process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000");
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "";
 
 function buildHeaders(extra?: HeadersInit): HeadersInit {

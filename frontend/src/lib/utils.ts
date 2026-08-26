@@ -58,8 +58,9 @@ export function clamp(value: number, min: number, max: number): number {
 /**
  * API_URL: single source of truth across the app.
  */
-export const API_URL =
-  process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+export const API_URL = typeof window !== "undefined"
+  ? `http://${window.location.hostname}:8000`
+  : (process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000");
 
 export const BIAS_COLORS: Record<string, string> = {
   BULLISH: "#22c55e",

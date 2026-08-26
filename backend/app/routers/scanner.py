@@ -10,7 +10,7 @@ scanner = MarketScanner()
 
 # Simple rate limiter and cache
 _last_scan_time = 0.0
-_SCAN_COOLDOWN = 30  # seconds
+_SCAN_COOLDOWN = 3  # seconds
 _last_results = []
 
 

@@ -163,24 +163,22 @@ class SmartMoneyConceptsEngine:
         self, ob: OrderBlock, highs, lows, closes, start_idx: int, n: int, ob_type: str
     ) -> bool:
         """
-        Check if an OB has been mitigated (price has fully consumed the zone).
+        Check if an OB has been mitigated (price returned into the OB zone
+        after it was created, meaning institutions already filled there).
 
-        V3 FIX: Proper directional mitigation logic:
-        - BULLISH OB: Mitigated when price CLOSES BELOW the OB's low.
-          A close INSIDE the OB or a wick re-test is an institutional re-test (valid zone).
-          Only a full close below the OB means the zone has been broken/consumed.
-        - BEARISH OB: Mitigated when price CLOSES ABOVE the OB's high.
-          A close inside the OB or a wick re-test is valid institutional re-test.
-          Only a full close above the OB means the zone is broken/consumed.
+        V2 FIX: Uses CLOSE price instead of WICK (low/high) for mitigation.
+        Rationale: A wick touching an OB is an institutional re-test — a sign
+        the zone is still respected. Only a CLOSE inside the OB confirms the
+        zone has been consumed and is no longer valid.
         """
         for j in range(start_idx + 1, n):
             if ob_type == "BULLISH":
-                # Bullish OB broken: price CLOSES below the OB's low boundary
-                if closes[j] < ob.low:
+                # Bullish OB mitigated only if price CLOSES back inside the zone
+                if ob.low <= closes[j] <= ob.high:
                     return True
             else:
-                # Bearish OB broken: price CLOSES above the OB's high boundary
-                if closes[j] > ob.high:
+                # Bearish OB mitigated only if price CLOSES back inside the zone
+                if ob.low <= closes[j] <= ob.high:
                     return True
         return False
 
@@ -251,29 +249,17 @@ class SmartMoneyConceptsEngine:
     ) -> bool:
         """
         Check if an FVG has been filled by subsequent price action.
-
-        V3 FIX: Correct gap fill detection:
-        - BULLISH FVG: gap_low = highs[i-2] (bottom of gap), gap_high = lows[i] (top of gap).
-          Filled when a subsequent candle's LOW drops INTO the gap: low <= gap_high (top of gap).
-          We pass lows array, so: price_array[j] <= gap_high means low entered the gap.
-          BUT gap_high IS the top of gap, so any low <= gap_high would fill it.
-          Correct: Filled only when low DROPS BELOW gap_low (the bottom boundary),
-          meaning price passed THROUGH the entire gap.
-          Partial fill (low enters gap but stays above gap_low) still leaves the gap valid.
-          For practical signal quality: filled if low < gap_high (entered the gap at all).
-        - BEARISH FVG: gap_high = lows[i-2] (top of gap), gap_low = highs[i] (bottom of gap).
-          Filled when a subsequent high enters the gap: high >= gap_low.
+        Bullish FVG filled = price dipped back down into the gap
+        Bearish FVG filled = price pushed back up into the gap
         """
         for j in range(start_idx, n):
             if fvg_type == "BULLISH":
-                # Bullish FVG: price_array is lows.
-                # Gap occupies [gap_low, gap_high]. Filled if low dips into gap (low < gap_high).
-                if price_array[j] < gap_high:
+                # Bullish FVG filled if a subsequent candle's low enters the gap
+                if price_array[j] <= gap_high:
                     return True
             else:
-                # Bearish FVG: price_array is highs.
-                # Gap occupies [gap_low, gap_high]. Filled if high pushes into gap (high > gap_low).
-                if price_array[j] > gap_low:
+                # Bearish FVG filled if a subsequent candle's high enters the gap
+                if price_array[j] >= gap_low:
                     return True
         return False
 

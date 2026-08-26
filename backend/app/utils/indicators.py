@@ -288,10 +288,10 @@ def detect_divergence(df: pd.DataFrame, swing_lookback: int = 3, max_bars: int =
     """
     Detect RSI & MACD Divergence using genuine swing pivot comparison.
 
-    V3 FIX: Correct RSI series alignment.
-    `rsi_aligned` now has length == len(closes), with index 0 = nan and
-    index i = RSI value for bar i. This ensures `rsi_aligned[swing_idx]`
-    returns the RSI corresponding to the correct price bar.
+    V2 FIX: Divergence must be measured between two SWING POINTS (pivot
+    highs/lows), NOT between two arbitrary candles n bars apart.
+    Comparing closes[-1] vs closes[-n-1] produces false divergence signals
+    because those points are not structural turning points.
 
     Method:
     - Regular Bullish: price makes LOWER LOW at pivot, RSI makes HIGHER LOW
@@ -308,39 +308,44 @@ def detect_divergence(df: pd.DataFrame, swing_lookback: int = 3, max_bars: int =
         lows = df["low"].astype(float).values
         n = len(closes)
 
-        # Build RSI series — length == n (aligned with closes)
-        # Use pandas EWM for proper Wilder's smoothing (same as calculate_rsi)
+        # Build RSI series
         period = 14
-        close_series = pd.Series(closes)
-        deltas = close_series.diff()
-        gains = deltas.clip(lower=0)
-        losses = (-deltas).clip(lower=0)
-        avg_gain = gains.ewm(com=period - 1, min_periods=period).mean()
-        avg_loss = losses.ewm(com=period - 1, min_periods=period).mean()
+        deltas = np.diff(closes)
+        gains = np.where(deltas > 0, deltas, 0.0)
+        losses = np.where(deltas < 0, -deltas, 0.0)
+        avg_gain = np.zeros_like(gains)
+        avg_loss = np.zeros_like(losses)
+        avg_gain[period - 1] = np.mean(gains[:period])
+        avg_loss[period - 1] = np.mean(losses[:period])
+        for i in range(period, len(gains)):
+            avg_gain[i] = (avg_gain[i - 1] * (period - 1) + gains[i]) / period
+            avg_loss[i] = (avg_loss[i - 1] * (period - 1) + losses[i]) / period
         with np.errstate(divide="ignore", invalid="ignore"):
-            rs = avg_gain / avg_loss.replace(0, np.nan)
-        rsi_series = (100 - (100 / (1 + rs))).values  # length == n, index-aligned with closes
+            rs = np.where(avg_loss != 0, avg_gain / avg_loss, 100.0)
+        rsi_series = 100 - (100 / (1 + rs))
+        # Pad to align with closes (rsi_series is len(closes)-1)
+        rsi_aligned = np.concatenate([[np.nan], rsi_series])
 
         # Find swing lows (for bullish divergence) using 3-bar pivot
         lb = swing_lookback
         search_start = max(lb, n - max_bars)
-        swing_lows = []   # (bar_index, low_price, rsi_value)
-        swing_highs = []  # (bar_index, high_price, rsi_value)
+        swing_lows = []   # (bar_index, close_price, rsi_value)
+        swing_highs = []  # (bar_index, close_price, rsi_value)
 
         for i in range(search_start, n - lb):
-            rsi_val = rsi_series[i]
-            if np.isnan(rsi_val):
-                continue
-
             # Swing Low: current low is lower than lb bars on each side
-            if all(lows[i] <= lows[i - j] for j in range(1, lb + 1)) and \
-               all(lows[i] <= lows[i + j] for j in range(1, lb + 1)):
-                swing_lows.append((i, float(lows[i]), float(rsi_val)))
+            if all(lows[i] < lows[i - j] for j in range(1, lb + 1)) and \
+               all(lows[i] < lows[i + j] for j in range(1, lb + 1)):
+                rsi_val = rsi_aligned[i] if not np.isnan(rsi_aligned[i]) else None
+                if rsi_val is not None:
+                    swing_lows.append((i, float(lows[i]), float(rsi_val)))
 
             # Swing High: current high is higher than lb bars on each side
-            if all(highs[i] >= highs[i - j] for j in range(1, lb + 1)) and \
-               all(highs[i] >= highs[i + j] for j in range(1, lb + 1)):
-                swing_highs.append((i, float(highs[i]), float(rsi_val)))
+            if all(highs[i] > highs[i - j] for j in range(1, lb + 1)) and \
+               all(highs[i] > highs[i + j] for j in range(1, lb + 1)):
+                rsi_val = rsi_aligned[i] if not np.isnan(rsi_aligned[i]) else None
+                if rsi_val is not None:
+                    swing_highs.append((i, float(highs[i]), float(rsi_val)))
 
         rsi_div = False
         div_type = "none"
@@ -377,9 +382,9 @@ def detect_divergence(df: pd.DataFrame, swing_lookback: int = 3, max_bars: int =
         # --- MACD Divergence Confirmation ---
         macd_div = False
         if rsi_div and len(df) >= 35:
-            close_s = pd.Series(closes)
-            fast_ema = close_s.ewm(span=12, adjust=False).mean()
-            slow_ema = close_s.ewm(span=26, adjust=False).mean()
+            close_series = pd.Series(closes)
+            fast_ema = close_series.ewm(span=12, adjust=False).mean()
+            slow_ema = close_series.ewm(span=26, adjust=False).mean()
             macd_line = fast_ema - slow_ema
             signal_line = macd_line.ewm(span=9, adjust=False).mean()
             hist = (macd_line - signal_line).values
@@ -388,14 +393,14 @@ def detect_divergence(df: pd.DataFrame, swing_lookback: int = 3, max_bars: int =
                 # MACD hist should also be making higher lows at the same pivots
                 h_prev = hist[swing_lows[-2][0]] if swing_lows[-2][0] < len(hist) else None
                 h_curr = hist[swing_lows[-1][0]] if swing_lows[-1][0] < len(hist) else None
-                if h_prev is not None and h_curr is not None and not np.isnan(h_prev) and not np.isnan(h_curr) and h_curr > h_prev:
+                if h_prev is not None and h_curr is not None and h_curr > h_prev:
                     macd_div = True
                     strength = min(100, strength + 10)
 
             elif div_type == "bearish" and len(swing_highs) >= 2:
                 h_prev = hist[swing_highs[-2][0]] if swing_highs[-2][0] < len(hist) else None
                 h_curr = hist[swing_highs[-1][0]] if swing_highs[-1][0] < len(hist) else None
-                if h_prev is not None and h_curr is not None and not np.isnan(h_prev) and not np.isnan(h_curr) and h_curr < h_prev:
+                if h_prev is not None and h_curr is not None and h_curr < h_prev:
                     macd_div = True
                     strength = min(100, strength + 10)
 
@@ -463,6 +468,130 @@ def calculate_adx(df: pd.DataFrame, period: int = 14) -> Optional[float]:
         return round(last_adx, 2) if not np.isnan(last_adx) else None
     except Exception:
         return None
+
+
+def calculate_fibonacci(df: pd.DataFrame, lookback: int = 50) -> Dict[str, Any]:
+    """
+    Calculate Fibonacci Retracement and Extension levels based on
+    the most recent significant swing high and swing low within `lookback` candles.
+
+    Returns:
+        {
+            "swing_high": float,
+            "swing_low": float,
+            "direction": "UP" | "DOWN" | None,
+            "retracement_levels": {
+                "0.0": float,   # swing low (or high for DOWN)
+                "0.236": float,
+                "0.382": float,
+                "0.5": float,
+                "0.618": float,   # ← key golden ratio
+                "0.786": float,
+                "1.0": float,   # swing high (or low for DOWN)
+            },
+            "extension_levels": {
+                "1.272": float,
+                "1.618": float,
+                "2.618": float,
+            },
+            "price_zone": str,       # which fib zone current price is in
+            "is_near_key_level": bool,  # within 1% of 0.382/0.5/0.618
+            "nearest_level": str | None,
+            "nearest_distance_pct": float | None,
+        }
+    """
+    empty_result = {
+        "swing_high": None, "swing_low": None, "direction": None,
+        "retracement_levels": {}, "extension_levels": {},
+        "price_zone": "unknown", "is_near_key_level": False,
+        "nearest_level": None, "nearest_distance_pct": None,
+    }
+
+    if df.empty or len(df) < 10:
+        return empty_result
+
+    try:
+        window = df.tail(lookback).copy()
+        highs = window["high"].astype(float).values
+        lows = window["low"].astype(float).values
+        closes = window["close"].astype(float).values
+
+        swing_high = float(np.max(highs))
+        swing_low = float(np.min(lows))
+        last_close = float(closes[-1])
+
+        if swing_high <= swing_low:
+            return empty_result
+
+        fib_range = swing_high - swing_low
+
+        # Determine trend direction: last close above/below midpoint
+        midpoint = (swing_high + swing_low) / 2
+        if last_close >= midpoint:
+            direction = "UP"
+        else:
+            direction = "DOWN"
+
+        # Retracement levels (from swing_low up to swing_high for UP trend)
+        RETRACEMENT_RATIOS = [0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0]
+        EXTENSION_RATIOS = [1.272, 1.618, 2.618]
+
+        if direction == "UP":
+            # Price moving UP: retracement pulls back from high toward low
+            retracement_levels = {
+                str(r): round(swing_high - r * fib_range, 6) for r in RETRACEMENT_RATIOS
+            }
+            extension_levels = {
+                str(r): round(swing_low + r * fib_range, 6) for r in EXTENSION_RATIOS
+            }
+        else:
+            # Price moving DOWN: retracement bounces from low back toward high
+            retracement_levels = {
+                str(r): round(swing_low + r * fib_range, 6) for r in RETRACEMENT_RATIOS
+            }
+            extension_levels = {
+                str(r): round(swing_high - r * fib_range, 6) for r in EXTENSION_RATIOS
+            }
+
+        # Determine which zone price is currently in
+        price_zone = "unknown"
+        sorted_levels = sorted(retracement_levels.items(), key=lambda x: float(x[0]))
+        for i in range(len(sorted_levels) - 1):
+            low_level = sorted_levels[i][1]
+            high_level = sorted_levels[i + 1][1]
+            level_low = min(low_level, high_level)
+            level_high = max(low_level, high_level)
+            if level_low <= last_close <= level_high:
+                price_zone = f"{sorted_levels[i][0]}-{sorted_levels[i+1][0]}"
+                break
+
+        # Find nearest key Fibonacci level (0.382, 0.5, 0.618)
+        KEY_LEVELS = ["0.382", "0.5", "0.618"]
+        nearest_level = None
+        nearest_dist = float("inf")
+        for lv in KEY_LEVELS:
+            lv_price = retracement_levels.get(lv)
+            if lv_price is not None and lv_price > 0:
+                dist = abs(last_close - lv_price) / lv_price * 100
+                if dist < nearest_dist:
+                    nearest_dist = dist
+                    nearest_level = lv
+
+        is_near_key = nearest_dist < 1.0  # within 1% of a key level
+
+        return {
+            "swing_high": round(swing_high, 6),
+            "swing_low": round(swing_low, 6),
+            "direction": direction,
+            "retracement_levels": retracement_levels,
+            "extension_levels": extension_levels,
+            "price_zone": price_zone,
+            "is_near_key_level": is_near_key,
+            "nearest_level": nearest_level,
+            "nearest_distance_pct": round(nearest_dist, 3) if nearest_level else None,
+        }
+    except Exception:
+        return empty_result
 
 
 def detect_candle_pattern(df: pd.DataFrame) -> Dict[str, Any]:
