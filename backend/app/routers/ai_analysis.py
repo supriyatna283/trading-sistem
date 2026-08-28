@@ -55,7 +55,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/ai", tags=["AI Analysis"])
 
-AI_MODEL_NAME = "meta/llama-3.1-70b-instruct"
+AI_MODEL_NAME = "nvidia/nemotron-3-ultra-550b-a55b"
 
 def _get_nvidia_client() -> AsyncOpenAI:
     settings = get_settings()
@@ -1370,6 +1370,7 @@ async def _stream_ai_analysis(
                 temperature=0.5,
                 top_p=0.85,
                 max_tokens=2048,
+                extra_body={"chat_template_kwargs":{"enable_thinking":True}},
                 stream=True,
             )
 
