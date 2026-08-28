@@ -1,13 +1,24 @@
 "use client";
 
 import MainLayout from "@/components/layout/MainLayout";
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { api } from "@/lib/api";
 import { formatPrice, timeAgo } from "@/lib/utils";
 import { Gauge, BBPanelDetail, ScoreRing } from "@/components/setups/SetupComponents";
 import ConfirmModal from "@/components/ui/ConfirmModal";
+import toast from "react-hot-toast";
+
+// ── Components ───────────────────────────────────────────────────────────────
+function TimeAgo({ date }: { date: string }) {
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setTick(t => t + 1), 60000);
+    return () => clearInterval(timer);
+  }, []);
+  return <span>{timeAgo(date)}</span>;
+}
 
 // ── Types ────────────────────────────────────────────────────────────────────
 type StatusFilter = "ALL" | "ACTIVE" | "TRIGGERED" | "EXPIRED";
@@ -51,15 +62,6 @@ export default function SetupsPage() {
   const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null);
   const [page, setPage] = useState(1);
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
-
-  // Live timeAgo ticker
-  const [tick, setTick] = useState(0);
-  const tickRef = useRef<NodeJS.Timeout | null>(null);
-
-  useEffect(() => {
-    tickRef.current = setInterval(() => setTick(t => t + 1), 60000);
-    return () => { if (tickRef.current) clearInterval(tickRef.current); };
-  }, []);
 
   // ── Init & polling ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -115,9 +117,10 @@ export default function SetupsPage() {
     setExecutingId(id);
     try {
       await api.executeFromSetup(id);
+      toast.success("Setup executed successfully");
       await fetchSetups();
     } catch (e: any) {
-      alert(e.message);
+      toast.error(e.message || "Failed to execute setup");
     } finally {
       setExecutingId(null);
     }
@@ -129,12 +132,14 @@ export default function SetupsPage() {
     try {
       if (confirmAction.type === "delete_one") {
         await api.deleteSetup(confirmAction.id);
+        toast.success("Setup deleted");
       } else if (confirmAction.type === "delete_all") {
         await api.clearAllSetups();
+        toast.success("All setups deleted");
       }
       await fetchSetups();
     } catch (e: any) {
-      alert(e.message);
+      toast.error(e.message || "Failed to delete setup(s)");
     } finally {
       setConfirmAction(null);
     }
@@ -149,7 +154,7 @@ export default function SetupsPage() {
   };
 
   // ── Filtering + Sorting ──────────────────────────────────────────────────────
-  const filtered = (() => {
+  const filtered = useMemo(() => {
     let arr = filter === "ALL" ? setups : setups.filter(s => s.status === filter);
     if (dirFilter !== "ALL") arr = arr.filter(s => s.direction === dirFilter);
     if (minScore > 0) arr = arr.filter(s => (s.signal_score ?? s.confluence_score ?? 0) >= minScore);
@@ -162,10 +167,10 @@ export default function SetupsPage() {
       default: /* newest */ arr = [...arr].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
     }
     return arr;
-  })();
+  }, [setups, filter, dirFilter, minScore, sortKey]);
 
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
-  const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const paged = useMemo(() => filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [filtered, page]);
 
   // Reset to page 1 when filters change
   useEffect(() => { setPage(1); }, [filter, minScore, dirFilter, sortKey]);
@@ -365,8 +370,7 @@ export default function SetupsPage() {
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <span style={{ fontSize: "0.65rem", color: "var(--text-muted)" }}>
-                        {/* live timeAgo with tick dependency */}
-                        {timeAgo(s.created_at)}{tick > -1 ? "" : ""}
+                        <TimeAgo date={s.created_at} />
                       </span>
                       <span style={{ fontSize: "0.65rem", fontWeight: 800, padding: "3px 8px", borderRadius: 6, background: s.status === "ACTIVE" ? "rgba(16,185,129,0.12)" : "rgba(255,255,255,0.05)", color: s.status === "ACTIVE" ? "#10b981" : "var(--text-muted)" }}>
                         {s.status}

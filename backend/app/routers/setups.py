@@ -1,7 +1,10 @@
 """Trading setups API endpoints — V4 uses REAL Binance data + full macro integration + Phase 3 Power Features."""
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, BackgroundTasks
 from app.security import require_api_key
+import logging
+
+logger = logging.getLogger(__name__)
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 import json
@@ -61,6 +64,7 @@ async def list_setups(
 @router.get("/generate/{symbol}")
 async def generate_setup(
     symbol: str,
+    background_tasks: BackgroundTasks,
     timeframe: str = Query("1h"),
     db: Session = Depends(get_db),
 ):
@@ -127,8 +131,8 @@ async def generate_setup(
         market_intel_data = await market_intel_engine.get_overview(
             symbol.upper(), df=entry_df, current_price=latest_price
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to fetch market intel for {symbol}: {e}")
 
     confluence = confluence_engine.score(
         candles_by_tf, symbol.upper(), timeframe,
@@ -148,7 +152,7 @@ async def generate_setup(
                 # Use total delta (buy_vol - sell_vol) as the dominant flow indicator
                 volume_delta = smart_money["delta"]
         except Exception as e:
-            pass
+            logger.warning(f"Failed to fetch order flow delta for {symbol}: {e}")
 
 
     # Generate setup (V4 — full Phase 3 power features)
@@ -193,14 +197,12 @@ async def generate_setup(
         db.commit()
         db.refresh(db_setup)
 
-        # 🔔 Send Telegram notification for generated setup
+        # 🔔 Send Telegram notification for generated setup via BackgroundTasks
         try:
             from app.services.telegram_bot import send_telegram_signal
-            import asyncio
-            asyncio.create_task(send_telegram_signal(setup, timeframe))
+            background_tasks.add_task(send_telegram_signal, setup, timeframe)
         except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(f"⚠️ Telegram send failed: {e}")
+            logger.warning(f"⚠️ Telegram send failed to queue: {e}")
 
         return {
             "setup": db_setup.to_dict(),
