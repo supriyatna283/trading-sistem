@@ -55,7 +55,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/ai", tags=["AI Analysis"])
 
-AI_MODEL_NAME = "nvidia/nemotron-3-ultra-550b-a55b"
+AI_MODEL_NAME = "nvidia/nemotron-3-super-120b-a12b"
 
 def _get_nvidia_client() -> AsyncOpenAI:
     settings = get_settings()
