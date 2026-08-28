@@ -77,8 +77,44 @@ interface IndicatorState {
 
 type ChartStyle = "candlestick" | "line" | "area";
 type DrawingMode = "none" | "hline" | "fibonacci";
+type CandleTheme = "neon" | "classic" | "ocean" | "monochrome";
 
 const TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"];
+
+const CANDLE_THEMES: Record<CandleTheme, any> = {
+  neon: {
+    upColor: "rgba(34, 197, 94, 0.35)",
+    borderUpColor: "#22c55e",
+    wickUpColor: "#4ade80",
+    downColor: "rgba(239, 68, 68, 0.35)",
+    borderDownColor: "#ef4444",
+    wickDownColor: "#f87171",
+  },
+  classic: {
+    upColor: "#26a69a",
+    borderUpColor: "#26a69a",
+    wickUpColor: "#26a69a",
+    downColor: "#ef5350",
+    borderDownColor: "#ef5350",
+    wickDownColor: "#ef5350",
+  },
+  ocean: {
+    upColor: "rgba(14, 165, 233, 0.6)",
+    borderUpColor: "#0ea5e9",
+    wickUpColor: "#38bdf8",
+    downColor: "rgba(249, 115, 22, 0.6)",
+    borderDownColor: "#f97316",
+    wickDownColor: "#fb923c",
+  },
+  monochrome: {
+    upColor: "transparent",
+    borderUpColor: "#d1d5db",
+    wickUpColor: "#d1d5db",
+    downColor: "#9ca3af",
+    borderDownColor: "#9ca3af",
+    wickDownColor: "#9ca3af",
+  }
+};
 const WS_RECONNECT_DELAY = 3000;
 
 // localStorage key for persistent drawings
@@ -368,6 +404,7 @@ export default function TradingViewChart({
     changeAbs: number; changePct: number;
   } | null>(null);
 
+  const [candleTheme, setCandleTheme] = useState<CandleTheme>("neon");
   const [countdown, setCountdown] = useState("");
   const [srLevels, setSrLevels] = useState<{ supports: number[]; resistances: number[] }>({ supports: [], resistances: [] });
 
@@ -604,6 +641,12 @@ export default function TradingViewChart({
       }
     });
   }, [indicators]);
+
+  useEffect(() => {
+    if (seriesRef.current) {
+      seriesRef.current.applyOptions(CANDLE_THEMES[candleTheme]);
+    }
+  }, [candleTheme]);
 
   // Symbols traded on Binance spot (major pairs)
   // Others (HYPE, etc.) are futures-only or OKX-only → try futures then backend poll
@@ -1372,6 +1415,30 @@ export default function TradingViewChart({
               </button>
             );
           })}
+
+            {chartStyle === "candlestick" && (
+              <button
+                type="button"
+                title="Change Candle Color Theme"
+                onClick={() => {
+                  const themes: CandleTheme[] = ["neon", "classic", "ocean", "monochrome"];
+                  const nextTheme = themes[(themes.indexOf(candleTheme) + 1) % themes.length];
+                  setCandleTheme(nextTheme);
+                }}
+                style={{
+                  background: "transparent",
+                  border: "1px solid var(--border)",
+                  color: "var(--text-muted)",
+                  padding: compactToolbar ? "2px 5px" : "3px 8px",
+                  borderRadius: 6, fontSize: compactToolbar ? "0.62rem" : "0.7rem",
+                  fontWeight: 600, cursor: "pointer", transition: "all 0.15s",
+                  display: "flex", alignItems: "center", gap: 4,
+                  marginLeft: 4,
+                }}
+              >
+                <span>🎨 {!compactToolbar && (candleTheme.charAt(0).toUpperCase() + candleTheme.slice(1))}</span>
+              </button>
+            )}
 
           {!compactToolbar && (
             <>
