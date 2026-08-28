@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { API_URL } from '@/lib/utils';
 
 export interface WalletInfo {
     id: number;
@@ -27,8 +28,7 @@ export interface WhaleTransaction {
 }
 
 const getWsUrl = () => {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-    return apiUrl.replace(/^http/, 'ws') + '/ws/whale';
+    return API_URL.replace(/^http/, 'ws') + '/ws/whale';
 };
 
 export function useWhaleSocket(url: string = getWsUrl()) {

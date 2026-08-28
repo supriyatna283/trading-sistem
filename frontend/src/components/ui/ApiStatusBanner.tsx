@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { checkApiHealth } from "@/lib/api";
+import { API_URL } from "@/lib/utils";
 
 export function notifyApiError(message: string) {
   if (typeof window !== "undefined") {
@@ -43,7 +44,7 @@ export default function ApiStatusBanner() {
 
   const isOffline = !online;
   const text = isOffline
-    ? `Backend API tidak terjangkau. Pastikan server berjalan di ${process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}`
+    ? `Backend API tidak terjangkau. Pastikan server berjalan di ${API_URL}`
     : message;
 
   return (

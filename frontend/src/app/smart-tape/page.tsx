@@ -4,7 +4,9 @@ import MainLayout from "@/components/layout/MainLayout";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { api } from "@/lib/api";
 
-const WS_URL = process.env.NEXT_PUBLIC_API_URL?.replace("http", "ws") || "ws://127.0.0.1:8000";
+import { API_URL } from "@/lib/utils";
+
+const WS_URL = API_URL.replace("http", "ws");
 const TAPE_WS = `${WS_URL}/api/v1/orderflow/ws/tape`;
 
 const TIER_CONFIG: Record<string, { color: string; bg: string; border: string; icon: string }> = {

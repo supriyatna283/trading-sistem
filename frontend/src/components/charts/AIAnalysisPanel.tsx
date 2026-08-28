@@ -288,13 +288,15 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
     });
     es.addEventListener("done", () => { setStatus("done"); es.close(); esRef.current = null; });
     es.addEventListener("error", (e: any) => {
-      const msg = (e.data || "").replace(/\\n/g, "\n");
-      setError(msg || "Connection error"); setStatus("error");
+      if (e.data) {
+        const msg = (e.data || "").replace(/\\n/g, "\n");
+        setError(msg || "Connection error");
+      } else {
+        if (status !== "done") setError("Stream disconnected");
+      }
+      setStatus("error");
       es.close(); esRef.current = null;
     });
-    es.onerror = () => {
-      if (status !== "done") { setError("Stream disconnected"); setStatus("error"); es.close(); esRef.current = null; }
-    };
   }, [cancelStream, status]);
 
   const submitChat = useCallback(async () => {

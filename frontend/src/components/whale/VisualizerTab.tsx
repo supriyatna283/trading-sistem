@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { API_URL } from '@/lib/utils';
 import { Network } from 'lucide-react';
 import dagre from 'dagre';
 import {
@@ -28,8 +29,7 @@ export const VisualizerTab: React.FC<VisualizerTabProps> = ({ transactions, setI
     const fetchGraph = async () => {
       setLoading(true);
       try {
-        const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-        const res = await fetch(`${API_BASE}/api/whale/graph?chain=${chainFilter}&limit=100`);
+        const res = await fetch(`${API_URL}/api/whale/graph?chain=${chainFilter}&limit=100`);
         const data = await res.json();
         
         const mappedNodes = data.nodes.map((node: any) => {

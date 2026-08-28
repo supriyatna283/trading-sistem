@@ -1,5 +1,6 @@
 'use client';
 import React, { useState, useEffect, useMemo } from 'react';
+import { API_URL as BASE_URL } from '@/lib/utils';
 import { useWhaleSocket } from '@/lib/hooks/useWhaleSocket';
 import { useDebounce } from '@/lib/hooks/useDebounce';
 import { useWhaleAudio } from '@/lib/hooks/useWhaleAudio';
@@ -30,7 +31,7 @@ export default function App() {
   const debouncedSearchQuery = useDebounce(searchQuery, 300);
   const { playMegaAlert } = useWhaleAudio(soundEnabled);
 
-  const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+  const API_BASE = BASE_URL;
   const WS_URL = API_BASE.replace(/^http/, 'ws') + '/ws/whale';
   const API_URL = API_BASE + '/api';
 

@@ -4,6 +4,7 @@ import MainLayout from "@/components/layout/MainLayout";
 import Link from "next/link";
 import { useState, useEffect } from "react";
 import { api } from "@/lib/api";
+import { API_URL } from "@/lib/utils";
 
 const EXCHANGES = [
   { key: "bybit", label: "Bybit", color: "#f7931a" },
@@ -140,7 +141,6 @@ export default function DashboardPage() {
   // Live price WS
   useEffect(() => {
     if (!scannerData.length) return;
-    const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
     const u = new URL(API_URL);
     const ws = new WebSocket(`${u.protocol === "https:" ? "wss:" : "ws:"}//${u.host}/ws/tickers?symbols=${scannerData.map((s: any) => s.symbol).join(",")}`);
     ws.onmessage = (e) => {
