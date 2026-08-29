@@ -312,6 +312,7 @@ export default function ScannerPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isScanning, setIsScanning] = useState(false);
   const [lastScan, setLastScan] = useState<Date | null>(null);
+  const [isCached, setIsCached] = useState(false);
   const [filter, setFilter] = useState<FilterType>("ALL");
   const [sort, setSort] = useState<SortType>("score");
   const [autoRefresh, setAutoRefresh] = useState(false);
@@ -322,7 +323,13 @@ export default function ScannerPage() {
     try {
       const res = await api.getScanner();
       setScannerData(Array.isArray(res?.results) ? res.results : []);
-      setLastScan(new Date());
+      // Use backend's last_scan_at if available, else use now
+      if (res?.last_scan_at) {
+        setLastScan(new Date(res.last_scan_at));
+      } else {
+        setLastScan(new Date());
+      }
+      setIsCached(res?.cached === true);
     } catch (err) {
       console.error("Scanner fetch error:", err);
     } finally {
@@ -333,10 +340,20 @@ export default function ScannerPage() {
   const handleScan = useCallback(async () => {
     setIsScanning(true);
     try {
-      await api.runScanner();
-      await fetchData(true);
-    } catch (err) {
-      console.error("Scan error:", err);
+      // runScanner already returns results — update state directly
+      const res = await api.runScanner();
+      if (Array.isArray(res?.results)) {
+        setScannerData(res.results);
+        setLastScan(new Date());
+        setIsCached(false);
+      }
+    } catch (err: any) {
+      // If rate-limited, just refresh cache silently
+      if (err?.message?.includes("Rate limited") || err?.message?.includes("429")) {
+        await fetchData(true);
+      } else {
+        console.error("Scan error:", err);
+      }
     } finally {
       setIsScanning(false);
     }
@@ -411,9 +428,14 @@ export default function ScannerPage() {
             <h1 style={{ fontSize: "1.8rem", fontWeight: 900, letterSpacing: "-0.04em", margin: 0, background: "linear-gradient(135deg, #fff 35%, #475569)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
               Market Intelligence
             </h1>
-            <p style={{ color: "#475569", fontSize: "0.78rem", margin: "5px 0 0" }}>
-              6-Layer: STR · PA · SMC · VOL · TIM · RR · {scannerData.length} pairs scanned
-              {lastScan && ` · Last updated: ${lastScan.toLocaleTimeString()}`}
+            <p style={{ color: "#475569", fontSize: "0.78rem", margin: "5px 0 0", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              6-Layer: STR · PA · SMC · VOL · TIM · RR · {scannerData.length} pairs
+              {lastScan && <span>· {lastScan.toLocaleTimeString()}</span>}
+              {isCached && (
+                <span style={{ fontSize: "0.6rem", fontWeight: 800, padding: "2px 6px", borderRadius: 4, background: "rgba(234,179,8,0.1)", color: "#eab308", border: "1px solid rgba(234,179,8,0.2)" }}>
+                  📦 CACHED
+                </span>
+              )}
             </p>
           </div>
 

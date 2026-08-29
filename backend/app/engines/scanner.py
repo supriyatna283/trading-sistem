@@ -34,14 +34,15 @@ SCAN_TIMEFRAMES = ["1d", "4h", "1h"]
 
 
 class MarketScanner:
-    """V4 — Scans multiple assets with full market intelligence integration."""
+    """V5 — Scans multiple assets with full market intelligence integration."""
 
     def __init__(self, redis_client=None):
         self.data_engine = MarketDataEngine(redis_client=redis_client)
         self.structure = MarketStructureAnalyzer()
         self.smc = SmartMoneyConceptsEngine()
         self.confluence = ConfluenceEngine()
-        self.setup_gen = SetupGenerator(min_confluence_score=16, min_rr=1.8)
+        # FIX #3: Threshold 12/18 (consistent with Setups page). Old 16/18 was too strict.
+        self.setup_gen = SetupGenerator(min_confluence_score=12, min_rr=1.5)
         self.mtf_engine = MTFConfirmationEngine()
         self.sentiment_engine = SentimentEngine()
         self.news_engine = NewsCalendarEngine()
@@ -64,7 +65,8 @@ class MarketScanner:
             "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
             # Large Cap
             "ADAUSDT", "AVAXUSDT", "DOGEUSDT", "DOTUSDT", "LINKUSDT",
-            "MATICUSDT", "UNIUSDT", "AAVEUSDT", "ATOMUSDT", "LTCUSDT",
+            # FIX #4: MATIC renamed to POL on Binance (Aug 2024)
+            "POLUSDT", "UNIUSDT", "AAVEUSDT", "ATOMUSDT", "LTCUSDT",
             "NEARUSDT", "FILUSDT", "APTUSDT", "ARBUSDT", "OPUSDT",
             "INJUSDT", "SUIUSDT", "TIAUSDT", "WIFUSDT", "JUPUSDT",
             # DeFi
@@ -80,8 +82,8 @@ class MarketScanner:
         # Fetch macro context once for all symbols (shared data)
         sentiment_data, news_events, btc_dominance = await self._fetch_macro_context()
 
-        # Run with concurrency limit to avoid overwhelming resources
-        semaphore = asyncio.Semaphore(15)
+        # FIX #9: Limit to 6 concurrent to avoid Binance rate-limit on HF Spaces
+        semaphore = asyncio.Semaphore(6)
 
         async def _sc(sym):
             async with semaphore:
@@ -273,19 +275,68 @@ class MarketScanner:
             if rsi_1h <= 25 or rsi_1h >= 75:
                 strong_rsi_signal = True
 
-        # --- Final Scoring & Grade (V7 alignment) ---
-        # Scale 24-point score to 100-point scale for frontend progress bar
+        # --- Final Scoring & Grade ---
+        # Scale 18-point score to 100-point scale
         signal_score = round((conf.total_score / conf.max_score) * 100) if conf.max_score > 0 else 0
-        
-        # Calculate breakdown for frontend layers (STR, PA, SMC, VOL, TIM, RR)
+
+        # FIX #1 + #5: score_breakdown now uses ACTUAL keys from confluence.py details.
+        # Confluence.py only writes: fibonacci, macd, rsi, htf_bias, structure, volume, session, news
+        # SMC and RR are derived from smc analysis + mtf + market intel objects.
         det = conf.details
+
+        # PA = Signal Generators: Fibonacci(4) + MACD(4) + RSI(4) = max 12
+        pa_raw = (det.get("fibonacci", {}).get("score", 0)
+                  + det.get("macd", {}).get("score", 0)
+                  + det.get("rsi", {}).get("score", 0))
+        pa_pct = round(pa_raw / 12 * 100)
+
+        # STR = HTF Bias(2) + Structure(1) = max 3
+        str_raw = (det.get("htf_bias", {}).get("score", 0)
+                   + det.get("structure", {}).get("score", 0))
+        str_pct = round(str_raw / 3 * 100)
+
+        # VOL = Volume(1) = max 1 (either 0 or 100)
+        vol_pct = round(det.get("volume", {}).get("score", 0) * 100)
+
+        # TIM = Session(1) + News(1) = max 2
+        tim_raw = (det.get("session", {}).get("score", 0)
+                   + det.get("news", {}).get("score", 0))
+        tim_pct = round(tim_raw / 2 * 100)
+
+        # SMC: derive from actual SMC analysis object (not confluence details)
+        smc_points = 0
+        smc_max = 4
+        if hasattr(smc, "unmitigated_ob_count") and smc.unmitigated_ob_count > 0:
+            smc_points += 2
+        if hasattr(smc, "unfilled_fvg_count") and smc.unfilled_fvg_count > 0:
+            smc_points += 1
+        if hasattr(smc, "pd_zone") and smc.pd_zone in ("DISCOUNT", "PREMIUM"):
+            smc_points += 1
+        smc_pct = round(smc_points / smc_max * 100)
+
+        # RR: derive from MTF + order book + S/R proximity
+        rr_points = 0
+        rr_max = 4
+        # FIX #6: mtf_result is a dict (MTFConfirmationEngine.analyze returns dict)
+        mtf_level = mtf_result.get("confirmation_level", "NONE") if isinstance(mtf_result, dict) else "NONE"
+        if mtf_level == "STRONG":
+            rr_points += 2
+        elif mtf_level == "MODERATE":
+            rr_points += 1
+        if isinstance(orderbook_data, dict) and orderbook_data.get("bias") in ("BULLISH", "BEARISH"):
+            rr_points += 1
+        sr_dist = sr_data.get("support_distance_pct", 100) if structure.bias == "BULLISH" else sr_data.get("resistance_distance_pct", 100)
+        if sr_dist is not None and sr_dist < 1.5:
+            rr_points += 1  # Price very near key S/R level — RR favorable
+        rr_pct = round(min(rr_points, rr_max) / rr_max * 100)
+
         score_breakdown = {
-            "STR": round((det.get("htf_bias", {}).get("score", 0) + det.get("structure", {}).get("score", 0) + det.get("mtf_confirmation", {}).get("score", 0)) / 4 * 20),
-            "PA":  round((det.get("rsi", {}).get("score", 0) + det.get("ema", {}).get("score", 0) + det.get("macd", {}).get("score", 0) + det.get("bollinger_bands", {}).get("score", 0) + det.get("stoch_rsi", {}).get("score", 0) + det.get("divergence", {}).get("score", 0)) / 9 * 20),
-            "SMC": round((det.get("liquidity", {}).get("score", 0) + det.get("order_block", {}).get("score", 0) + det.get("fvg", {}).get("score", 0) + det.get("premium_discount", {}).get("score", 0)) / 6 * 20),
-            "VOL": round((det.get("volume", {}).get("score", 0) + det.get("vwap", {}).get("score", 0) + det.get("volume_profile", {}).get("score", 0)) / 5 * 20),
-            "TIM": round((det.get("session", {}).get("score", 0) + det.get("news", {}).get("score", 0) + det.get("sentiment", {}).get("score", 0)) / 3 * 10),
-            "RR":  round((det.get("btc_dominance", {}).get("score", 0) + det.get("orderbook", {}).get("score", 0) + det.get("liquidation", {}).get("score", 0) + det.get("market_cap", {}).get("score", 0) + det.get("support_resistance", {}).get("score", 0)) / 6 * 10),
+            "STR": str_pct,
+            "PA":  pa_pct,
+            "SMC": smc_pct,
+            "VOL": vol_pct,
+            "TIM": tim_pct,
+            "RR":  rr_pct,
         }
 
         # Determine signal grade
@@ -328,12 +379,13 @@ class MarketScanner:
             "score_breakdown": score_breakdown, # For LayerBreakdown component
             "hard_rejected": hard_rejected,
             "rejection_reasons": rejection_reasons,
-            "mtf_confirmation": mtf_result.get("confirmation_level", "NONE"),
+            "mtf_confirmation": mtf_level,
             "setup": setup.model_dump() if setup else None,
             "rsi_1h": rsi_1h,
             "rsi_4h": rsi_4h,
             "rsi_1d": rsi_1d,
             "strong_rsi_signal": strong_rsi_signal,
+            "last_scan_at": pd.Timestamp.utcnow().isoformat(),
             # --- Market Intelligence (V4) ---
             "btc_dominance": (btc_dominance or {}).get("btc_dominance", 0),
             "orderbook_ratio": orderbook_data.get("buy_sell_ratio", 1.0) if isinstance(orderbook_data, dict) else 1.0,
