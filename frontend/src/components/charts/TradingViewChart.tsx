@@ -581,7 +581,7 @@ export default function TradingViewChart({
       LL: { position: "belowBar", color: "#ef4444", shape: "arrowDown" },
     };
 
-    if (effectiveMarkers.length > 0) {
+    if (showSMC && effectiveMarkers.length > 0) {
       const markers: SeriesMarker<Time>[] = effectiveMarkers
         .filter(m => m.time > 0)
         .map(m => {
@@ -923,6 +923,7 @@ export default function TradingViewChart({
       wickUpColor: "#4ade80",
       wickDownColor: "#f87171",
       visible: chartStyle === "candlestick",
+      lastPriceAnimation: 1,
     });
 
     const lineSeries = chart.addLineSeries({
@@ -1326,7 +1327,122 @@ export default function TradingViewChart({
   };
 
   return (
-    <div className="glass-card" style={{ padding: 0, overflow: "hidden", position: "relative", height: "100%", display: "flex", flexDirection: "column" }}>
+    <div className="glass-card" style={{ padding: 0, overflow: "hidden", position: "relative", height: "100%", display: "flex", flexDirection: "row" }}>
+
+      {/* ── Left Sidebar (Tools) ── */}
+      {!compactToolbar && (
+        <div style={{
+          width: 48,
+          borderRight: "1px solid var(--border)",
+          background: "rgba(0,0,0,0.12)",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          padding: "12px 0",
+          gap: 16,
+          flexShrink: 0,
+          overflowY: "auto",
+        }}>
+          {/* H-Line */}
+          <button
+            onClick={() => { setDrawingMode(drawingMode === "hline" ? "none" : "hline"); setFibAnchor(null); }}
+            title="Horizontal Line"
+            style={{
+              width: 32, height: 32, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center",
+              border: `1px solid ${drawingMode === "hline" ? "rgba(129,140,248,0.6)" : "transparent"}`,
+              background: drawingMode === "hline" ? "rgba(129,140,248,0.12)" : "transparent",
+              color: drawingMode === "hline" ? "#818cf8" : "var(--text-muted)",
+              cursor: "pointer", transition: "all 0.15s",
+            }}
+          >
+            ──
+          </button>
+          
+          {/* Fibonacci */}
+          <button
+            onClick={() => { setDrawingMode(drawingMode === "fibonacci" ? "none" : "fibonacci"); setFibAnchor(null); }}
+            title="Fibonacci Retracement"
+            style={{
+              width: 32, height: 32, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center",
+              border: `1px solid ${drawingMode === "fibonacci" ? "rgba(245,158,11,0.6)" : "transparent"}`,
+              background: drawingMode === "fibonacci" ? "rgba(245,158,11,0.12)" : "transparent",
+              color: drawingMode === "fibonacci" ? "#f59e0b" : "var(--text-muted)",
+              cursor: "pointer", transition: "all 0.15s",
+            }}
+          >
+            📐
+          </button>
+
+          {/* Placeholders for visual completeness */}
+          <button
+            title="Trendline (Coming Soon)"
+            style={{ width: 32, height: 32, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", background: "transparent", border: "1px solid transparent", cursor: "not-allowed", opacity: 0.5 }}
+          >
+            📉
+          </button>
+          <button
+            title="Rectangle (Coming Soon)"
+            style={{ width: 32, height: 32, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", background: "transparent", border: "1px solid transparent", cursor: "not-allowed", opacity: 0.5 }}
+          >
+            🔲
+          </button>
+          <button
+            title="Brush (Coming Soon)"
+            style={{ width: 32, height: 32, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", background: "transparent", border: "1px solid transparent", cursor: "not-allowed", opacity: 0.5 }}
+          >
+            🖌️
+          </button>
+          <button
+            title="Text (Coming Soon)"
+            style={{ width: 32, height: 32, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", background: "transparent", border: "1px solid transparent", cursor: "not-allowed", opacity: 0.5 }}
+          >
+            T
+          </button>
+
+          <div style={{ flexGrow: 1 }} />
+
+          {/* Clear drawings */}
+          {drawingsCount > 0 && (
+            <button
+              onClick={() => {
+                const activeSeries = seriesRef.current || lineSeriesRef.current || areaSeriesRef.current;
+                if (activeSeries) {
+                  userDrawingsRef.current.forEach(d => {
+                    try { activeSeries.removePriceLine(d.pl ?? d); } catch (_) {}
+                  });
+                  userDrawingsRef.current = [];
+                  setDrawingsCount(0);
+                  saveDrawings(symbol, []);
+                }
+                fibLinesRef.current.forEach(pl => {
+                  try {
+                    const activeSer = seriesRef.current || lineSeriesRef.current || areaSeriesRef.current;
+                    activeSer?.removePriceLine(pl);
+                  } catch (_) {}
+                });
+                fibLinesRef.current = [];
+              }}
+              title="Clear all drawings"
+              style={{
+                width: 32, height: 32, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center",
+                border: "1px solid rgba(239,68,68,0.4)",
+                background: "rgba(239,68,68,0.08)",
+                color: "rgba(239,68,68,0.8)",
+                cursor: "pointer", transition: "all 0.15s",
+                position: "relative",
+              }}
+            >
+              ✕
+              <span style={{ position: "absolute", top: -4, right: -4, background: "#ef4444", color: "white", fontSize: "0.55rem", padding: "1px 4px", borderRadius: 10, fontWeight: "bold" }}>
+                {drawingsCount}
+              </span>
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* ── Main Chart Area ── */}
+      <div style={{ display: "flex", flexDirection: "column", flexGrow: 1, overflow: "hidden", position: "relative" }}>
 
       {/* ── Chart Header ── */}
       <div
@@ -1478,7 +1594,7 @@ export default function TradingViewChart({
             ] as { key: keyof IndicatorState; label: string; color: string }[]).map(({ key, label, color }) => (
               <button key={key} onClick={() => toggleIndicator(key)} style={{
                 padding: "2px 9px", borderRadius: 20,
-                border: `1px solid ${indicators[key] ? color : "var(--border)"}`,
+                border: `1px solid ${indicators[key] ? color : "transparent"}`,
                 background: indicators[key] ? `${color.replace("0.9)", "0.18)").replace("0.95)", "0.18)")}` : "transparent",
                 color: indicators[key] ? color : "var(--text-muted)",
                 fontSize: "0.69rem", fontWeight: 800, cursor: "pointer", transition: "all 0.15s",
@@ -1502,7 +1618,7 @@ export default function TradingViewChart({
             ] as { key: keyof IndicatorState; label: string; color: string }[]).map(({ key, label, color }) => (
               <button key={key} onClick={() => toggleIndicator(key)} style={{
                 padding: "2px 8px", borderRadius: 20,
-                border: `1px solid ${indicators[key] ? color : "var(--border)"}`,
+                border: `1px solid ${indicators[key] ? color : "transparent"}`,
                 background: indicators[key] ? `${color.replace("0.9)", "0.12)")}` : "transparent",
                 color: indicators[key] ? color : "var(--text-muted)",
                 fontSize: "0.68rem", fontWeight: 700, cursor: "pointer", transition: "all 0.15s",
@@ -1513,71 +1629,6 @@ export default function TradingViewChart({
             ))}
           </div>
 
-          {/* Drawing Tools */}
-          <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-            <span style={{ fontSize: "0.68rem", color: "var(--text-muted)", marginRight: 2, fontWeight: 600 }}>TOOLS</span>
-            {/* H-Line */}
-            <button
-              onClick={() => { setDrawingMode(drawingMode === "hline" ? "none" : "hline"); setFibAnchor(null); }}
-              title="Horizontal Line"
-              style={{
-                padding: "2px 8px", borderRadius: 20,
-                border: `1px solid ${drawingMode === "hline" ? "rgba(129,140,248,0.6)" : "var(--border)"}`,
-                background: drawingMode === "hline" ? "rgba(129,140,248,0.12)" : "transparent",
-                color: drawingMode === "hline" ? "#818cf8" : "var(--text-muted)",
-                fontSize: "0.68rem", fontWeight: 700, cursor: "pointer", transition: "all 0.15s",
-              }}
-            >
-              ── H-Line
-            </button>
-            {/* Fibonacci */}
-            <button
-              onClick={() => { setDrawingMode(drawingMode === "fibonacci" ? "none" : "fibonacci"); setFibAnchor(null); }}
-              title="Fibonacci Retracement"
-              style={{
-                padding: "2px 8px", borderRadius: 20,
-                border: `1px solid ${drawingMode === "fibonacci" ? "rgba(245,158,11,0.6)" : "var(--border)"}`,
-                background: drawingMode === "fibonacci" ? "rgba(245,158,11,0.12)" : "transparent",
-                color: drawingMode === "fibonacci" ? "#f59e0b" : "var(--text-muted)",
-                fontSize: "0.68rem", fontWeight: 700, cursor: "pointer", transition: "all 0.15s",
-              }}
-            >
-              📐 Fib
-            </button>
-            {/* Clear drawings */}
-            {drawingsCount > 0 && (
-              <button
-                onClick={() => {
-                  const activeSeries = seriesRef.current || lineSeriesRef.current || areaSeriesRef.current;
-                  if (activeSeries) {
-                    userDrawingsRef.current.forEach(d => {
-                      try { activeSeries.removePriceLine(d.pl ?? d); } catch (_) {}
-                    });
-                    userDrawingsRef.current = [];
-                    setDrawingsCount(0);
-                    saveDrawings(symbol, []);
-                  }
-                  // Also clear fibonacci lines
-                  fibLinesRef.current.forEach(pl => {
-                    try {
-                      const activeSer = seriesRef.current || lineSeriesRef.current || areaSeriesRef.current;
-                      activeSer?.removePriceLine(pl);
-                    } catch (_) {}
-                  });
-                  fibLinesRef.current = [];
-                }}
-                title="Clear all drawn lines"
-                style={{
-                  padding: "2px 8px", borderRadius: 20,
-                  border: "1px solid rgba(239,68,68,0.4)",
-                  background: "rgba(239,68,68,0.08)",
-                  color: "rgba(239,68,68,0.8)",
-                  fontSize: "0.68rem", fontWeight: 700, cursor: "pointer", transition: "all 0.15s",
-                }}
-              >
-                ✕ Clear ({drawingsCount})
-              </button>
-            )}
           </div>
         </div>
       )}
@@ -1704,6 +1755,7 @@ export default function TradingViewChart({
           </button>
         </div>
       )}
+      </div>
     </div>
   );
 }
