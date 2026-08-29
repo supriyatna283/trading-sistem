@@ -219,6 +219,7 @@ async def generate_setup(
 
 @router.post("/generate/all", dependencies=[Depends(require_api_key)])
 async def generate_all_setups(
+    background_tasks: BackgroundTasks,
     timeframe: str = Query("1h"),
     tier: str = Query("all", description="Tier filter: 'top' (T1+T2 only) or 'all' (T1+T2+T3)"),
 ):
@@ -266,7 +267,12 @@ async def generate_all_setups(
         async with semaphore:
             local_db = SessionLocal()
             try:
-                result = await generate_setup(symbol, timeframe, local_db)
+                result = await generate_setup(
+                    symbol=symbol,
+                    background_tasks=background_tasks,
+                    timeframe=timeframe,
+                    db=local_db
+                )
                 local_db.commit()
                 return result
             except Exception as e:
