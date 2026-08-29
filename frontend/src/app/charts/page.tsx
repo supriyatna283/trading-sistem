@@ -133,9 +133,11 @@ function ChartsPageContent() {
         const data = await res.json();
         const prices: Record<string, { price: number; chg: number }> = {};
         (Array.isArray(data) ? data : []).forEach((t: any) => {
+          const last = parseFloat(t.lastPrice);
+          const open = parseFloat(t.openPrice);
           prices[t.symbol] = {
-            price: parseFloat(t.lastPrice),
-            chg: parseFloat(t.priceChangePercent),
+            price: last,
+            chg: open > 0 ? ((last - open) / open) * 100 : 0,
           };
         });
         setWatchlistPrices(prices);
