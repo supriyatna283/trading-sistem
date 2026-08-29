@@ -23,7 +23,10 @@ interface SetupData {
   tp1: number | null;
   tp2: number | null;
   tp3: number | null;
+  tp_probability?: Record<string, number>;
   risk_reward: number | null;
+  risk_per_unit?: number | null;
+  invalidation_level?: number | null;
   atr?: number | null;
   htf_biases: Record<string, string>;
   indicators: Record<string, any>;
