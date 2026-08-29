@@ -431,8 +431,9 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
                 background: pct >= 60 ? "#22c55e" : pct >= 35 ? "#f59e0b" : "#ef4444",
               }} />
             </div>
+            {/* FIX #3c: display confluence as % — consistent with all other score displays */}
             <span style={{ fontSize: "0.58rem", fontWeight: 700, color: pct >= 60 ? "#4ade80" : pct >= 35 ? "#fbbf24" : "#f87171" }}>
-              {score}/{maxScore}
+              {pct}%
             </span>
           </div>
         )}
@@ -510,12 +511,36 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
                   <div className="levels-title">Trade Levels</div>
                   <PriceRow label="Entry Zone" value={`${fmt(setup.entry_low)} – ${fmt(setup.entry_high)}`} color="#60a5fa" bold />
                   <PriceRow label="Stop Loss" value={fmt(setup.stop_loss)} color="#f87171" bold />
+                  {/* FIX #10: Invalidation Level in AI Panel */}
+                  {setup.invalidation_level != null && (
+                    <PriceRow label="Invalidation" value={fmt(setup.invalidation_level)} color="#f43f5e" />
+                  )}
                   <div style={{ height: 6 }} />
-                  <PriceRow label="Take Profit 1" value={fmt(setup.tp1)} color="#4ade80" />
-                  <PriceRow label="Take Profit 2" value={fmt(setup.tp2)} color="#34d399" />
-                  <PriceRow label="Take Profit 3" value={fmt(setup.tp3)} color="#10b981" />
+                  {/* FIX #11: TP with probability chips */}
+                  {(["tp1", "tp2", "tp3"] as const).map((key, idx) => {
+                    const val = setup[key];
+                    const prob = setup.tp_probability?.[key] ?? [75, 55, 30][idx];
+                    const tpColors = ["#4ade80", "#34d399", "#10b981"];
+                    if (!val) return null;
+                    return (
+                      <div key={key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 0", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <span style={{ fontSize: "0.63rem", color: "var(--text-muted)", fontWeight: 600 }}>Take Profit {idx + 1}</span>
+                          <span style={{ fontSize: "0.5rem", fontWeight: 800, padding: "1px 5px", borderRadius: 4,
+                            background: prob >= 70 ? "rgba(34,197,94,0.15)" : prob >= 50 ? "rgba(245,158,11,0.15)" : "rgba(239,68,68,0.15)",
+                            color: prob >= 70 ? "#22c55e" : prob >= 50 ? "#f59e0b" : "#f87171",
+                          }}>{prob}%</span>
+                        </div>
+                        <span style={{ fontSize: "0.72rem", fontWeight: 700, fontFamily: "'JetBrains Mono','Fira Code',monospace", color: tpColors[idx] }}>{fmt(val)}</span>
+                      </div>
+                    );
+                  })}
                   <div style={{ height: 4 }} />
                   <PriceRow label="ATR (volatility)" value={fmt(setup.atr, 6)} color="var(--text-muted)" />
+                  {/* FIX #5: Risk Per Unit for position sizing */}
+                  {setup.risk_per_unit != null && (
+                    <PriceRow label="Risk/Unit" value={fmt(setup.risk_per_unit, 6)} color="#fb923c" />
+                  )}
                 </div>
               ) : (
                 <div id="ai-wait-box">

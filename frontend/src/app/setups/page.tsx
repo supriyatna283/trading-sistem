@@ -28,9 +28,10 @@ type ConfirmAction = { type: "delete_one"; id: number; symbol: string } | { type
 
 const SCORE_PRESETS = [
   { label: "ALL", value: 0, color: "#94a3b8" },
-  { label: "50+", value: 50, color: "#60a5fa" },
-  { label: "65+", value: 65, color: "#10b981" },
+  { label: "60+", value: 60, color: "#60a5fa" },
+  { label: "70+", value: 70, color: "#10b981" },
   { label: "80+", value: 80, color: "#f59e0b" },
+  { label: "90+", value: 90, color: "#a78bfa" },
 ];
 
 const SORT_OPTIONS: { key: SortKey; label: string }[] = [
@@ -182,6 +183,7 @@ export default function SetupsPage() {
       <style>{`
         @keyframes spin { to { transform: rotate(360deg); } }
         @keyframes pulse-dot { 0%,100%{opacity:1;} 50%{opacity:0.4;} }
+        @keyframes pulse-stale { 0%,100%{opacity:1;} 50%{opacity:0.6;} }
         .setup-card:hover { transform: translateY(-2px); box-shadow: 0 16px 40px rgba(0,0,0,0.3); }
         .setup-card { transition: transform 0.2s, box-shadow 0.2s; }
       `}</style>

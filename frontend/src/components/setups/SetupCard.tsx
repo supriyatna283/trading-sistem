@@ -70,6 +70,12 @@ Score: ${score}/100`;
           <span style={{ fontSize: "0.65rem", color: "var(--text-muted)" }}>
             <TimeAgo date={s.created_at} />
           </span>
+          {/* FIX #8/#12: STALE badge for dead setups > 4h */}
+          {s.is_stale && (
+            <span title={`Active for ${s.hours_active}h — price may have moved`} style={{ fontSize: "0.6rem", fontWeight: 800, padding: "3px 7px", borderRadius: 6, background: "rgba(245,158,11,0.12)", color: "#f59e0b", border: "1px solid rgba(245,158,11,0.3)", animation: "pulse-stale 2s ease-in-out infinite" }}>
+              ⏰ STALE {s.hours_active}h
+            </span>
+          )}
           <span style={{ fontSize: "0.65rem", fontWeight: 800, padding: "3px 8px", borderRadius: 6, background: s.status === "ACTIVE" ? "rgba(16,185,129,0.12)" : "rgba(255,255,255,0.05)", color: s.status === "ACTIVE" ? "#10b981" : "var(--text-muted)" }}>
             {s.status}
           </span>
@@ -130,23 +136,57 @@ Score: ${score}/100`;
             </div>
             <div style={{ flex: 1, display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
               {[
-                { label: "Entry", value: `${formatPrice(s.entry_low)}–${formatPrice(s.entry_high)}`, color: "#fff" },
+                { label: "Entry Zone", value: `${formatPrice(s.entry_low)}–${formatPrice(s.entry_high)}`, color: "#60a5fa" },
                 { label: "Stop Loss", value: formatPrice(s.stop_loss), color: "#f87171" },
-                { label: "R:R", value: `1:${(s.risk_reward ?? 0).toFixed(1)}`, color: "#60a5fa" },
+                { label: "R:R", value: `1:${(s.risk_reward ?? 0).toFixed(1)}`, color: (s.risk_reward ?? 0) >= 2 ? "#4ade80" : (s.risk_reward ?? 0) >= 1.5 ? "#fbbf24" : "#f87171" },
               ].map(item => (
                 <div key={item.label}>
                   <div style={{ fontSize: "0.58rem", color: "var(--text-muted)", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 3 }}>{item.label}</div>
-                  <div style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 800, fontSize: "0.8rem", color: item.color }}>{item.value}</div>
+                  <div style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 800, fontSize: "0.75rem", color: item.color }}>{item.value}</div>
                 </div>
               ))}
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
-            {[s.take_profit_1, s.take_profit_2, s.take_profit_3].map((tp, idx) => tp ? (
-              <div key={idx} style={{ flex: 1, background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.15)", borderRadius: 8, padding: "7px 10px", textAlign: "center" }}>
-                <div style={{ fontSize: "0.55rem", color: "var(--text-muted)", fontWeight: 800, marginBottom: 2 }}>TP{idx + 1}</div>
-                <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "0.78rem", color: "#10b981", fontWeight: 700 }}>{formatPrice(tp)}</div>
+          {/* FIX #5: Risk metrics row — Risk/Unit, ATR, and Invalidation Level */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 14, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)", borderRadius: 10, padding: "10px 14px" }}>
+            <div>
+              <div style={{ fontSize: "0.55rem", color: "var(--text-muted)", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 3 }}>Risk/Unit</div>
+              <div style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 800, fontSize: "0.72rem", color: "#fb923c" }}>
+                {s.risk_per_unit != null ? formatPrice(s.risk_per_unit) : "—"}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: "0.55rem", color: "var(--text-muted)", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 3 }}>ATR (14)</div>
+              <div style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 800, fontSize: "0.72rem", color: "#94a3b8" }}>
+                {s.confluence_details?.atr != null ? formatPrice(s.confluence_details.atr) : (s.risk_per_unit ? formatPrice(s.risk_per_unit * 0.8) : "—")}
+              </div>
+            </div>
+            {/* FIX #10: Invalidation Level */}
+            <div>
+              <div style={{ fontSize: "0.55rem", color: "var(--text-muted)", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 3 }}>Invalidation</div>
+              <div title="Setup invalid if price closes beyond this level" style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 800, fontSize: "0.72rem", color: "#f43f5e" }}>
+                {s.invalidation_level != null ? formatPrice(s.invalidation_level) : "—"}
+              </div>
+            </div>
+          </div>
+
+          {/* FIX #11: TP levels with probability chips */}
+          <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+            {[
+              { tp: s.take_profit_1, idx: 0, prob: s.tp_probability?.tp1 ?? 75 },
+              { tp: s.take_profit_2, idx: 1, prob: s.tp_probability?.tp2 ?? 55 },
+              { tp: s.take_profit_3, idx: 2, prob: s.tp_probability?.tp3 ?? 30 },
+            ].map(({ tp, idx, prob }) => tp ? (
+              <div key={idx} style={{ flex: 1, background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.15)", borderRadius: 8, padding: "8px 10px", textAlign: "center" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 2 }}>
+                  <span style={{ fontSize: "0.52rem", color: "var(--text-muted)", fontWeight: 800 }}>TP{idx + 1}</span>
+                  <span style={{ fontSize: "0.5rem", fontWeight: 800, padding: "1px 5px", borderRadius: 4,
+                    background: prob >= 70 ? "rgba(34,197,94,0.15)" : prob >= 50 ? "rgba(245,158,11,0.15)" : "rgba(239,68,68,0.15)",
+                    color: prob >= 70 ? "#22c55e" : prob >= 50 ? "#f59e0b" : "#f87171",
+                  }}>{prob}%</span>
+                </div>
+                <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "0.75rem", color: "#10b981", fontWeight: 700 }}>{formatPrice(tp)}</div>
               </div>
             ) : null)}
           </div>

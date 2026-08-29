@@ -923,7 +923,6 @@ export default function TradingViewChart({
       wickUpColor: "#4ade80",
       wickDownColor: "#f87171",
       visible: chartStyle === "candlestick",
-      lastPriceAnimation: 1,
     });
 
     const lineSeries = chart.addLineSeries({
@@ -1627,8 +1626,6 @@ export default function TradingViewChart({
                 {label}
               </button>
             ))}
-          </div>
-
           </div>
         </div>
       )}

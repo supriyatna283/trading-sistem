@@ -95,9 +95,10 @@ def calculate_trade_levels(direction: str, last_price: float, smc, df: pd.DataFr
         sl = (swing_low - atr * 0.15) if (swing_low is not None and swing_low < entry_low) else (entry_low - atr * 1.0)
 
         risk = entry_low - sl
-        tp1 = entry_high + risk * 2.0
-        tp2 = entry_high + risk * 3.0
-        tp3 = entry_high + risk * 4.5
+        effective_risk = max(risk, atr * 1.0) if atr > 0 else risk
+        tp1 = entry_high + effective_risk * 2.0
+        tp2 = entry_high + effective_risk * 3.0
+        tp3 = entry_high + effective_risk * 4.5
 
     else:  # SELL
         bearish_obs = [ob for ob in smc.order_blocks if ob.type == "BEARISH" and not ob.mitigated]
@@ -114,9 +115,10 @@ def calculate_trade_levels(direction: str, last_price: float, smc, df: pd.DataFr
         sl = (swing_high + atr * 0.15) if (swing_high is not None and swing_high > entry_high) else (entry_high + atr * 1.0)
 
         risk = sl - entry_high
-        tp1 = entry_low - risk * 2.0
-        tp2 = entry_low - risk * 3.0
-        tp3 = entry_low - risk * 4.5
+        effective_risk = max(risk, atr * 1.0) if atr > 0 else risk
+        tp1 = entry_low - effective_risk * 2.0
+        tp2 = entry_low - effective_risk * 3.0
+        tp3 = entry_low - effective_risk * 4.5
 
     return entry_low, entry_high, sl, tp1, tp2, tp3
 

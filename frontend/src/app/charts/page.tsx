@@ -73,6 +73,8 @@ function ChartsPageContent() {
   const [showSearch, setShowSearch] = useState(false);
   const [activeTimeframe, setActiveTimeframe] = useState(initTf);
   const [showAIPanel, setShowAIPanel] = useState(initAi);
+  // FIX #9: Live prices for watchlist
+  const [watchlistPrices, setWatchlistPrices] = useState<Record<string, { price: number; chg: number }>>({});
   const pageRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const mtfAbortRef = useRef<AbortController | null>(null);
@@ -116,6 +118,35 @@ function ChartsPageContent() {
     };
     fetchData();
   }, []);
+
+  // FIX #9: Poll live prices for watchlist every 10 seconds via Binance miniTicker API
+  useEffect(() => {
+    if (!showWatchlist) return;
+    const allPairs = [...new Set([...watchlist, ...QUICK_PAIRS.slice(0, 10)])];
+    if (allPairs.length === 0) return;
+
+    const fetchPrices = async () => {
+      try {
+        const symbols = JSON.stringify(allPairs);
+        const res = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbols=${encodeURIComponent(symbols)}&type=MINI`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const prices: Record<string, { price: number; chg: number }> = {};
+        (Array.isArray(data) ? data : []).forEach((t: any) => {
+          prices[t.symbol] = {
+            price: parseFloat(t.lastPrice),
+            chg: parseFloat(t.priceChangePercent),
+          };
+        });
+        setWatchlistPrices(prices);
+      } catch (_) {}
+    };
+
+    fetchPrices();
+    const timer = setInterval(fetchPrices, 10000);
+    return () => clearInterval(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showWatchlist, watchlist]);
 
 
   const fetchMTFData = useCallback(async (sym: string) => {
@@ -339,22 +370,31 @@ function ChartsPageContent() {
               <div style={{ display: "flex", flexDirection: "column", gap: 2, flex: 1, overflowY: "auto" }}>
                 {/* Quick pairs header */}
                 <div style={{ fontSize: "0.65rem", color: "var(--text-muted)", fontWeight: 600, marginBottom: 4, marginTop: 2 }}>MY LIST</div>
-                {watchlist.map(sym => (
-                  <div
-                    key={sym}
-                    onClick={() => selectSymbol(sym)}
-                    className={`watchlist-item${selectedSymbol === sym ? " watchlist-item-active" : ""}`}
-                  >
-                    <div>
-                      <span className="wl-base">{sym.replace("USDT", "")}</span>
-                      <span className="wl-quote">/USDT</span>
+                {watchlist.map(sym => {
+                  const lp = watchlistPrices[sym];
+                  const chgClr = !lp ? "var(--text-muted)" : lp.chg >= 0 ? "#22c55e" : "#ef4444";
+                  return (
+                    <div
+                      key={sym}
+                      onClick={() => selectSymbol(sym)}
+                      className={`watchlist-item${selectedSymbol === sym ? " watchlist-item-active" : ""}`}
+                    >
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <span className="wl-base">{sym.replace("USDT", "")}</span>
+                          {lp && <span style={{ fontSize: "0.58rem", fontWeight: 800, color: chgClr }}>{lp.chg >= 0 ? "+" : ""}{lp.chg.toFixed(2)}%</span>}
+                        </div>
+                        {lp && <div style={{ fontSize: "0.6rem", fontFamily: "'JetBrains Mono',monospace", color: "var(--text-secondary)", fontWeight: 700 }}>
+                          {lp.price < 0.01 ? lp.price.toFixed(6) : lp.price < 1 ? lp.price.toFixed(4) : lp.price.toFixed(2)}
+                        </div>}
+                      </div>
+                      <button
+                        onClick={e => { e.stopPropagation(); removeFromWatchlist(sym); }}
+                        className="wl-remove"
+                      >×</button>
                     </div>
-                    <button
-                      onClick={e => { e.stopPropagation(); removeFromWatchlist(sym); }}
-                      className="wl-remove"
-                    >×</button>
-                  </div>
-                ))}
+                  );
+                })}
                 {/* Separator */}
                 <div style={{ height: 1, background: "var(--border)", margin: "8px 0" }} />
                 <div style={{ fontSize: "0.65rem", color: "var(--text-muted)", fontWeight: 600, marginBottom: 4 }}>POPULAR</div>
@@ -495,20 +535,30 @@ function ChartsPageContent() {
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                       <span style={{ fontWeight: 800, fontSize: "0.88rem" }}>{setup.symbol.replace("USDT", "")}<span style={{ color: "var(--text-muted)", fontWeight: 400, fontSize: "0.72rem" }}>/USDT</span></span>
                       <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                        {/* FIX #14: Price alert badge if current price is inside entry zone */}
+                        {(() => {
+                          const liveP = watchlistPrices[setup.symbol]?.price;
+                          if (liveP && setup.entry_low && setup.entry_high && liveP >= setup.entry_low && liveP <= setup.entry_high) {
+                            return <span title="Price is now inside entry zone!" style={{ fontSize: "0.58rem", fontWeight: 900, padding: "2px 6px", borderRadius: 4, background: "rgba(34,197,94,0.2)", color: "#22c55e", border: "1px solid rgba(34,197,94,0.4)", animation: "pulse-entry 1.5s ease-in-out infinite" }}>⚡ IN ZONE</span>;
+                          }
+                          return null;
+                        })()}
                         <span className={`badge ${setup.direction === "BUY" ? "badge-buy" : "badge-sell"}`}>{setup.direction}</span>
                         <span style={{ fontSize: "0.62rem", padding: "2px 5px", borderRadius: 4, background: "rgba(255,255,255,0.05)", color: "var(--text-muted)" }}>{setup.timeframe}</span>
                       </div>
                     </div>
                     <div className="setup-grid">
-                      <div>Entry<span className="setup-val">{(setup.entry_low ?? 0).toLocaleString("en-US", { maximumFractionDigits: 4 })}</span></div>
+                      {/* FIX #6: Show entry zone range, not just entry_low */}
+                      <div>Entry<span className="setup-val" style={{ fontSize: "0.6rem" }}>{(setup.entry_low ?? 0).toLocaleString("en-US", { maximumFractionDigits: 4 })}–{(setup.entry_high ?? 0).toLocaleString("en-US", { maximumFractionDigits: 4 })}</span></div>
                       <div>SL<span className="setup-val setup-val-red">{(setup.stop_loss ?? 0).toLocaleString("en-US", { maximumFractionDigits: 4 })}</span></div>
                       <div>TP1<span className="setup-val setup-val-green">{(setup.take_profit_1 ?? 0).toLocaleString("en-US", { maximumFractionDigits: 4 })}</span></div>
                       <div>R:R<span className="setup-val setup-val-blue">1:{(setup.risk_reward ?? 0).toFixed(1)}</span></div>
                     </div>
                     <div style={{ marginTop: 6, display: "flex", justifyContent: "space-between", fontSize: "0.67rem", color: "var(--text-muted)" }}>
                       <span>{setup.setup_type}</span>
-                      <span style={{ color: (setup.confluence_score ?? 0) >= 15 ? "#10b981" : "var(--text-muted)" }}>
-                        ⚡ {setup.confluence_score ?? 0}/{setup.max_score ?? 36}
+                      {/* FIX #3: Score displayed as consistent % */}
+                      <span style={{ color: (setup.signal_score_pct ?? 0) >= 70 ? "#10b981" : (setup.signal_score_pct ?? 0) >= 50 ? "#f59e0b" : "var(--text-muted)" }}>
+                        ⚡ {setup.signal_score_pct ?? setup.signal_score ?? 0}%
                       </span>
                     </div>
                   </div>
@@ -529,6 +579,7 @@ function ChartsPageContent() {
         <style>{`
           @keyframes spin { to { transform: rotate(360deg); } }
           @keyframes fadeIn { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: scale(1); } }
+          @keyframes pulse-entry { 0%,100% { box-shadow: 0 0 0 0 rgba(34,197,94,0.4); opacity: 1; } 50% { box-shadow: 0 0 0 4px rgba(34,197,94,0); opacity: 0.7; } }
 
           #charts-page-root {
             display: flex;
