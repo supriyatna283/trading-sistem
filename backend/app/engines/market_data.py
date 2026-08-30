@@ -401,7 +401,7 @@ class MarketDataEngine:
             periods = int((end_ts - start_ts) / interval_ms)
             if periods < 200:
                 periods = 200
-            base = BASE_PRICES.get(symbol.upper(), 100)
+            base = await self._get_fallback_base_price(symbol.upper())
             df = self.generate_sample_data(symbol.upper(), interval, periods, base)
             
         return df
@@ -428,7 +428,7 @@ class MarketDataEngine:
         # 4. Final fallback to sample data
         if df.empty:
             logger.warning(f"All data sources failed for {symbol}, using sample data")
-            base = BASE_PRICES.get(symbol.upper(), 100)
+            base = await self._get_fallback_base_price(symbol.upper())
             df = self.generate_sample_data(
                 symbol=symbol.upper(), timeframe=timeframe, 
                 periods=limit, base_price=base,
