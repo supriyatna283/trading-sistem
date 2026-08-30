@@ -11,6 +11,7 @@ interface SetupData {
   timeframe: string;
   signal: "BUY" | "SELL" | "WAIT";
   confidence: "LOW" | "MEDIUM" | "HIGH";
+  signal_grade?: "A+" | "A" | "B" | "C";
   confluence_score: number;
   max_score: number;
   confluence_pct: number;
@@ -32,6 +33,7 @@ interface SetupData {
   indicators: Record<string, any>;
   smc: Record<string, any>;
   highlights?: Record<string, boolean>;
+  win_rate?: Record<string, any>;
 }
 
 interface ChatMessage { role: "user" | "assistant"; content: string; }
@@ -49,6 +51,50 @@ function fmt(v: number | null | undefined, dec = 4): string {
 // ─────────────────────────────────────────────────
 // Sub-components
 // ─────────────────────────────────────────────────
+
+function GradeTag({ grade }: { grade?: "A+" | "A" | "B" | "C" | string }) {
+  if (!grade) return null;
+  const cfg: Record<string, { bg: string; color: string; glow: string }> = {
+    "A+": { bg: "linear-gradient(135deg,#064e3b,#10b981)", color: "#6ee7b7", glow: "rgba(16,185,129,0.4)" },
+    "A":  { bg: "linear-gradient(135deg,#1e3a5f,#3b82f6)", color: "#93c5fd", glow: "rgba(59,130,246,0.35)" },
+    "B":  { bg: "linear-gradient(135deg,#451a03,#f59e0b)", color: "#fcd34d", glow: "rgba(245,158,11,0.35)" },
+    "C":  { bg: "linear-gradient(135deg,#450a0a,#ef4444)", color: "#fca5a5", glow: "rgba(239,68,68,0.3)" },
+  };
+  const c = cfg[grade] ?? cfg["C"];
+  return (
+    <div style={{
+      background: c.bg, boxShadow: `0 0 10px ${c.glow}`,
+      borderRadius: 6, padding: "3px 9px", display: "flex", alignItems: "center", gap: 4,
+    }}>
+      <span style={{ fontSize: "0.58rem", fontWeight: 700, color: c.color, letterSpacing: "0.04em" }}>GRADE</span>
+      <span style={{ fontSize: "0.88rem", fontWeight: 900, color: c.color, fontFamily: "'JetBrains Mono',monospace" }}>{grade}</span>
+    </div>
+  );
+}
+
+function WinRateChip({ winRate }: { winRate?: Record<string, any> }) {
+  if (!winRate || winRate.win_rate == null) return null;
+  const wr = winRate.win_rate as number;
+  const verdict = winRate.verdict as string || "";
+  const wins = winRate.wins as number || 0;
+  const losses = winRate.losses as number || 0;
+  const color = wr >= 55 ? "#4ade80" : wr >= 45 ? "#fbbf24" : "#f87171";
+  const bg = wr >= 55 ? "rgba(34,197,94,0.08)" : wr >= 45 ? "rgba(245,158,11,0.08)" : "rgba(239,68,68,0.08)";
+  const border = wr >= 55 ? "rgba(34,197,94,0.2)" : wr >= 45 ? "rgba(245,158,11,0.2)" : "rgba(239,68,68,0.2)";
+  return (
+    <div style={{
+      background: bg, border: `1px solid ${border}`, borderRadius: 8,
+      padding: "7px 12px", display: "flex", alignItems: "center", justifyContent: "space-between",
+      margin: "4px 10px",
+    }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+        <span style={{ fontSize: "0.55rem", fontWeight: 800, color: "var(--text-muted)", letterSpacing: "0.07em", textTransform: "uppercase" }}>Est. Win Rate (Local)</span>
+        <span style={{ fontSize: "0.62rem", color: "var(--text-muted)" }}>{wins}W / {losses}L · {verdict}</span>
+      </div>
+      <span style={{ fontSize: "1.15rem", fontWeight: 900, fontFamily: "'JetBrains Mono',monospace", color }}>{wr}%</span>
+    </div>
+  );
+}
 
 function SignalPill({ signal, pct }: { signal: "BUY" | "SELL" | "WAIT"; pct: number }) {
   const cfg = {
@@ -243,12 +289,14 @@ function ParsedAnalysis({ text }: { text: string }) {
 export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: Props) {
   const [status, setStatus] = useState<AIStatus>("idle");
   const [answer, setAnswer] = useState("");
+  const [reasoning, setReasoning] = useState("");  // AI thinking tokens
   const [context, setContext] = useState<any>(null);
   const [setup, setSetup] = useState<SetupData | null>(null);
   const [whaleIntel, setWhaleIntel] = useState<any>(null);
   const [whaleLoading, setWhaleLoading] = useState(false);
   const [error, setError] = useState("");
   const [tab, setTab] = useState<"setup" | "macro" | "score" | "analysis">("setup");
+  const [analysisNewContent, setAnalysisNewContent] = useState(false); // dot notif
 
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
@@ -267,6 +315,7 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
     cancelStream();
     setStatus("computing");
     setAnswer(""); setError(""); setSetup(null); setContext(null);
+    setReasoning(""); setAnalysisNewContent(false);
     setChatHistory([]); setChatInput(""); setIsChatting(false);
 
     const es = new EventSource(`${API_URL}/api/v1/ai/analyze?symbol=${sym}&timeframe=${tf}`);
@@ -285,11 +334,19 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
     es.addEventListener("setup_data", (e) => {
       try { setSetup(JSON.parse((e as any).data.replace(/\\n/g, "\n"))); } catch (_) { }
     });
+    // NEW: Capture reasoning tokens from Nemotron thinking mode
+    es.addEventListener("reasoning", (e) => {
+      setReasoning(prev => prev + (e as any).data.replace(/\\n/g, "\n"));
+    });
     es.addEventListener("token", (e) => {
       setStatus("streaming");
       setAnswer(prev => prev + (e as any).data.replace(/\\n/g, "\n"));
     });
-    es.addEventListener("done", () => { setStatus("done"); es.close(); esRef.current = null; });
+    es.addEventListener("done", () => {
+      setStatus("done");
+      setAnalysisNewContent(true); // light up Analysis tab dot
+      es.close(); esRef.current = null;
+    });
     es.addEventListener("error", (e: any) => {
       if (e.data) {
         const msg = (e.data || "").replace(/\\n/g, "\n");
@@ -389,6 +446,8 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
   const rsiVal = ind.rsi;
   const rsiClr = rsiVal > 70 ? "#ef4444" : rsiVal < 30 ? "#22c55e" : "#60a5fa";
   const adxVal = ind.adx;
+  const stochK = ind.stoch_k;
+  const stochClr = stochK > 80 ? "#ef4444" : stochK < 20 ? "#22c55e" : "#a78bfa";
 
   return (
     <div id="ai-panel" className="glass-card">
@@ -468,10 +527,25 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
           {(["setup", "score", "macro", "analysis"] as const).map(t => {
             const icons = { setup: "⚡", score: "◎", macro: "🌐", analysis: "🧠" };
             const labels = { setup: "Setup", score: "Score", macro: "Macro", analysis: "Analisis" };
+            const isAnalysis = t === "analysis";
             return (
-              <button key={t} className={`ai-tab${tab === t ? " ai-tab-active" : ""}`} onClick={() => setTab(t)}>
+              <button
+                key={t}
+                className={`ai-tab${tab === t ? " ai-tab-active" : ""}`}
+                onClick={() => { setTab(t); if (isAnalysis) setAnalysisNewContent(false); }}
+                style={{ position: "relative" }}
+              >
                 <span className="tab-icon">{icons[t]}</span>
                 <span>{labels[t]}</span>
+                {/* Notification dot when analysis has new content */}
+                {isAnalysis && analysisNewContent && tab !== "analysis" && (
+                  <span style={{
+                    position: "absolute", top: 4, right: 4,
+                    width: 6, height: 6, borderRadius: "50%",
+                    background: "#a78bfa", boxShadow: "0 0 6px #a78bfa",
+                    animation: "dotPulse 1.2s ease-in-out infinite",
+                  }} />
+                )}
               </button>
             );
           })}
@@ -488,23 +562,31 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
               {/* Signal Hero */}
               <div id="ai-signal-hero">
                 <SignalPill signal={setup.signal} pct={pct} />
-                {setup.signal !== "WAIT" && setup.risk_reward && (
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
-                    <span style={{ fontSize: "0.55rem", color: "var(--text-muted)", fontWeight: 700, letterSpacing: "0.05em" }}>RISK REWARD</span>
-                    <span style={{
-                      fontSize: "1.1rem", fontWeight: 900, fontFamily: "monospace",
-                      color: setup.risk_reward >= 2 ? "#4ade80" : setup.risk_reward >= 1.5 ? "#fbbf24" : "#f87171",
-                    }}>1:{setup.risk_reward.toFixed(1)}</span>
-                  </div>
-                )}
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+                  {/* Grade Badge */}
+                  {setup.signal_grade && <GradeTag grade={setup.signal_grade} />}
+                  {/* Risk Reward */}
+                  {setup.signal !== "WAIT" && setup.risk_reward && (
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
+                      <span style={{ fontSize: "0.55rem", color: "var(--text-muted)", fontWeight: 700, letterSpacing: "0.05em" }}>RISK REWARD</span>
+                      <span style={{
+                        fontSize: "1.1rem", fontWeight: 900, fontFamily: "monospace",
+                        color: setup.risk_reward >= 2 ? "#4ade80" : setup.risk_reward >= 1.5 ? "#fbbf24" : "#f87171",
+                      }}>1:{setup.risk_reward.toFixed(1)}</span>
+                    </div>
+                  )}
+                </div>
               </div>
 
-              {/* Gauges Row */}
+              {/* Gauges Row — now with real ADX + Stoch RSI data */}
               {setup.signal !== "WAIT" && (
                 <div id="ai-gauges-row">
                   <GaugeMeter value={Math.round(pct)} max={100} label="Confluence" color={pct >= 60 ? "#22c55e" : pct >= 35 ? "#f59e0b" : "#ef4444"} />
                   <GaugeMeter value={rsiVal ? Math.round(rsiVal) : 0} max={100} label="RSI" color={rsiClr} />
                   <GaugeMeter value={adxVal ? Math.round(adxVal) : 0} max={60} label="ADX" color={adxVal > 25 ? "#a78bfa" : "#71717a"} />
+                  {stochK != null && (
+                    <GaugeMeter value={Math.round(stochK)} max={100} label="Stoch" color={stochClr} />
+                  )}
                 </div>
               )}
 
@@ -576,7 +658,7 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
               <div id="ai-ind-bars">
                 <IndicatorBar label="RSI (14)" value={rsiVal} min={0} max={100} color={rsiClr} />
                 <IndicatorBar label="ADX (Trend Strength)" value={adxVal} min={0} max={60} color={adxVal > 25 ? "#a78bfa" : "#71717a"} />
-                <IndicatorBar label="Stoch RSI %K" value={ind.stoch_k} min={0} max={100} color="#60a5fa" />
+                <IndicatorBar label="Stoch RSI %K" value={stochK} min={0} max={100} color={stochClr} />
                 {ind.macd_histogram != null && (
                   <IndicatorBar
                     label="MACD Histogram"
@@ -592,7 +674,21 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
                     <span style={{ fontSize: "0.62rem", fontWeight: 800, color: "#f59e0b" }}>{ind.candle_pattern}</span>
                   </div>
                 )}
+                {/* Market Regime badge */}
+                {ind.market_regime && ind.market_regime !== "RANGING" && (
+                  <div style={{ padding: "4px 0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ fontSize: "0.56rem", color: "var(--text-muted)", fontWeight: 700 }}>Market Regime</span>
+                    <span style={{
+                      fontSize: "0.58rem", fontWeight: 800, padding: "2px 6px", borderRadius: 4,
+                      background: ind.market_regime.includes("BULL") ? "rgba(34,197,94,0.12)" : ind.market_regime.includes("BEAR") ? "rgba(239,68,68,0.12)" : ind.market_regime === "HIGH_VOLATILITY" ? "rgba(245,158,11,0.12)" : "rgba(255,255,255,0.06)",
+                      color: ind.market_regime.includes("BULL") ? "#4ade80" : ind.market_regime.includes("BEAR") ? "#f87171" : ind.market_regime === "HIGH_VOLATILITY" ? "#fbbf24" : "#a78bfa",
+                    }}>{ind.market_regime.replace("_", " ")}</span>
+                  </div>
+                )}
               </div>
+
+              {/* Win Rate chip — now shown from backend data */}
+              <WinRateChip winRate={setup.win_rate} />
             </>
           ) : isPulsing ? (
             <div id="ai-loading-state">
@@ -881,6 +977,18 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
       {tab === "analysis" && (
         <div id="ai-analysis-tab">
           <div id="ai-answer-box" ref={answerRef}>
+
+            {/* AI Thinking Panel — shows reasoning tokens from Nemotron */}
+            {reasoning && status === "thinking" && (
+              <div id="ai-thinking-panel">
+                <div className="thinking-header">
+                  <div className="thinking-dots"><span /><span /><span /></div>
+                  <span>Nemotron Deep Reasoning…</span>
+                </div>
+                <div className="thinking-body">{reasoning}</div>
+              </div>
+            )}
+
             {answer ? (
               status === "done" ? (
                 <ParsedAnalysis text={answer} />
@@ -911,18 +1019,39 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
           </div>
 
           {status === "done" && (
-            <div id="ai-chat-bar">
-              <input
-                type="text" placeholder="Tanya lebih lanjut…" value={chatInput}
-                onChange={e => setChatInput(e.target.value)}
-                onKeyDown={e => { if (e.key === "Enter") submitChat(); }}
-                disabled={isChatting} className="ai-chat-input"
-              />
-              <button onClick={submitChat} disabled={isChatting || !chatInput.trim()} className="ai-send-btn">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-                  <path d="M22 2L11 13M22 2L15 22l-4-9-9-4 20-7z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </button>
+            <div id="ai-chat-section">
+              {/* Quick Ask Buttons */}
+              <div id="ai-quick-ask">
+                {[
+                  { icon: "📍", label: "Entry optimal?", q: "Di level harga berapa entry paling optimal berdasarkan Fibonacci dan SMC saat ini?" },
+                  { icon: "🎯", label: "Target TP?",    q: "Berapa target Take Profit yang paling realistis dan level Fibonacci mana yang menjadi dasarnya?" },
+                  { icon: "⚠️", label: "Kapan stop?",   q: "Kapan saya harus keluar (cut loss) dan apa kondisi yang membatalkan setup ini?" },
+                  { icon: "📊", label: "HTF Trend?",    q: "Bagaimana tren higher timeframe (1D/4H) dan apakah mendukung atau berlawanan dengan sinyal saat ini?" },
+                ].map(({ icon, label, q }) => (
+                  <button
+                    key={label}
+                    className="quick-ask-btn"
+                    onClick={() => { setChatInput(q); }}
+                    disabled={isChatting}
+                  >
+                    <span>{icon}</span>{label}
+                  </button>
+                ))}
+              </div>
+              {/* Chat input */}
+              <div id="ai-chat-bar">
+                <input
+                  type="text" placeholder="Tanya lebih lanjut…" value={chatInput}
+                  onChange={e => setChatInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter") submitChat(); }}
+                  disabled={isChatting} className="ai-chat-input"
+                />
+                <button onClick={submitChat} disabled={isChatting || !chatInput.trim()} className="ai-send-btn">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                    <path d="M22 2L11 13M22 2L15 22l-4-9-9-4 20-7z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -1135,6 +1264,51 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
 
         #ai-cursor, .ai-cursor { display: inline-block; color: #a78bfa; animation: blink 1s step-end infinite; }
         @keyframes blink { 50% { opacity: 0; } }
+
+        /* ── AI Thinking Panel (Reasoning Tokens) ── */
+        #ai-thinking-panel {
+          border-radius: 10px; overflow: hidden;
+          border: 1px solid rgba(167,139,250,0.2);
+          background: linear-gradient(135deg, rgba(17,4,38,0.9), rgba(30,14,60,0.7));
+          flex-shrink: 0;
+        }
+        .thinking-header {
+          display: flex; align-items: center; gap: 8px; padding: 7px 11px;
+          background: rgba(167,139,250,0.08); border-bottom: 1px solid rgba(167,139,250,0.15);
+          font-size: 0.58rem; font-weight: 700; color: #c4b5fd; letter-spacing: 0.06em;
+        }
+        .thinking-dots { display: flex; gap: 3px; }
+        .thinking-dots span {
+          width: 5px; height: 5px; border-radius: 50%; background: #a78bfa;
+          animation: dotBounce 1.2s ease-in-out infinite;
+        }
+        .thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+        .thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+        .thinking-body {
+          padding: 8px 11px; max-height: 80px; overflow-y: auto;
+          font-size: 0.58rem; color: rgba(167,139,250,0.65); line-height: 1.6;
+          font-family: 'JetBrains Mono', monospace; white-space: pre-wrap;
+          scroll-behavior: smooth;
+        }
+
+        /* ── Quick Ask Buttons ── */
+        #ai-chat-section { display: flex; flex-direction: column; flex-shrink: 0; border-top: 1px solid var(--border); }
+        #ai-quick-ask {
+          display: flex; gap: 4px; padding: 7px 10px 4px; flex-wrap: wrap;
+          background: rgba(0,0,0,0.2);
+        }
+        .quick-ask-btn {
+          display: flex; align-items: center; gap: 4px;
+          padding: 4px 9px; border-radius: 20px; font-size: 0.58rem; font-weight: 700;
+          border: 1px solid rgba(167,139,250,0.25); background: rgba(139,92,246,0.08);
+          color: #c4b5fd; cursor: pointer; transition: all 0.15s; white-space: nowrap;
+        }
+        .quick-ask-btn:hover:not(:disabled) { background: rgba(139,92,246,0.18); border-color: rgba(167,139,250,0.45); transform: translateY(-1px); }
+        .quick-ask-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        #ai-chat-bar {
+          display: flex; gap: 8px; padding: 8px 12px 10px;
+          background: rgba(0,0,0,0.25);
+        }
       `}</style>
     </div>
   );

@@ -501,20 +501,42 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
         conf_details = {}
         recommendation = "NEUTRAL"
 
-    # 5. Technical indicators (ONLY RSI, MACD, and Fibonacci as requested)
+    # 5. Technical indicators — Full suite (RSI, MACD, Fibonacci as primary; ADX, EMA, Stoch RSI as context)
     from app.utils.indicators import calculate_fibonacci
     try:
         rsi_val = calculate_rsi(entry_df)
         macd_line, signal_line, macd_hist = calculate_macd(entry_df)
         fib_data = calculate_fibonacci(entry_df)
-        
-        # Ignored indicators:
-        ema20 = ema50 = ema200 = None
-        bb_upper = bb_mid = bb_lower = bb_bw = None
-        stoch_k = stoch_d = None
-        vwap_data = {}
-        adx_val = None
-        
+
+        # Re-activated context indicators (non-primary but valuable for regime + gauges)
+        try:
+            stoch_k, stoch_d = calculate_stoch_rsi(entry_df)
+        except Exception:
+            stoch_k = stoch_d = None
+
+        try:
+            adx_val = calculate_adx(entry_df)
+        except Exception:
+            adx_val = None
+
+        try:
+            ema200 = calculate_ema(entry_df, 200)
+            ema50  = calculate_ema(entry_df, 50)
+            ema20  = calculate_ema(entry_df, 20)
+        except Exception:
+            ema20 = ema50 = ema200 = None
+
+        try:
+            bb_upper, bb_mid, bb_lower = calculate_bollinger_bands(entry_df)
+            bb_bw = round((bb_upper - bb_lower) / bb_mid * 100, 2) if bb_mid else None
+        except Exception:
+            bb_upper = bb_mid = bb_lower = bb_bw = None
+
+        try:
+            vwap_data = calculate_vwap(entry_df) or {}
+        except Exception:
+            vwap_data = {}
+
         # ATR calculation (manual since no standalone function in indicators.py)
         if len(entry_df) >= 2:
             _h = entry_df["high"].astype(float).values
@@ -563,15 +585,21 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
     prev_volume = float(prev["volume"])
     volume_change_pct = round((last_volume - prev_volume) / prev_volume * 100, 1) if prev_volume > 0 else 0
 
-    # Sprint 2: Market Regime detection
+    # Sprint 2: Market Regime detection (now uses real ADX + EMA200 + BB)
     market_regime = "RANGING"
-    if adx_val and adx_val > 25:
-        if ema200 and last_close > ema200:
+    adx_num = float(adx_val) if adx_val is not None else 0.0
+    ema200_num = float(ema200) if ema200 is not None else None
+    if adx_num > 25:
+        if ema200_num and last_close > ema200_num:
             market_regime = "TRENDING_BULL"
-        elif ema200 and last_close < ema200:
+        elif ema200_num and last_close < ema200_num:
             market_regime = "TRENDING_BEAR"
-    if bb_bw and bb_bw > 15: # High volatility
+        else:
+            market_regime = "TRENDING"
+    if bb_bw and bb_bw > 15:  # High volatility overrides
         market_regime = "HIGH_VOLATILITY"
+    elif adx_num < 18:
+        market_regime = "CONSOLIDATING"
 
     # Sprint 2: Relative Strength vs BTC (using 1d candle)
     rs_vs_btc = "N/A"
@@ -709,8 +737,17 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
             "fib_is_near_key": fib_data.get("is_near_key_level") if fib_data else None,
             "fib_retracements": fib_data.get("retracement_levels") if fib_data else {},
             "fib_extensions": fib_data.get("extension_levels") if fib_data else {},
-            # ── Context (non-signal) ──
+            # ── Context indicators (re-activated: ADX, EMA, Stoch RSI) ──
             "atr": _safe_float(atr_val),
+            "adx": _safe_float(adx_val, 1),
+            "stoch_k": _safe_float(stoch_k, 1),
+            "stoch_d": _safe_float(stoch_d, 1),
+            "ema20": _safe_float(ema20),
+            "ema50": _safe_float(ema50),
+            "ema200": _safe_float(ema200),
+            "bb_upper": _safe_float(bb_upper),
+            "bb_lower": _safe_float(bb_lower),
+            "bb_bandwidth": _safe_float(bb_bw, 2),
             "rsi_divergence": str(rsi_div) if rsi_div else None,
             "macd_divergence": str(macd_div) if macd_div else None,
             "candle_pattern": candle_pattern.get("pattern") if isinstance(candle_pattern, dict) and candle_pattern.get("pattern") else None,
@@ -1328,15 +1365,18 @@ async def _stream_ai_analysis(
     else:
         confidence = "LOW"
 
+    # Signal grade for frontend badge
+    signal_grade = _signal_grade(ctx["confluence"]["score"], ctx["confluence"]["max_score"])
+
     full_setup = {
         "symbol": ctx["symbol"],
         "timeframe": ctx["timeframe"],
         "signal": ctx["signal"],
         "confidence": confidence,
+        "signal_grade": signal_grade,  # NEW: A+/A/B/C grade badge
         "confluence_score": ctx["confluence"]["score"],
         "max_score": ctx["confluence"]["max_score"],
         "confluence_pct": conf_pct,
-        # FIX #3: signal_score_pct normalized to 100% for consistent frontend display
         "signal_score_pct": conf_pct,
         "recommendation": ctx["confluence"]["recommendation"],
         "session": ctx.get("session"),
@@ -1349,16 +1389,15 @@ async def _stream_ai_analysis(
         "tp3": setup_levels.get("tp3"),
         "risk_reward": setup_levels.get("risk_reward"),
         "atr": setup_levels.get("atr"),
-        # FIX #5: risk_per_unit for position sizing
         "risk_per_unit": setup_levels.get("risk_per_unit"),
-        # FIX #10: invalidation level (beyond SL — pre-entry danger zone)
         "invalidation_level": setup_levels.get("invalidation_level"),
-        # FIX #11: TP probability estimates
         "tp_probability": setup_levels.get("tp_probability", {"tp1": 75, "tp2": 55, "tp3": 30}),
         "htf_biases": ctx["htf_biases"],
         "indicators": ctx["indicators"],
         "smc": ctx["smc"],
         "highlights": ctx["confluence"]["highlights"],
+        # NEW: Win rate estimate from QuickAnalyticsEngine
+        "win_rate": ctx.get("win_rate", {}),
     }
 
     # Emit setup data IMMEDIATELY (before AI thinks)
@@ -1421,10 +1460,10 @@ async def _stream_ai_analysis(
                     {"role": "system", "content": system_msg},
                     {"role": "user", "content": user_msg},
                 ],
-                temperature=0.5,
-                top_p=0.85,
+                temperature=0.68,   # Raised from 0.5 → 0.68 for richer, more nuanced analysis
+                top_p=0.90,
                 max_tokens=2048,
-                extra_body={"chat_template_kwargs":{"enable_thinking":True}},
+                extra_body={"chat_template_kwargs": {"enable_thinking": True}},
                 stream=True,
             )
 
