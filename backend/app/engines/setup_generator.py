@@ -72,53 +72,70 @@ def _find_nearest_swing_high(df: pd.DataFrame, reference_price: float, lookback:
 def calculate_trade_levels(direction: str, last_price: float, smc, df: pd.DataFrame) -> tuple:
     """
     Canonical level calculator — SHARED by Setup Engine AND AI Analysis.
-    Uses OB-based entry zones + structure-based SL + 2R/3R/4.5R TP targets.
+    Uses OB-based entry zones + structure-based SL + 1.5R/2.5R/3.5R TP targets.
     Returns: (entry_low, entry_high, sl, tp1, tp2, tp3)
+
+    FIX: OB proximity guard added — only use OBs within 1.5% of current price.
+    This prevents entry zones that are far away from the current market price.
     """
     recent = df.tail(20)
     atr = _estimate_atr(recent)
     if atr == 0:
         atr = float(df["high"].astype(float).values[-1] - df["low"].astype(float).values[-1]) * 2
 
+    # FIX: Max proximity = min(1.5 * ATR, 1.5% of price)
+    # This ensures OBs used are realistically reachable in the near term.
+    max_ob_distance = min(atr * 1.5, last_price * 0.015)
+
     if direction == "BUY":
         bullish_obs = [ob for ob in smc.order_blocks if ob.type == "BULLISH" and not ob.mitigated]
-        reachable_obs = [ob for ob in bullish_obs if abs(last_price - ob.low) <= atr * 3]
+        # FIX: Only include OBs within max_ob_distance AND below current price (pending entry)
+        reachable_obs = [
+            ob for ob in bullish_obs
+            if ob.low < last_price and abs(last_price - ob.low) <= max_ob_distance
+        ]
         if reachable_obs:
-            ob = reachable_obs[-1]
+            # Pick the nearest OB below current price
+            ob = max(reachable_obs, key=lambda x: x.low)
             entry_low = ob.low
-            entry_high = ob.high
+            entry_high = min(ob.high, last_price)  # cap at current price
         else:
-            entry_low = last_price - atr * 0.3
+            # Fallback: current price - small pullback zone
+            entry_low = last_price - atr * 0.2
             entry_high = last_price
 
         swing_low = _find_nearest_swing_low(df, entry_low)
-        sl = (swing_low - atr * 0.15) if (swing_low is not None and swing_low < entry_low) else (entry_low - atr * 1.0)
+        sl = (swing_low - atr * 0.1) if (swing_low is not None and swing_low < entry_low) else (entry_low - atr * 0.8)
 
-        risk = entry_low - sl
-        effective_risk = max(risk, atr * 1.0) if atr > 0 else risk
-        tp1 = entry_high + effective_risk * 2.0
-        tp2 = entry_high + effective_risk * 3.0
-        tp3 = entry_high + effective_risk * 4.5
+        risk = max(entry_low - sl, atr * 0.3)  # minimum risk = 0.3 ATR to avoid zero-division
+        tp1 = entry_high + risk * 1.5
+        tp2 = entry_high + risk * 2.5
+        tp3 = entry_high + risk * 3.5
 
     else:  # SELL
         bearish_obs = [ob for ob in smc.order_blocks if ob.type == "BEARISH" and not ob.mitigated]
-        reachable_obs = [ob for ob in bearish_obs if abs(ob.high - last_price) <= atr * 3]
+        # FIX: Only include OBs within max_ob_distance AND above current price (pending entry)
+        reachable_obs = [
+            ob for ob in bearish_obs
+            if ob.high > last_price and abs(ob.high - last_price) <= max_ob_distance
+        ]
         if reachable_obs:
-            ob = reachable_obs[-1]
-            entry_low = ob.low
+            # Pick the nearest OB above current price
+            ob = min(reachable_obs, key=lambda x: x.high)
             entry_high = ob.high
+            entry_low = max(ob.low, last_price)  # cap at current price
         else:
+            # Fallback: current price + small pullback zone
             entry_low = last_price
-            entry_high = last_price + atr * 0.3
+            entry_high = last_price + atr * 0.2
 
         swing_high = _find_nearest_swing_high(df, entry_high)
-        sl = (swing_high + atr * 0.15) if (swing_high is not None and swing_high > entry_high) else (entry_high + atr * 1.0)
+        sl = (swing_high + atr * 0.1) if (swing_high is not None and swing_high > entry_high) else (entry_high + atr * 0.8)
 
-        risk = sl - entry_high
-        effective_risk = max(risk, atr * 1.0) if atr > 0 else risk
-        tp1 = entry_low - effective_risk * 2.0
-        tp2 = entry_low - effective_risk * 3.0
-        tp3 = entry_low - effective_risk * 4.5
+        risk = max(sl - entry_high, atr * 0.3)  # minimum risk = 0.3 ATR
+        tp1 = entry_low - risk * 1.5
+        tp2 = entry_low - risk * 2.5
+        tp3 = entry_low - risk * 3.5
 
     return entry_low, entry_high, sl, tp1, tp2, tp3
 
