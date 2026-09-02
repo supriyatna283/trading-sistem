@@ -406,6 +406,10 @@ class MarketDataEngine:
             
         return df
 
+    async def _get_fallback_base_price(self, symbol: str) -> float:
+        """Get fallback base price for sample data generation."""
+        return BASE_PRICES.get(symbol, 1.0)
+
     # ---------------------------------------------------------
     # Resilient fetch (Binance → Sample Data fallback)
     # ---------------------------------------------------------
