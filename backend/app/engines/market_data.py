@@ -407,8 +407,38 @@ class MarketDataEngine:
         return df
 
     async def _get_fallback_base_price(self, symbol: str) -> float:
-        """Get fallback base price for sample data generation."""
-        return BASE_PRICES.get(symbol, 1.0)
+        """Get fallback base price for sample data generation by fetching dynamic ticker."""
+        # 1. Try Binance ticker
+        try:
+            url = f"{self.BINANCE_BASE}/ticker/price"
+            resp = await self.client.get(url, params={"symbol": symbol.upper()})
+            if resp.status_code == 200:
+                data = resp.json()
+                if "price" in data:
+                    return float(data["price"])
+        except Exception as e:
+            logger.warning(f"Binance ticker failed for {symbol}: {e}")
+
+        # 2. Try OKX ticker
+        try:
+            # Convert BTCUSDT -> BTC-USDT
+            if symbol.upper().endswith("USDT") and len(symbol) > 4:
+                base_asset = symbol[:-4].upper()
+                inst_id = f"{base_asset}-USDT"
+            else:
+                inst_id = symbol.upper()
+                
+            url = f"{self.OKX_BASE}/market/ticker"
+            resp = await self.client.get(url, params={"instId": inst_id})
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("code") == "0" and data.get("data"):
+                    return float(data["data"][0]["last"])
+        except Exception as e:
+            logger.warning(f"OKX ticker failed for {symbol}: {e}")
+            
+        # 3. Fallback to hardcoded mock data
+        return BASE_PRICES.get(symbol.upper(), 1.0)
 
     # ---------------------------------------------------------
     # Resilient fetch (Binance → Sample Data fallback)
