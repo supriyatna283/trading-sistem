@@ -9,10 +9,14 @@ import { api } from "@/lib/api";
 import { API_URL, debounce } from "@/lib/utils";
 
 const MTF_TIMEFRAMES = [
+  { tf: "1w", label: "1W" },
   { tf: "1d", label: "1D" },
   { tf: "4h", label: "4H" },
   { tf: "1h", label: "1H" },
+  { tf: "30m", label: "30m" },
   { tf: "15m", label: "15m" },
+  { tf: "5m", label: "5m" },
+  { tf: "1m", label: "1m" },
 ];
 
 // Popular liquid pairs for quick access
@@ -267,7 +271,7 @@ function ChartsPageContent() {
 
             {/* TF selector */}
             <div style={{ display: "flex", gap: 3 }}>
-              {["15m","1h","4h","1d"].map(tf => (
+              {["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"].map(tf => (
                 <button
                   key={tf}
                   onClick={() => setActiveTimeframe(tf)}
@@ -335,14 +339,47 @@ function ChartsPageContent() {
                   value={searchInput}
                   onChange={e => setSearchInput(e.target.value)}
                   placeholder="Search pair… (e.g. ETH, SOL, HYPE)"
-                  list="symbol-list"
                   id="search-input"
+                  autoComplete="off"
                 />
-                <datalist id="symbol-list">
-                  {allSymbols.map(s => <option key={s} value={s} />)}
-                </datalist>
-                <button type="submit" className="btn-primary" style={{ padding: "8px 18px", fontSize: "0.85rem" }}>Load</button>
               </form>
+              {searchInput.length > 0 && (
+                <div style={{ 
+                  marginTop: 8, 
+                  maxHeight: 200, 
+                  overflowY: "auto", 
+                  background: "rgba(15, 23, 42, 0.9)", 
+                  borderRadius: 8, 
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  padding: "4px 0" 
+                }}>
+                  {allSymbols
+                    .filter(s => s.toLowerCase().includes(searchInput.toLowerCase()))
+                    .slice(0, 10)
+                    .map(s => (
+                      <div 
+                        key={s} 
+                        onClick={() => { selectSymbol(s); setShowSearch(false); setSearchInput(""); }}
+                        style={{ 
+                          padding: "8px 16px", 
+                          cursor: "pointer", 
+                          fontSize: "0.85rem",
+                          display: "flex",
+                          justifyContent: "space-between",
+                          color: "var(--text-primary)"
+                        }}
+                        onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.05)"}
+                        onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                      >
+                        <span style={{ fontWeight: 600 }}>{s.replace("USDT", "")}</span>
+                        <span style={{ color: "var(--text-muted)", fontSize: "0.75rem" }}>/USDT</span>
+                      </div>
+                  ))}
+                  {allSymbols.filter(s => s.toLowerCase().includes(searchInput.toLowerCase())).length === 0 && (
+                     <div style={{ padding: "8px 16px", color: "var(--text-muted)", fontSize: "0.8rem", textAlign: "center" }}>No results found</div>
+                  )}
+                </div>
+              )}
               {/* Quick pairs */}
               <div style={{ marginTop: 14 }}>
                 <div style={{ fontSize: "0.7rem", color: "var(--text-muted)", fontWeight: 700, letterSpacing: "0.08em", marginBottom: 8 }}>QUICK ACCESS</div>

@@ -68,7 +68,7 @@ def _get_nvidia_client() -> AsyncOpenAI:
 # In-Memory Cache (90s TTL)
 # ──────────────────────────────────────────────────────────────
 _AI_CACHE: dict[str, dict] = {}
-_AI_CACHE_TTL = 90  # 90 seconds (Sprint 3: Fast reactivity)
+_AI_CACHE_TTL = 300  # 300 seconds = 5 minutes
 
 
 def _cache_key(symbol: str, timeframe: str) -> str:
@@ -527,8 +527,7 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
             ema20 = ema50 = ema200 = None
 
         try:
-            bb_upper, bb_mid, bb_lower = calculate_bollinger_bands(entry_df)
-            bb_bw = round((bb_upper - bb_lower) / bb_mid * 100, 2) if bb_mid else None
+            bb_upper, bb_mid, bb_lower, bb_bw = calculate_bollinger_bands(entry_df)
         except Exception:
             bb_upper = bb_mid = bb_lower = bb_bw = None
 
@@ -797,6 +796,7 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
                     "title": n["title"],
                     "sentiment": n["sentiment"],
                     "source": n.get("source", ""),
+                    "url": n.get("url", ""),
                 }
                 for n in crypto_news_list[:5]
             ],
@@ -1289,6 +1289,7 @@ async def _stream_ai_analysis(
     symbol: str,
     timeframe: str,
     request: Request,
+    force: bool = False,
 ) -> AsyncGenerator[str, None]:
     """
     V2 SSE events:
@@ -1307,12 +1308,13 @@ async def _stream_ai_analysis(
         return f"event: {event}\ndata: {escaped}\n\n"
 
     # ── 1. Cache check ──
-    cached = _get_cached(symbol, timeframe)
+    cached = None if force else _get_cached(symbol, timeframe)
     if cached:
         yield sse("status", "cache_hit")
         yield sse("context", json.dumps(cached.get("context_snapshot", {})))
         yield sse("setup_data", json.dumps(cached["setup"]))
         yield sse("token", cached.get("answer_summary", ""))
+        yield sse("analyzed_at", json.dumps({"ts": cached.get("ts", time.time())}))
         yield sse("done", "cached")
         return
 
@@ -1532,12 +1534,15 @@ async def _stream_ai_analysis(
             logger.error(f"[AI] Failed to save ShadowSetup: {e}")
 
     # ── 5b. Cache result ──
+    _now_ts = time.time()
     _set_cache(symbol, timeframe, {
         "context_snapshot": context_snapshot,
         "setup": full_setup,
         "answer_summary": full_answer[-1000:] if full_answer else "",
+        "ts": _now_ts,
     })
 
+    yield sse("analyzed_at", json.dumps({"ts": _now_ts}))
     yield sse("done", "complete")
 
 
@@ -1549,6 +1554,7 @@ async def analyze_chart(
     request: Request,
     symbol: str = Query("BTCUSDT", description="Trading pair, e.g. BTCUSDT"),
     timeframe: str = Query("1h", description="Timeframe: 1m, 5m, 15m, 1h, 4h, 1d"),
+    force: bool = Query(False, description="Force re-analysis, bypass cache"),
 ):
     """
     Stream AI chart analysis via Server-Sent Events.
@@ -1573,7 +1579,7 @@ async def analyze_chart(
         "Access-Control-Allow-Origin": "*",
     }
     return StreamingResponse(
-        _stream_ai_analysis(symbol.upper(), timeframe, request),
+        _stream_ai_analysis(symbol.upper(), timeframe, request, force=force),
         media_type="text/event-stream",
         headers=headers,
     )

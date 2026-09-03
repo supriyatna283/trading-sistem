@@ -390,7 +390,7 @@ export default function TradingViewChart({
   const chartStyleRef = useRef<ChartStyle>("candlestick");
   chartStyleRef.current = chartStyle;
   const [indicators, setIndicators] = useState<IndicatorState>({
-    ema20: false, ema50: false, ema200: true, volume: true,
+    ema20: false, ema50: false, ema200: true, volume: false,
     smcZones: false, bollingerBands: false,
     rsi: true,   // RSI — signal generator, on by default
     macd: true,  // MACD — signal generator, on by default
@@ -445,14 +445,28 @@ export default function TradingViewChart({
     return () => clearInterval(timer);
   }, [timeframe]);
 
-  // ── ESC key handler ──
+  // ── ESC key handler & Custom Events ──
   useEffect(() => {
-    if (drawingMode === "none") return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { setDrawingMode("none"); setFibAnchor(null); }
+      if (drawingMode !== "none" && e.key === "Escape") { setDrawingMode("none"); setFibAnchor(null); }
     };
+    
+    // FIX #13: Interactive SMC Strip
+    const handleHighlightSMC = (e: any) => {
+      setIndicators(prev => ({ ...prev, smcZones: true }));
+      // Scroll back slightly to ensure user sees historical zones
+      if (chartRef.current) {
+        chartRef.current.timeScale().scrollToPosition(10, true);
+      }
+    };
+
     window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    window.addEventListener("chart:highlightSMC", handleHighlightSMC);
+    
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("chart:highlightSMC", handleHighlightSMC);
+    };
   }, [drawingMode]);
 
   useEffect(() => { setTimeframe(timeframeInterval); }, [timeframeInterval]);

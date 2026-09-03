@@ -301,6 +301,8 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [isChatting, setIsChatting] = useState(false);
+  const [showThinking, setShowThinking] = useState(true);
+  const [accountSize, setAccountSize] = useState<number>(1000);
 
   const esRef = useRef<EventSource | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -311,56 +313,81 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
     if (esRef.current) { esRef.current.close(); esRef.current = null; }
   }, []);
 
-  const startAnalysis = useCallback((sym: string, tf: string) => {
+  const startAnalysis = useCallback((sym: string, tf: string, force: boolean = false) => {
     cancelStream();
     setStatus("computing");
     setAnswer(""); setError(""); setSetup(null); setContext(null);
     setReasoning(""); setAnalysisNewContent(false);
     setChatHistory([]); setChatInput(""); setIsChatting(false);
 
-    const es = new EventSource(`${API_URL}/api/v1/ai/analyze?symbol=${sym}&timeframe=${tf}`);
-    esRef.current = es;
+    let retryCount = 0;
+    
+    const connect = () => {
+      const url = `${API_URL}/api/v1/ai/analyze?symbol=${sym}&timeframe=${tf}${force ? '&force=true' : ''}`;
+      const es = new EventSource(url);
+      esRef.current = es;
 
-    es.addEventListener("status", (e) => {
-      const s = (e as any).data;
-      if (s === "computing_indicators") setStatus("computing");
-      else if (s === "ai_thinking") setStatus("thinking");
-      else if (s === "cache_hit") setStatus("cached");
-    });
+      es.addEventListener("status", (e) => {
+        const s = (e as any).data;
+        if (s === "computing_indicators") setStatus("computing");
+        else if (s === "ai_thinking") setStatus("thinking");
+        else if (s === "cache_hit") setStatus("cached");
+      });
 
-    es.addEventListener("context", (e) => {
-      try { setContext(JSON.parse((e as any).data.replace(/\\n/g, "\n"))); } catch (_) { }
-    });
-    es.addEventListener("setup_data", (e) => {
-      try { setSetup(JSON.parse((e as any).data.replace(/\\n/g, "\n"))); } catch (_) { }
-    });
-    // NEW: Capture reasoning tokens from Nemotron thinking mode
-    es.addEventListener("reasoning", (e) => {
-      setReasoning(prev => prev + (e as any).data.replace(/\\n/g, "\n"));
-    });
-    es.addEventListener("token", (e) => {
-      setStatus("streaming");
-      setAnswer(prev => prev + (e as any).data.replace(/\\n/g, "\n"));
-    });
-    es.addEventListener("done", () => {
-      setStatus("done");
-      setAnalysisNewContent(true); // light up Analysis tab dot
-      es.close(); esRef.current = null;
-    });
-    es.addEventListener("error", (e: any) => {
-      if (e.data) {
-        const msg = (e.data || "").replace(/\\n/g, "\n");
-        setError(msg || "Connection error");
-      } else {
-        if (status !== "done") setError("Stream disconnected");
-      }
-      setStatus("error");
-      es.close(); esRef.current = null;
-    });
+      es.addEventListener("context", (e) => {
+        try { setContext(JSON.parse((e as any).data.replace(/\\n/g, "\n"))); } catch (_) { }
+      });
+      es.addEventListener("setup_data", (e) => {
+        try { setSetup(JSON.parse((e as any).data.replace(/\\n/g, "\n"))); } catch (_) { }
+      });
+      es.addEventListener("analyzed_at", (e) => {
+        try { 
+          const data = JSON.parse((e as any).data.replace(/\\n/g, "\n"));
+          if (data.ts) {
+            // we could store it in context or setup, for now let's just append to context
+            setContext((prev: any) => ({ ...prev, analyzed_at: data.ts }));
+          }
+        } catch (_) { }
+      });
+      // NEW: Capture reasoning tokens from Nemotron thinking mode
+      es.addEventListener("reasoning", (e) => {
+        setReasoning(prev => prev + (e as any).data.replace(/\\n/g, "\n"));
+      });
+      es.addEventListener("token", (e) => {
+        setStatus("streaming");
+        setAnswer(prev => prev + (e as any).data.replace(/\\n/g, "\n"));
+      });
+      es.addEventListener("done", () => {
+        setStatus("done");
+        setAnalysisNewContent(true); // light up Analysis tab dot
+        es.close(); esRef.current = null;
+        retryCount = 0;
+      });
+      es.addEventListener("error", (e: any) => {
+        if (retryCount < 3 && status !== "done" && status !== "cached") {
+          retryCount++;
+          console.warn(`[AI] SSE Error. Retrying connection (${retryCount}/3)...`);
+          es.close();
+          setTimeout(connect, 1000 * retryCount);
+          return;
+        }
+        
+        if (e.data) {
+          const msg = (e.data || "").replace(/\\n/g, "\n");
+          setError(msg || "Connection error");
+        } else {
+          if (status !== "done") setError("Stream disconnected");
+        }
+        setStatus("error");
+        es.close(); esRef.current = null;
+      });
+    };
+    
+    connect();
   }, [cancelStream, status]);
 
   const submitChat = useCallback(async () => {
-    if (!chatInput.trim() || isChatting || status !== "done") return;
+    if (!chatInput.trim() || isChatting) return;
     const msg = chatInput.trim();
     setChatInput(""); setIsChatting(true);
     setChatHistory(prev => [...prev, { role: "user", content: msg }]);
@@ -393,7 +420,7 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
   useEffect(() => {
     if (!isOpen) return;
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => startAnalysis(symbol, timeframe), 2500);
+    debounceRef.current = setTimeout(() => startAnalysis(symbol, timeframe), 800);
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbol, timeframe, isOpen]);
@@ -465,9 +492,19 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
           {setup?.session && (
             <span className="ai-session-tag">{setup.session.split("/")[0]}</span>
           )}
+          {context?.analyzed_at && (
+            <span style={{ fontSize: "0.55rem", color: "var(--text-muted)", marginLeft: 6 }}>
+              {(() => {
+                const diff = Math.floor(Date.now() / 1000) - context.analyzed_at;
+                if (diff < 60) return "Just now";
+                const m = Math.floor(diff / 60);
+                return `${m}m ago`;
+              })()}
+            </span>
+          )}
         </div>
         <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
-          <button onClick={() => startAnalysis(symbol, timeframe)} className="ai-icon-btn" disabled={isPulsing} title="Re-analyze">
+          <button onClick={() => startAnalysis(symbol, timeframe)} className="ai-icon-btn" disabled={isPulsing} title="Re-analyze (force refresh)">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
               <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
               <path d="M3 3v5h5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
@@ -626,6 +663,47 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
                   {setup.risk_per_unit != null && (
                     <PriceRow label="Risk/Unit" value={fmt(setup.risk_per_unit, 6)} color="#fb923c" />
                   )}
+                  {/* FIX #6: Position Size Calculator Widget */}
+                  {setup.entry_low && setup.stop_loss && (
+                    <div style={{ marginTop: 10, padding: 10, background: "rgba(0,0,0,0.2)", borderRadius: 8, border: "1px solid rgba(255,255,255,0.05)" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                        <span style={{ fontSize: "0.58rem", fontWeight: 700, color: "var(--text-muted)" }}>POSITION SIZING (1% Risk)</span>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                        <span style={{ fontSize: "0.6rem", color: "var(--text-secondary)" }}>Balance $</span>
+                        <input
+                          type="number"
+                          value={accountSize}
+                          onChange={(e) => setAccountSize(Number(e.target.value))}
+                          style={{
+                            background: "rgba(255,255,255,0.05)", border: "1px solid var(--border)", borderRadius: 4,
+                            padding: "2px 6px", color: "var(--text-primary)", fontSize: "0.65rem", width: 70, outline: "none"
+                          }}
+                        />
+                      </div>
+                      {(() => {
+                        const riskAmount = accountSize * 0.01;
+                        const entry = setup.signal === "BUY" ? setup.entry_high! : setup.entry_low!;
+                        const slDistance = Math.abs(entry - setup.stop_loss!);
+                        const slPct = (slDistance / entry) * 100;
+                        const posSizeUSD = slPct > 0 ? riskAmount / (slPct / 100) : 0;
+                        const qty = posSizeUSD / entry;
+                        
+                        return (
+                          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.65rem" }}>
+                            <div style={{ display: "flex", flexDirection: "column" }}>
+                              <span style={{ color: "var(--text-muted)", fontSize: "0.55rem" }}>Leveraged Size</span>
+                              <span style={{ fontWeight: 800, color: "var(--text-primary)", fontFamily: "monospace" }}>${posSizeUSD.toFixed(2)}</span>
+                            </div>
+                            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
+                              <span style={{ color: "var(--text-muted)", fontSize: "0.55rem" }}>Quantity ({symbol.replace("USDT","")})</span>
+                              <span style={{ fontWeight: 800, color: "#60a5fa", fontFamily: "monospace" }}>{qty.toFixed(4)}</span>
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div id="ai-wait-box">
@@ -646,7 +724,16 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
                     { label: "Liq. Levels", val: smc.liquidity_levels_count ?? "—", color: "#f59e0b" },
                     { label: "P/D Zone", val: smc.pd_zone || "—", color: smc.pd_zone === "DISCOUNT" ? "#22c55e" : smc.pd_zone === "PREMIUM" ? "#ef4444" : "var(--text-muted)" },
                   ].map(({ label, val, color }) => (
-                    <div key={label} className="smc-cell">
+                    <div 
+                      key={label} 
+                      className="smc-cell"
+                      onClick={() => {
+                        // FIX #13: Interactive SMC Strip - Dispatch event to chart
+                        window.dispatchEvent(new CustomEvent("chart:highlightSMC", { detail: { type: label } }));
+                      }}
+                      style={{ cursor: "pointer" }}
+                      title={`Click to show ${label} on chart`}
+                    >
                       <span className="smc-val" style={{ color }}>{val}</span>
                       <span className="smc-label">{label}</span>
                     </div>
@@ -951,7 +1038,14 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
               {/* Crypto News */}
               <div className="news-section-title" style={{ marginTop: 12 }}>Berita Kripto</div>
               {news.crypto_news?.length > 0 ? news.crypto_news.map((n: any, i: number) => (
-                <div key={i} className="news-item">
+                <a 
+                  key={i} 
+                  className="news-item" 
+                  href={n.url || "#"} 
+                  target={n.url ? "_blank" : "_self"}
+                  rel="noopener noreferrer"
+                  style={{ textDecoration: "none", display: "flex", cursor: n.url ? "pointer" : "default" }}
+                >
                   <span className={`news-badge ${n.sentiment === "POSITIF" ? "bull" : n.sentiment === "NEGATIF" ? "bear" : "neut"}`}>
                     {n.sentiment === "POSITIF" ? "↑" : n.sentiment === "NEGATIF" ? "↓" : "–"}
                   </span>
@@ -959,7 +1053,7 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
                     <div className="news-title">{n.title}</div>
                     <div className="news-meta">{n.source}</div>
                   </div>
-                </div>
+                </a>
               )) : <div className="news-empty">Tidak ada berita relevan.</div>}
             </>
           ) : (
@@ -980,12 +1074,34 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
 
             {/* AI Thinking Panel — shows reasoning tokens from Nemotron */}
             {reasoning && status === "thinking" && (
-              <div id="ai-thinking-panel">
-                <div className="thinking-header">
-                  <div className="thinking-dots"><span /><span /><span /></div>
-                  <span>Nemotron Deep Reasoning…</span>
+              <div id="ai-thinking-panel" style={{ 
+                background: "rgba(15,23,42,0.4)", borderRadius: 8, border: "1px solid rgba(139,92,246,0.15)",
+                marginBottom: 10, overflow: "hidden"
+              }}>
+                <div 
+                  className="thinking-header" 
+                  onClick={() => setShowThinking(!showThinking)}
+                  style={{ 
+                    display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", 
+                    background: "rgba(139,92,246,0.08)", cursor: "pointer", borderBottom: showThinking ? "1px solid rgba(139,92,246,0.1)" : "none"
+                  }}
+                >
+                  <div className="thinking-dots" style={{ display: "flex", gap: 4 }}>
+                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#a78bfa", animation: "blink 1s infinite" }} />
+                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#a78bfa", animation: "blink 1.2s infinite" }} />
+                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#a78bfa", animation: "blink 1.4s infinite" }} />
+                  </div>
+                  <span style={{ fontSize: "0.65rem", color: "#a78bfa", fontWeight: 700, flex: 1 }}>Nemotron Deep Reasoning…</span>
+                  <span style={{ fontSize: "0.6rem", color: "var(--text-muted)" }}>{showThinking ? "▲" : "▼"}</span>
                 </div>
-                <div className="thinking-body">{reasoning}</div>
+                {showThinking && (
+                  <div className="thinking-body" style={{ 
+                    padding: "10px 12px", fontSize: "0.68rem", color: "var(--text-muted)", 
+                    fontFamily: "monospace", maxHeight: 150, overflowY: "auto", whiteSpace: "pre-wrap"
+                  }}>
+                    {reasoning}
+                  </div>
+                )}
               </div>
             )}
 
