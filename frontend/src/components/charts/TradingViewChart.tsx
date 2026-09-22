@@ -793,6 +793,7 @@ export default function TradingViewChart({
         };
 
         ws.onmessage = (event) => {
+          if (wsDestroyedRef.current) return;
           try {
             const msg = JSON.parse(event.data);
             const k = msg?.k;
@@ -909,6 +910,7 @@ export default function TradingViewChart({
         try {
           const res = await fetch(`${API_URL}/api/v1/market/candles/${sym}?timeframe=${tf}&limit=2`);
           const json = await res.json();
+          if (wsDestroyedRef.current) return;
           const candles = json.candles ?? [];
           if (candles.length > 0) {
             const last = candles[candles.length - 1];
@@ -1278,8 +1280,10 @@ export default function TradingViewChart({
           try {
             setHtfFibLoading(true);
             const htfResp = await fetch(`${API_URL}/api/v1/market/candles/${symbol}?timeframe=${htfTf}&limit=60`);
+            if (isCancelled) return;
             if (htfResp.ok) {
               const htfJson = await htfResp.json();
+              if (isCancelled) return;
               const htfCandles = (htfJson.candles ?? []).map((c: any) => ({
                 time: c.time ?? c.timestamp,
                 open: c.open, high: c.high, low: c.low, close: c.close,
@@ -1326,6 +1330,8 @@ export default function TradingViewChart({
           });
         }
 
+        if (isCancelled) return;
+        
         // Draw annotations & sync markers
         drawAnnotations(indicators.smcZones);
         syncMarkers();
