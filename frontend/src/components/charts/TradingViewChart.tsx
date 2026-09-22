@@ -276,50 +276,94 @@ function calculateBollingerBands(data: any[], period = 20, stdDev = 2) {
   return { upper, middle, lower };
 }
 
-// Auto Fibonacci: detects swing high/low from last N candles and returns levels
-function calculateFibonacciAuto(data: any[], lookback = 60): {
+// ── Adaptive lookback per timeframe ──
+function fibLookbackForTF(tf: string): number {
+  const map: Record<string, number> = {
+    "1m": 100, "3m": 90, "5m": 80, "15m": 60, "30m": 60,
+    "1h": 50,  "2h": 45, "4h": 40, "6h": 35,
+    "1d": 30,  "3d": 25, "1w": 20, "1M": 15,
+  };
+  return map[tf] ?? 60;
+}
+
+// HTF map — one timeframe higher
+const HTF_MAP: Record<string, string> = {
+  "1m": "5m",  "3m": "15m",  "5m": "15m",  "15m": "1h",
+  "30m": "4h", "1h": "4h",   "2h": "4h",   "4h": "1d",
+  "6h": "1d",  "1d": "1w",   "3d": "1w",   "1w": "1M",
+};
+
+// ──────────────────────────────────────────────────────────────────────
+// Auto Fibonacci v2:
+//   - Swing detection via proper chronological order:
+//       If swingHigh happened AFTER swingLow → bullish → 0%=Low, 100%=High
+//       If swingHigh happened BEFORE swingLow → bearish → 0%=High, 100%=Low
+//   - Extension levels for TP planning (127.2%, 161.8%, 200%, 261.8%)
+//   - Golden zone (0.5–0.618) flagged for highlight
+// ──────────────────────────────────────────────────────────────────────
+function calculateFibonacciAuto(
+  data: any[],
+  tf = "1h"
+): {
   swingHigh: number;
   swingLow: number;
   swingHighTime?: Time;
   swingLowTime?: Time;
   direction: "UP" | "DOWN";
-  levels: { ratio: number; price: number; label: string; color: string; isKey: boolean }[];
+  levels: { ratio: number; price: number; label: string; color: string; isKey: boolean; isExtension: boolean; isGolden: boolean }[];
 } | null {
   if (data.length < 10) return null;
+  const lookback = fibLookbackForTF(tf);
   const window = data.slice(-lookback);
-  
-  let shNode = window[0];
-  let slNode = window[0];
+
+  // Find swing high & low indices
+  let shIdx = 0, slIdx = 0;
   for (let i = 1; i < window.length; i++) {
-    if (window[i].high > shNode.high) shNode = window[i];
-    if (window[i].low < slNode.low) slNode = window[i];
+    if (window[i].high > window[shIdx].high) shIdx = i;
+    if (window[i].low  < window[slIdx].low)  slIdx = i;
   }
-  
+
+  const shNode = window[shIdx];
+  const slNode = window[slIdx];
   const swingHigh = shNode.high;
-  const swingLow = slNode.low;
+  const swingLow  = slNode.low;
   if (swingHigh <= swingLow) return null;
 
-  const lastClose = data[data.length - 1].close;
-  const midpoint = (swingHigh + swingLow) / 2;
-  const direction: "UP" | "DOWN" = lastClose >= midpoint ? "UP" : "DOWN";
+  // Direction = which swing is MORE RECENT
+  // shIdx > slIdx → High formed after Low → price was going UP → bullish retracement
+  // shIdx < slIdx → Low formed after High → price was going DOWN → bearish retracement
+  const direction: "UP" | "DOWN" = shIdx > slIdx ? "UP" : "DOWN";
   const range = swingHigh - swingLow;
 
+  // Retracement levels (0–100%) + Extension levels (>100%)
+  // UP trend: anchor 100%=High, 0%=Low → retracement pulls back toward Low
+  // DOWN trend: anchor 100%=Low, 0%=High → retracement pulls back toward High
   const RATIOS = [
-    { r: 0.0,   label: "0%",     color: "rgba(239,68,68,0.7)",    isKey: false },
-    { r: 0.236, label: "23.6%",  color: "rgba(245,158,11,0.55)",  isKey: false },
-    { r: 0.382, label: "38.2%",  color: "rgba(16,185,129,0.85)",  isKey: true  },
-    { r: 0.5,   label: "50%",    color: "rgba(96,165,250,0.85)",  isKey: true  },
-    { r: 0.618, label: "61.8%",  color: "rgba(167,139,250,0.95)", isKey: true  },
-    { r: 0.786, label: "78.6%",  color: "rgba(245,158,11,0.6)",   isKey: false },
-    { r: 1.0,   label: "100%",   color: "rgba(239,68,68,0.7)",    isKey: false },
+    // Extensions (above 100% for UP / below 0% for DOWN)
+    { r: -0.272, label: "127.2%", isKey: true,  isExtension: true,  isGolden: false, color: "rgba(52,211,153,0.9)" },
+    { r: -0.414, label: "141.4%", isKey: false, isExtension: true,  isGolden: false, color: "rgba(52,211,153,0.6)" },
+    { r: -0.618, label: "161.8%", isKey: true,  isExtension: true,  isGolden: false, color: "rgba(52,211,153,1.0)" },
+    { r: -1.0,   label: "200%",   isKey: false, isExtension: true,  isGolden: false, color: "rgba(52,211,153,0.5)" },
+    { r: -1.618, label: "261.8%", isKey: true,  isExtension: true,  isGolden: false, color: "rgba(52,211,153,0.8)" },
+    // Retracement levels (0–100%)
+    { r:  0.0,   label: "0%",     isKey: false, isExtension: false, isGolden: false, color: "rgba(239,68,68,0.7)"  },
+    { r:  0.236, label: "23.6%",  isKey: false, isExtension: false, isGolden: false, color: "rgba(245,158,11,0.55)" },
+    { r:  0.382, label: "38.2%",  isKey: true,  isExtension: false, isGolden: false, color: "rgba(16,185,129,0.85)" },
+    { r:  0.5,   label: "50%",    isKey: true,  isExtension: false, isGolden: true,  color: "rgba(250,204,21,0.95)" },
+    { r:  0.618, label: "61.8%",  isKey: true,  isExtension: false, isGolden: true,  color: "rgba(167,139,250,0.95)" },
+    { r:  0.786, label: "78.6%",  isKey: false, isExtension: false, isGolden: false, color: "rgba(245,158,11,0.6)"  },
+    { r:  1.0,   label: "100%",   isKey: false, isExtension: false, isGolden: false, color: "rgba(239,68,68,0.7)"  },
   ];
 
-  const levels = RATIOS.map(({ r, label, color, isKey }) => {
-    // For UP trend: retracement goes from swingHigh down
+  const levels = RATIOS.map(({ r, label, color, isKey, isExtension, isGolden }) => {
+    // UP: 0% = swingLow, 100% = swingHigh, retracement pulls DOWN from High
+    //     Extensions go ABOVE swingHigh (r < 0 means above 100%)
+    // DOWN: 0% = swingHigh, 100% = swingLow, retracement pulls UP from Low
+    //       Extensions go BELOW swingLow
     const price = direction === "UP"
-      ? swingHigh - r * range
-      : swingLow  + r * range;
-    return { ratio: r, price, label, color, isKey };
+      ? swingHigh - r * range        // r=0 → High, r=1 → Low, r=-0.618 → above High (161.8% ext)
+      : swingLow  + r * range;       // r=0 → Low,  r=1 → High, r=-0.618 → below Low (161.8% ext)
+    return { ratio: r, price, label, color, isKey, isExtension, isGolden };
   });
 
   return { swingHigh, swingLow, swingHighTime: shNode.time, swingLowTime: slNode.time, direction, levels };
@@ -373,6 +417,10 @@ export default function TradingViewChart({
   // Auto Fibonacci price lines on main chart
   const autoFibLinesRef = useRef<any[]>([]);
   const autoFibDataRef = useRef<ReturnType<typeof calculateFibonacciAuto>>(null);
+  // HTF Fibonacci price lines
+  const htfFibLinesRef = useRef<any[]>([]);
+  const htfFibDataRef = useRef<ReturnType<typeof calculateFibonacciAuto>>(null);
+  const [htfFibLoading, setHtfFibLoading] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const wsReconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -782,7 +830,7 @@ export default function TradingViewChart({
             }
             // Auto Fib: update price when swing changes
             if (indicators.autoFib && autoFibDataRef.current) {
-              const newFib = calculateFibonacciAuto(currentData, 60);
+              const newFib = calculateFibonacciAuto(currentData, timeframe);
               if (newFib) {
                 const prev = autoFibDataRef.current;
                 const changed = Math.abs(newFib.swingHigh - prev.swingHigh) / prev.swingHigh > 0.0005
@@ -926,6 +974,8 @@ export default function TradingViewChart({
     if (macdChartRef.current) { try { macdChartRef.current.remove(); } catch (_) {} macdChartRef.current = null; }
     autoFibLinesRef.current = [];
     autoFibDataRef.current = null;
+    htfFibLinesRef.current = [];
+    htfFibDataRef.current = null;
 
     const chart = createChart(mainContainerRef.current, chartOptions as any);
 
@@ -1174,25 +1224,68 @@ export default function TradingViewChart({
             macdHistSeries.setData(macd.histogram);
           }
 
-          // ── Auto Fibonacci Overlay on main chart ──
-          const fibResult = calculateFibonacciAuto(chartData, 60);
+          // ── Auto Fibonacci Overlay on main chart (v2 with fixed swing direction) ──
+          const fibResult = calculateFibonacciAuto(chartData, timeframe);
           autoFibDataRef.current = fibResult;
           autoFibLinesRef.current = [];
           if (fibResult && candleSeries) {
             fibResult.levels.forEach(lvl => {
               const lineWidth: 1 | 2 | 3 | 4 = lvl.isKey ? 2 : 1;
-              const lineStyle = lvl.isKey ? LineStyle.Solid : LineStyle.Dashed;
+              const lineStyle = lvl.isExtension
+                ? LineStyle.Dashed
+                : lvl.isKey ? LineStyle.Solid : LineStyle.Dashed;
               const pl = candleSeries.createPriceLine({
                 price: lvl.price,
                 color: indicators.autoFib ? lvl.color : "rgba(0,0,0,0)",
                 lineStyle,
                 lineWidth,
                 axisLabelVisible: indicators.autoFib,
-                title: indicators.autoFib ? `Fib ${lvl.label}` : "",
+                title: indicators.autoFib ? `${lvl.isExtension ? "🎯 " : ""}Fib ${lvl.label}` : "",
               });
               autoFibLinesRef.current.push({ pl, ...lvl });
             });
           }
+
+          // ── HTF Fibonacci Overlay ──
+          const htfTf = HTF_MAP[timeframe] ?? "1d";
+          try {
+            setHtfFibLoading(true);
+            const htfResp = await fetch(`${API_URL}/api/v1/market/candles/${symbol}?timeframe=${htfTf}&limit=60`);
+            if (htfResp.ok) {
+              const htfJson = await htfResp.json();
+              const htfCandles = (htfJson.candles ?? []).map((c: any) => ({
+                time: c.time ?? c.timestamp,
+                open: c.open, high: c.high, low: c.low, close: c.close,
+              }));
+              if (htfCandles.length >= 10) {
+                const htfFib = calculateFibonacciAuto(htfCandles, htfTf);
+                htfFibDataRef.current = htfFib;
+                htfFibLinesRef.current = [];
+                if (htfFib && candleSeries && indicators.autoFib) {
+                  // Only draw HTF key levels (38.2, 50, 61.8, 100, extensions) — dimmer
+                  htfFib.levels
+                    .filter(l => l.isKey)
+                    .forEach(lvl => {
+                      const htfColor = lvl.isExtension
+                        ? lvl.color.replace(/,[\d.]+\)/, ",0.45)")
+                        : lvl.isGolden
+                          ? "rgba(250,204,21,0.35)"
+                          : lvl.color.replace(/,[\d.]+\)/, ",0.30)");
+                      const pl = candleSeries.createPriceLine({
+                        price: lvl.price,
+                        color: htfColor,
+                        lineStyle: LineStyle.LargeDashed,
+                        lineWidth: 1,
+                        axisLabelVisible: true,
+                        title: `HTF ${lvl.isExtension ? "🎯" : ""} Fib ${lvl.label} (${htfTf})`,
+                      });
+                      htfFibLinesRef.current.push({ pl, ...lvl });
+                    });
+                }
+              }
+            }
+          } catch (_) {}
+          finally { setHtfFibLoading(false); }
 
           // ── Restore persistent drawings ──
           const savedDrawings = loadSavedDrawings(symbol);
@@ -1296,6 +1389,8 @@ export default function TradingViewChart({
       fibLinesRef.current = [];
       autoFibLinesRef.current = [];
       autoFibDataRef.current = null;
+      htfFibLinesRef.current = [];
+      htfFibDataRef.current = null;
       setDrawingsCount(0);
       setFibAnchor(null);
       chart.remove();
@@ -1693,7 +1788,15 @@ export default function TradingViewChart({
               background: "rgba(167,139,250,0.08)", border: "1px solid rgba(167,139,250,0.2)",
               borderRadius: 4, padding: "0 5px",
             }}>
-              📐 Fib {autoFibDataRef.current.direction} · 0.618={autoFibDataRef.current.levels.find(l => l.label === "61.8%")?.price.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+              📐 Fib {autoFibDataRef.current.direction}
+              {" · "}
+              <span style={{ color: "rgba(250,204,21,0.95)" }}>50%={autoFibDataRef.current.levels.find(l => l.label === "50%")?.price.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+              {" · "}
+              <span style={{ color: "rgba(167,139,250,0.95)" }}>61.8%={autoFibDataRef.current.levels.find(l => l.label === "61.8%")?.price.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+              {" · "}
+              <span style={{ color: "rgba(52,211,153,0.9)" }}>🎯={autoFibDataRef.current.levels.find(l => l.label === "161.8%")?.price.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+              {htfFibDataRef.current && <span style={{ color: "rgba(255,255,255,0.3)", marginLeft: 6 }}>+ HTF</span>}
+              {htfFibLoading && <span style={{ color: "rgba(255,255,255,0.3)", marginLeft: 4 }}>⏳</span>}
             </span>
           )}
         </div>
