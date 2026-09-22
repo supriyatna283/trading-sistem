@@ -73,6 +73,7 @@ interface IndicatorState {
   macd: boolean;
   autoFib: boolean;
   supportResistance: boolean;
+  sessions: boolean;
 }
 
 type ChartStyle = "candlestick" | "line" | "area";
@@ -444,6 +445,7 @@ export default function TradingViewChart({
     macd: true,  // MACD — signal generator, on by default
     autoFib: true, // Auto Fibonacci — signal generator, on by default
     supportResistance: false,
+    sessions: false,
   });
 
   const [tooltip, setTooltip] = useState<{
@@ -633,37 +635,70 @@ export default function TradingViewChart({
 
     priceLineRefs.current = lines;
 
-    // Structure markers
-    const LABEL_CONFIG: Record<string, { position: "aboveBar" | "belowBar"; color: string; shape: "arrowUp" | "arrowDown" | "circle" }> = {
-      BOS: { position: "aboveBar", color: "#f59e0b", shape: "circle" },
-      CHOCH: { position: "aboveBar", color: "#a78bfa", shape: "circle" },
-      HH: { position: "aboveBar", color: "#10b981", shape: "arrowUp" },
-      HL: { position: "belowBar", color: "#34d399", shape: "arrowUp" },
-      LH: { position: "aboveBar", color: "#f87171", shape: "arrowDown" },
-      LL: { position: "belowBar", color: "#ef4444", shape: "arrowDown" },
-    };
+    // Structure markers are now handled by syncMarkers()
+    syncMarkers();
+  }, [setup, effectiveOBs, effectiveFVGs, effectiveMarkers, srLevels, indicators.supportResistance, chartStyle]);
 
-    if (showSMC && effectiveMarkers.length > 0) {
-      const markers: SeriesMarker<Time>[] = effectiveMarkers
+  const syncMarkers = useCallback(() => {
+    const series = seriesRef.current || lineSeriesRef.current || areaSeriesRef.current;
+    if (!series) return;
+
+    let allMarkers: SeriesMarker<Time>[] = [];
+
+    // 1. Session Markers (only on intraday TFs < 1d)
+    if (indicators.sessions && chartDataRef.current.length > 0 && !timeframe.includes("d") && !timeframe.includes("w")) {
+      chartDataRef.current.forEach(c => {
+        const t = new Date((c.time as number) * 1000);
+        const h = t.getUTCHours();
+        const m = t.getUTCMinutes();
+        if (m === 0) {
+          if (h === 0) allMarkers.push({ time: c.time as Time, position: "inBar", color: "rgba(245,158,11,0.7)", shape: "arrowUp", text: "Asia", size: 1 });
+          else if (h === 8) allMarkers.push({ time: c.time as Time, position: "inBar", color: "rgba(59,130,246,0.7)", shape: "arrowUp", text: "London", size: 1 });
+          else if (h === 13) allMarkers.push({ time: c.time as Time, position: "inBar", color: "rgba(34,197,94,0.7)", shape: "arrowUp", text: "NY", size: 1 });
+        }
+      });
+    }
+
+    // 2. SMC Structure Markers
+    if (indicators.smcZones && effectiveMarkers.length > 0) {
+      const LABEL_CONFIG: Record<string, { position: "aboveBar" | "belowBar"; color: string; shape: "arrowUp" | "arrowDown" | "circle" }> = {
+        BOS: { position: "aboveBar", color: "#f59e0b", shape: "circle" },
+        CHOCH: { position: "aboveBar", color: "#a78bfa", shape: "circle" },
+        HH: { position: "aboveBar", color: "#10b981", shape: "arrowDown" },
+        HL: { position: "belowBar", color: "#34d399", shape: "arrowUp" },
+        LH: { position: "aboveBar", color: "#f87171", shape: "arrowDown" },
+        LL: { position: "belowBar", color: "#ef4444", shape: "arrowUp" },
+      };
+      
+      const smcMarkers: SeriesMarker<Time>[] = effectiveMarkers
         .filter(m => m.time > 0)
         .map(m => {
           const cfg = LABEL_CONFIG[m.label] ?? { position: "aboveBar" as const, color: "#6b7280", shape: "circle" as const };
           return { time: (m.time / 1000) as Time, position: cfg.position, color: cfg.color, shape: cfg.shape, text: m.label, size: m.label === "BOS" || m.label === "CHOCH" ? 2 : 1 };
-        })
-        .sort((a, b) => (a.time as number) - (b.time as number));
-      seriesRef.current?.setMarkers([]);
-      lineSeriesRef.current?.setMarkers([]);
-      areaSeriesRef.current?.setMarkers([]);
-      const style = chartStyleRef.current;
-      const markerTarget =
-        style === "line" ? lineSeriesRef.current : style === "area" ? areaSeriesRef.current : seriesRef.current;
-      markerTarget?.setMarkers(markers);
-    } else {
-      seriesRef.current?.setMarkers([]);
-      lineSeriesRef.current?.setMarkers([]);
-      areaSeriesRef.current?.setMarkers([]);
+        });
+      allMarkers = allMarkers.concat(smcMarkers);
     }
-  }, [setup, effectiveOBs, effectiveFVGs, effectiveMarkers, srLevels, indicators.supportResistance, chartStyle]);
+
+    // 3. AutoFib Swing Markers
+    if (indicators.autoFib && autoFibDataRef.current) {
+      const fib = autoFibDataRef.current;
+      if (fib.swingHighTime) allMarkers.push({ time: fib.swingHighTime as Time, position: "aboveBar", color: "#ef4444", shape: "arrowDown", text: "HH" });
+      if (fib.swingLowTime) allMarkers.push({ time: fib.swingLowTime as Time, position: "belowBar", color: "#22c55e", shape: "arrowUp", text: "LL" });
+    }
+
+    // Sort by time ascending
+    allMarkers.sort((a, b) => (a.time as number) - (b.time as number));
+
+    seriesRef.current?.setMarkers([]);
+    lineSeriesRef.current?.setMarkers([]);
+    areaSeriesRef.current?.setMarkers([]);
+    
+    if (allMarkers.length > 0) {
+      const style = chartStyleRef.current;
+      const markerTarget = style === "line" ? lineSeriesRef.current : style === "area" ? areaSeriesRef.current : seriesRef.current;
+      markerTarget?.setMarkers(allMarkers);
+    }
+  }, [indicators.sessions, indicators.smcZones, indicators.autoFib, effectiveMarkers, timeframe]);
 
   useEffect(() => { drawAnnotations(indicators.smcZones); }, [drawAnnotations, indicators.smcZones]);
 
@@ -702,7 +737,9 @@ export default function TradingViewChart({
         macdChartRef.current.timeScale().fitContent();
       }
     });
-  }, [indicators]);
+
+    syncMarkers();
+  }, [indicators, syncMarkers]);
 
   useEffect(() => {
     if (seriesRef.current) {
@@ -842,18 +879,8 @@ export default function TradingViewChart({
                       autoFibLinesRef.current[i]?.pl.applyOptions({ price: lvl.price });
                     } catch (_) {}
                   });
-                  // ── Add swing markers ──
-                  if (seriesRef.current) {
-                    const markers: SeriesMarker<Time>[] = [];
-                    if (newFib.swingHighTime) {
-                      markers.push({ time: newFib.swingHighTime, position: "aboveBar", color: "#ef4444", shape: "arrowDown", text: "HH" });
-                    }
-                    if (newFib.swingLowTime) {
-                      markers.push({ time: newFib.swingLowTime, position: "belowBar", color: "#22c55e", shape: "arrowUp", text: "LL" });
-                    }
-                    markers.sort((a, b) => (a.time as number) - (b.time as number));
-                    seriesRef.current.setMarkers(markers);
-                  }
+                  // ── Sync markers ──
+                  syncMarkers();
                 }
               }
             }
@@ -1299,6 +1326,10 @@ export default function TradingViewChart({
           });
         }
 
+        // Draw annotations & sync markers
+        drawAnnotations(indicators.smcZones);
+        syncMarkers();
+        
         if (isCancelled) return;
         chart.timeScale().fitContent();
         rsiChart?.timeScale().fitContent();
@@ -1723,6 +1754,7 @@ export default function TradingViewChart({
               { key: "volume",   label: "VOL",     color: "rgba(38,166,154,0.9)"  },
               { key: "supportResistance", label: "S/R", color: "rgba(34,197,94,0.9)" },
               { key: "smcZones", label: "SMC",     color: "rgba(139,92,246,0.9)"  },
+              { key: "sessions", label: "⏰ Session", color: "rgba(251,191,36,0.9)" },
             ] as { key: keyof IndicatorState; label: string; color: string }[]).map(({ key, label, color }) => (
               <button key={key} onClick={() => toggleIndicator(key)} style={{
                 padding: "2px 8px", borderRadius: 20,

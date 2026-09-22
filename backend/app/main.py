@@ -33,6 +33,7 @@ from app.routers import (
     portfolio,
     order_flow,
     ai_analysis,
+    ai_performance,
     markets,
     whale_api,
     notes,
@@ -49,6 +50,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 _scheduler_task = None
+_signal_tracker_task = None
 
 
 @asynccontextmanager
@@ -82,6 +84,15 @@ async def lifespan(app: FastAPI):
         logger.info("🤖 Auto Signal Scheduler launched (every 30 minutes)")
     except Exception as e:
         logger.error(f"❌ Scheduler failed to start: {e}")
+
+    # 2.5 Start AI Signal Tracker
+    try:
+        from app.services.signal_tracker import signal_tracker_loop
+        global _signal_tracker_task
+        _signal_tracker_task = asyncio.create_task(signal_tracker_loop())
+        logger.info("🤖 AI Signal Tracker launched")
+    except Exception as e:
+        logger.error(f"❌ AI Signal Tracker failed to start: {e}")
 
     # 3. Start WebSocket Proxy — Skip Binance (blocked 451 on HuggingFace), use OKX
     logger.info("⏭️ Binance WebSocket skipped (blocked on cloud). Using OKX data source.")
@@ -187,6 +198,7 @@ app.include_router(trading.router)
 app.include_router(portfolio.router)
 app.include_router(order_flow.router)
 app.include_router(ai_analysis.router)
+app.include_router(ai_performance.router)
 app.include_router(markets.router)
 app.include_router(whale_api.router)
 app.include_router(notes.router)

@@ -35,6 +35,7 @@ const NAV_GROUPS = [
       { href: "/setups", label: "Setups", icon: Target, color: "#f43f5e" },
       { href: "/charts", label: "Charts", icon: LineChart, color: "#0ea5e9" },
       { href: "/market-intel", label: "Market Intel", icon: Brain, color: "#f59e0b" },
+      { href: "/ai-performance", label: "AI Performance", icon: Activity, color: "#10b981" },
       { href: "/whale-tracker", label: "Whale Tracker", icon: Waves, color: "#06b6d4" },
     ],
   },

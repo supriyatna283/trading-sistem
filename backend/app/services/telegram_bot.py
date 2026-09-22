@@ -106,6 +106,65 @@ async def send_telegram_signal(setup_schema, timeframe: str) -> bool:
     return await _send_message(message, symbol, timeframe)
 
 
+async def send_telegram_ai_signal(setup: dict) -> bool:
+    """
+    Sends a premium formatted AI Analyst signal to Telegram.
+    Returns True on success, False otherwise.
+    """
+    token = settings.TELEGRAM_BOT_TOKEN
+    chat_id = settings.TELEGRAM_CHAT_ID
+    proxy_url = settings.TELEGRAM_PROXY_URL
+
+    if not proxy_url and (not token or not chat_id):
+        logger.warning("⚠️ No TELEGRAM_PROXY_URL or TELEGRAM_BOT_TOKEN/CHAT_ID configured. Skipping AI alert.")
+        return False
+
+    symbol = setup.get("symbol", "N/A")
+    timeframe = setup.get("timeframe", "N/A")
+    direction = setup.get("signal", "N/A")
+    grade = setup.get("signal_grade", "C")
+    conf_pct = setup.get("confluence_pct", 0)
+    session = setup.get("session", "N/A")
+    
+    entry_low = setup.get("entry_low", 0)
+    entry_high = setup.get("entry_high", 0)
+    stop_loss = setup.get("stop_loss", 0)
+    tp1 = setup.get("tp1", 0)
+    tp2 = setup.get("tp2", None)
+    tp3 = setup.get("tp3", None)
+    
+    tp_probs = setup.get("tp_probability", {})
+    tp1_prob = tp_probs.get("tp1", 75)
+    tp2_prob = tp_probs.get("tp2", 55)
+
+    direction_icon = "🟢 LONG" if direction == "BUY" else "🔴 SHORT"
+    
+    tp_lines = f"✅ TP1: <code>{_fmt_price(tp1)}</code> ({tp1_prob}%)"
+    if tp2:
+        tp_lines += f"\n✅ TP2: <code>{_fmt_price(tp2)}</code> ({tp2_prob}%)"
+    if tp3:
+        tp_lines += f"\n✅ TP3: <code>{_fmt_price(tp3)}</code>"
+
+    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    message = (
+        f"🤖 <b>AI ANALYST SIGNAL — Grade {grade}</b>\n"
+        f"{'━' * 28}\n\n"
+        f"📊 <b>{symbol} / {timeframe}</b>\n"
+        f"⬆️ <b>{direction_icon}</b> │ Confluence {conf_pct}%\n\n"
+        f"🎯 <b>Entry Zone:</b>\n"
+        f"  <code>{_fmt_price(entry_low)} — {_fmt_price(entry_high)}</code>\n\n"
+        f"🛑 <b>Stop Loss:</b> <code>{_fmt_price(stop_loss)}</code>\n\n"
+        f"💰 <b>Targets:</b>\n"
+        f"{tp_lines}\n\n"
+        f"⏰ <b>Session:</b> {session}\n\n"
+        f"<i>Trading Intelligence V6 — AI Division</i>\n"
+        f"🕐 {now_utc}"
+    )
+
+    return await _send_message(message, symbol, timeframe)
+
+
 async def send_telegram_risk_alert(alert_type: str, message_text: str) -> bool:
     """Send a risk management alert to Telegram (circuit breaker, daily loss, etc)."""
     token = settings.TELEGRAM_BOT_TOKEN

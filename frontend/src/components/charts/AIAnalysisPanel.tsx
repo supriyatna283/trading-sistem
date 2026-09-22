@@ -294,6 +294,8 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
   const [answer, setAnswer] = useState("");
   const [reasoning, setReasoning] = useState("");  // AI thinking tokens
   const [context, setContext] = useState<any>(null);
+  const [alertEnabled, setAlertEnabled] = useState(false);
+  const alertEnabledRef = useRef(false);
   const [setup, setSetup] = useState<SetupData | null>(null);
   const [whaleIntel, setWhaleIntel] = useState<any>(null);
   const [whaleLoading, setWhaleLoading] = useState(false);
@@ -306,6 +308,7 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
   const [isChatting, setIsChatting] = useState(false);
   const [showThinking, setShowThinking] = useState(true);
   const [accountSize, setAccountSize] = useState<number>(1000);
+  const [riskPct, setRiskPct] = useState<number>(1);
 
   const esRef = useRef<EventSource | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -344,7 +347,17 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
         try { setContext(JSON.parse((e as any).data.replace(/\\n/g, "\n"))); } catch (_) { }
       });
       es.addEventListener("setup_data", (e) => {
-        try { setSetup(JSON.parse((e as any).data.replace(/\\n/g, "\n"))); } catch (_) { }
+        try { 
+          const data = JSON.parse((e as any).data.replace(/\\n/g, "\n"));
+          setSetup(data); 
+          if (alertEnabledRef.current && (data.signal_grade === "A+" || data.signal_grade === "A")) {
+            if (Notification.permission === "granted") {
+              new Notification(`AI Signal: ${data.symbol} - Grade ${data.signal_grade}`, {
+                body: `${data.signal} | Score: ${data.confluence_pct}%\nEntry: ${fmt(data.entry_low)} - ${fmt(data.entry_high)}\nSL: ${fmt(data.stop_loss)}`,
+              });
+            }
+          }
+        } catch (_) { }
       });
       es.addEventListener("analyzed_at", (e) => {
         try { 
@@ -414,12 +427,25 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
       const dec = new TextDecoder();
       let ai = "";
       setChatHistory(prev => [...prev, { role: "assistant", content: "" }]);
+      let sseBuffer = "";
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        for (const line of dec.decode(value).split("\n")) {
-          if (line.startsWith("data: ") && !line.includes("event: done") && !line.includes("event: status")) {
-            ai += line.slice(6).replace(/\\n/g, "\n");
+        sseBuffer += dec.decode(value, { stream: true });
+        // SSE events are separated by double newlines
+        const events = sseBuffer.split("\n\n");
+        sseBuffer = events.pop() || ""; // keep incomplete last chunk
+        for (const evt of events) {
+          const lines = evt.split("\n");
+          let eventType = "";
+          let data = "";
+          for (const line of lines) {
+            if (line.startsWith("event: ")) eventType = line.slice(7).trim();
+            else if (line.startsWith("data: ")) data += line.slice(6);
+          }
+          if (eventType === "done" || eventType === "status") continue;
+          if (data) {
+            ai += data.replace(/\\n/g, "\n");
             setChatHistory(prev => { const n = [...prev]; n[n.length - 1].content = ai; return n; });
           }
         }
@@ -427,7 +453,7 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
     } catch (e) {
       setChatHistory(prev => [...prev, { role: "assistant", content: "⚠️ Maaf, server error." }]);
     } finally { setIsChatting(false); }
-  }, [chatInput, isChatting, status, symbol, timeframe, chatHistory, context]);
+  }, [chatInput, isChatting, symbol, timeframe, chatHistory, context]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -519,7 +545,42 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
           )}
         </div>
         <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
-          <button onClick={() => startAnalysis(symbol, timeframe)} className="ai-icon-btn" disabled={isPulsing} title="Re-analyze (force refresh)">
+          <button 
+            onClick={() => {
+              if (!alertEnabled) {
+                if ("Notification" in window) {
+                  Notification.requestPermission().then(perm => {
+                    if (perm === "granted") {
+                      setAlertEnabled(true);
+                      alertEnabledRef.current = true;
+                    }
+                  });
+                }
+              } else {
+                setAlertEnabled(false);
+                alertEnabledRef.current = false;
+              }
+            }} 
+            className="ai-icon-btn" 
+            title={alertEnabled ? "Browser alerts enabled (A+/A signals)" : "Enable browser alerts"}
+            style={{ color: alertEnabled ? "#fbbf24" : "var(--text-muted)", opacity: 1 }}
+          >
+            {alertEnabled ? (
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z" />
+              </svg>
+            ) : (
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+                <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+              </svg>
+            )}
+          </button>
+          <button onClick={() => {
+            // FIX #5: Clear backend cache for this symbol before force refresh
+            fetch(`${API_URL}/api/v1/ai/cache?symbol=${symbol}&timeframe=${timeframe}`, { method: 'DELETE' }).catch(() => {});
+            startAnalysis(symbol, timeframe, true);
+          }} className="ai-icon-btn" disabled={isPulsing} title="Re-analyze (clear cache + force refresh)">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
               <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
               <path d="M3 3v5h5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
@@ -704,9 +765,9 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
                   {setup.entry_low && setup.stop_loss && (
                     <div style={{ marginTop: 10, padding: 10, background: "rgba(0,0,0,0.2)", borderRadius: 8, border: "1px solid rgba(255,255,255,0.05)" }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                        <span style={{ fontSize: "0.58rem", fontWeight: 700, color: "var(--text-muted)" }}>POSITION SIZING (1% Risk)</span>
+                        <span style={{ fontSize: "0.58rem", fontWeight: 700, color: "var(--text-muted)" }}>POSITION SIZING</span>
                       </div>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
                         <span style={{ fontSize: "0.6rem", color: "var(--text-secondary)" }}>Balance $</span>
                         <input
                           type="number"
@@ -717,9 +778,20 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
                             padding: "2px 6px", color: "var(--text-primary)", fontSize: "0.65rem", width: 70, outline: "none"
                           }}
                         />
+                        <span style={{ fontSize: "0.6rem", color: "var(--text-secondary)", marginLeft: 4 }}>Risk %</span>
+                        <div style={{ display: "flex", gap: 2 }}>
+                          {[0.5, 1, 2, 3, 5].map(pctVal => (
+                            <button key={pctVal} onClick={() => setRiskPct(pctVal)} style={{
+                              padding: "2px 6px", borderRadius: 4, fontSize: "0.58rem", fontWeight: riskPct === pctVal ? 800 : 600,
+                              border: `1px solid ${riskPct === pctVal ? "rgba(167,139,250,0.5)" : "var(--border)"}`,
+                              background: riskPct === pctVal ? "rgba(167,139,250,0.15)" : "rgba(255,255,255,0.03)",
+                              color: riskPct === pctVal ? "#c4b5fd" : "var(--text-muted)", cursor: "pointer",
+                            }}>{pctVal}%</button>
+                          ))}
+                        </div>
                       </div>
                       {(() => {
-                        const riskAmount = accountSize * 0.01;
+                        const riskAmount = accountSize * (riskPct / 100);
                         const entry = setup.signal === "BUY" ? setup.entry_high! : setup.entry_low!;
                         const slDistance = Math.abs(entry - setup.stop_loss!);
                         const slPct = (slDistance / entry) * 100;
@@ -1109,8 +1181,8 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
         <div id="ai-analysis-tab">
           <div id="ai-answer-box" ref={answerRef}>
 
-            {/* AI Thinking Panel — shows reasoning tokens from Nemotron */}
-            {reasoning && status === "thinking" && (
+            {/* AI Thinking Panel — shows reasoning tokens from Nemotron (persists after stream done) */}
+            {reasoning && (
               <div id="ai-thinking-panel" style={{ 
                 background: "rgba(15,23,42,0.4)", borderRadius: 8, border: "1px solid rgba(139,92,246,0.15)",
                 marginBottom: 10, overflow: "hidden"
@@ -1123,12 +1195,18 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
                     background: "rgba(139,92,246,0.08)", cursor: "pointer", borderBottom: showThinking ? "1px solid rgba(139,92,246,0.1)" : "none"
                   }}
                 >
-                  <div className="thinking-dots" style={{ display: "flex", gap: 4 }}>
-                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#a78bfa", animation: "blink 1s infinite" }} />
-                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#a78bfa", animation: "blink 1.2s infinite" }} />
-                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#a78bfa", animation: "blink 1.4s infinite" }} />
-                  </div>
-                  <span style={{ fontSize: "0.65rem", color: "#a78bfa", fontWeight: 700, flex: 1 }}>Nemotron Deep Reasoning…</span>
+                  {status === "thinking" ? (
+                    <div className="thinking-dots" style={{ display: "flex", gap: 4 }}>
+                      <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#a78bfa", animation: "blink 1s infinite" }} />
+                      <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#a78bfa", animation: "blink 1.2s infinite" }} />
+                      <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#a78bfa", animation: "blink 1.4s infinite" }} />
+                    </div>
+                  ) : (
+                    <span style={{ fontSize: "0.7rem" }}>🧠</span>
+                  )}
+                  <span style={{ fontSize: "0.65rem", color: "#a78bfa", fontWeight: 700, flex: 1 }}>
+                    {status === "thinking" ? "Nemotron Deep Reasoning…" : `Reasoning (${reasoning.length} chars)`}
+                  </span>
                   <span style={{ fontSize: "0.6rem", color: "var(--text-muted)" }}>{showThinking ? "▲" : "▼"}</span>
                 </div>
                 {showThinking && (

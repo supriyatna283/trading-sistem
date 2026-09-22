@@ -88,6 +88,27 @@ def _set_cache(symbol: str, timeframe: str, data: dict):
     _AI_CACHE[key] = {"data": data, "ts": time.time()}
 
 
+def _clear_cache(symbol: str = "", timeframe: str = ""):
+    """Clear AI cache. If symbol given, clear that pair. Otherwise clear all."""
+    if symbol:
+        key = _cache_key(symbol, timeframe) if timeframe else None
+        if key and key in _AI_CACHE:
+            del _AI_CACHE[key]
+            return 1
+        # Clear all TFs for this symbol
+        removed = 0
+        prefix = symbol.upper() + ":"
+        for k in list(_AI_CACHE.keys()):
+            if k.startswith(prefix):
+                del _AI_CACHE[k]
+                removed += 1
+        return removed
+    else:
+        count = len(_AI_CACHE)
+        _AI_CACHE.clear()
+        return count
+
+
 # ──────────────────────────────────────────────────────────────
 # Engine singletons
 # ──────────────────────────────────────────────────────────────
@@ -288,11 +309,43 @@ def _calculate_setup_levels(ctx: dict, smc_obj=None, entry_df=None) -> dict:
     else:
         invalidation_level = sl
 
-    # ── FIX #11: TP Probability (empirical conservative estimates based on R:R levels) ──
-    # TP1 (2R) ~ 70-75% win rate based on historical SMC backtesting
-    # TP2 (3R) ~ 50-55% — momentum extension target
-    # TP3 (4.5R) ~ 25-30% — full trend extension, only on strong sessions
-    tp_probability = {"tp1": 75, "tp2": 55, "tp3": 30}
+    # ── FIX #11: Dynamic TP Probability based on market conditions ──
+    # Instead of hardcoded 75/55/30, adjust based on:
+    #   - ADX (trend strength): strong trend = higher TP2/TP3 probability
+    #   - RR ratio: tighter RR = higher TP1 probability
+    #   - Confluence %: higher confluence = higher all-round probability
+    adx_ctx = ctx.get("indicators", {}).get("adx") or 20
+    conf_pct_ctx = ctx.get("confluence", {}).get("pct", 50)
+    rr_val = rr1 or 2.0
+
+    # Base probabilities
+    tp1_base, tp2_base, tp3_base = 70, 50, 25
+
+    # ADX boost: strong trend (ADX > 30) increases extension target hit rate
+    if adx_ctx > 35:
+        tp1_base += 5; tp2_base += 10; tp3_base += 10
+    elif adx_ctx > 25:
+        tp2_base += 5; tp3_base += 5
+    elif adx_ctx < 18:
+        tp2_base -= 10; tp3_base -= 10  # ranging = extensions rarely hit
+
+    # Confluence boost: high confluence setups are statistically stronger
+    if conf_pct_ctx >= 70:
+        tp1_base += 5; tp2_base += 5; tp3_base += 5
+    elif conf_pct_ctx < 35:
+        tp1_base -= 10; tp2_base -= 5
+
+    # RR adjustment: very tight RR means TP1 is closer (easier to reach)
+    if rr_val < 1.5:
+        tp1_base += 5
+    elif rr_val > 3.5:
+        tp1_base -= 5  # very wide target is harder to reach
+
+    tp_probability = {
+        "tp1": max(30, min(90, tp1_base)),
+        "tp2": max(20, min(75, tp2_base)),
+        "tp3": max(10, min(50, tp3_base)),
+    }
 
     return {
         "entry_low": _safe_float(entry_low),
@@ -1040,7 +1093,48 @@ def _build_prompt(ctx: dict, setup: dict, active_signal: Optional[dict] = None) 
     wr_str = f"{wr_val}% ({wr_data.get('wins',0)}W/{wr_data.get('losses',0)}L dari {wr_total} setup)" if wr_val is not None else "N/A"
 
     # ── SYSTEM MESSAGE (persona) ──────────────────────────────
-    system_msg = """Kamu adalah seorang PROPRIETARY TRADER INSTITUSIONAL dengan pengalaman 15+ tahun di pasar kripto dan forex. Keahlian utamamu:
+    # FIX #7: Adaptive system prompt based on market conditions
+    market_regime = ind.get("market_regime", "RANGING")
+    adx_v = ind.get("adx") or 20
+    atr_v = ctx.get("atr") or 0
+    has_news = bool(news_data.get("high_impact_forex"))
+
+    regime_instruction = ""
+    if market_regime == "HIGH_VOLATILITY":
+        regime_instruction = """\n
+🚨 KONDISI SAAT INI: HIGH VOLATILITY
+- ATR sangat tinggi — perlebar stop loss minimal 1.5×ATR
+- Hindari entry saat candle body sangat panjang (kemungkinan sudah telat)
+- Prefer pullback entry ke level Fibonacci, BUKAN breakout
+- Position size harus lebih kecil dari biasa (risiko slippage tinggi)"""
+    elif market_regime == "CONSOLIDATING" or adx_v < 18:
+        regime_instruction = """\n
+📦 KONDISI SAAT INI: CONSOLIDATING / RANGING (ADX rendah)
+- Fibonacci retracement kurang efektif di market tanpa trend
+- Prioritaskan range trading: entry di batas bawah, TP di batas atas range
+- Jangan gunakan extension levels — market tidak sedang trending
+- Sinyal BUY/SELL harus di-downgrade jika ADX < 18"""
+    elif "TRENDING_BULL" in market_regime:
+        regime_instruction = """\n
+📈 KONDISI SAAT INI: TRENDING BULLISH
+- Fibonacci pullback ke 0.382–0.618 adalah zona premium untuk BUY
+- Extension levels (1.272, 1.618) SANGAT relevan sebagai TP target
+- Countertrend SELL setup butuh confluence jauh lebih kuat (min Grade A)"""
+    elif "TRENDING_BEAR" in market_regime:
+        regime_instruction = """\n
+📉 KONDISI SAAT INI: TRENDING BEARISH
+- Fibonacci pullback ke 0.382–0.618 adalah zona premium untuk SELL
+- Extension levels (1.272, 1.618) relevan sebagai TP target bearish
+- Countertrend BUY setup butuh confluence jauh lebih kuat (min Grade A)"""
+
+    if has_news:
+        regime_instruction += """\n
+📰 HIGH IMPACT NEWS DALAM 24 JAM:
+- WAJIB sebutkan potensi dampak berita terhadap pair yang dianalisis
+- Jika news terjadi dalam 1 jam ke depan, SARANKAN untuk MENUNGGU news release
+- Widened SL direkomendasikan jika trading menjelang news"""
+
+    system_msg = f"""Kamu adalah seorang PROPRIETARY TRADER INSTITUSIONAL dengan pengalaman 15+ tahun di pasar kripto dan forex. Keahlian utamamu:
 
 🎯 METODOLOGI TRADING:
 - Fibonacci Retracement & Extension: Primary tool untuk entry precision dan target TP
@@ -1069,7 +1163,7 @@ def _build_prompt(ctx: dict, setup: dict, active_signal: Optional[dict] = None) 
 - Stop Loss SELALU di luar swing point (below 0.786 untuk buy, above 0.236 untuk sell)
 - Risk:Reward minimum 1:2, ideal 1:3
 - Tidak pernah entry jika MACD dan RSI diverge dari HTF bias
-
+{regime_instruction}
 📐 STANDAR KOMUNIKASI:
 - Selalu sebut LEVEL HARGA SPESIFIK dari data yang diberikan
 - Gunakan bahasa Indonesia profesional dan tajam — tidak bertele-tele
@@ -1614,6 +1708,41 @@ async def _stream_ai_analysis(
         "ts": _now_ts,
     })
 
+    # ── 5c. Save AI Signal to DB & Trigger Telegram Alert ──
+    if signal_grade in ["A+", "A"] and ctx["signal"] in ["BUY", "SELL"]:
+        try:
+            from app.database import SessionLocal
+            from app.models.ai_signal_result import AISignalResult
+            from app.services.telegram_bot import send_telegram_ai_signal
+            import asyncio
+            
+            _db_ai = SessionLocal()
+            try:
+                ai_result = AISignalResult(
+                    symbol=symbol.upper(),
+                    timeframe=timeframe,
+                    direction=ctx["signal"],
+                    grade=signal_grade,
+                    confluence_pct=conf_pct,
+                    entry_low=setup_levels.get("entry_low") or 0,
+                    entry_high=setup_levels.get("entry_high") or 0,
+                    stop_loss=setup_levels.get("stop_loss") or 0,
+                    tp1=setup_levels.get("tp1") or 0,
+                    tp2=setup_levels.get("tp2"),
+                    tp3=setup_levels.get("tp3"),
+                    status="ACTIVE"
+                )
+                _db_ai.add(ai_result)
+                _db_ai.commit()
+                logger.info(f"[AI] Saved Grade {signal_grade} signal to ai_signal_results")
+                
+                # Send async telegram alert
+                asyncio.create_task(send_telegram_ai_signal(full_setup))
+            finally:
+                _db_ai.close()
+        except Exception as e:
+            logger.error(f"[AI] Failed to save/alert AI Signal: {e}")
+
     yield sse("analyzed_at", json.dumps({"ts": _now_ts}))
     yield sse("done", "complete")
 
@@ -1658,10 +1787,13 @@ async def analyze_chart(
 
 
 @router.delete("/cache")
-async def clear_ai_cache():
-    """Clear the in-memory AI analysis cache."""
-    _AI_CACHE.clear()
-    return {"message": "AI cache cleared", "cache_size": 0}
+async def clear_ai_cache(
+    symbol: str = Query("", description="Symbol to clear (empty = clear all)"),
+    timeframe: str = Query("", description="Timeframe to clear (empty = all TFs for symbol)"),
+):
+    """Clear the in-memory AI analysis cache. Supports per-symbol clearing."""
+    removed = _clear_cache(symbol, timeframe)
+    return {"message": f"Cleared {removed} cache entries", "cache_size": len(_AI_CACHE)}
 
 
 @router.get("/cache/status")

@@ -8,6 +8,7 @@ from app.models.user_settings import UserSettings
 from app.models.scanner_result import ScannerResult
 from app.models.shadow_setup import ShadowSetup
 from app.models.symbol_note import SymbolNote
+from app.models.ai_signal_result import AISignalResult
 
 __all__ = [
     "Candle",
@@ -18,4 +19,5 @@ __all__ = [
     "ScannerResult",
     "ShadowSetup",
     "SymbolNote",
+    "AISignalResult",
 ]
