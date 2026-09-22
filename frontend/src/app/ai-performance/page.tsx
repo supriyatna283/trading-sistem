@@ -4,10 +4,38 @@ import { useEffect, useState } from "react";
 import { API_URL } from "@/lib/utils";
 import MainLayout from "@/components/layout/MainLayout";
 
+interface PerformanceStats {
+  total_signals: number;
+  active_signals: number;
+  completed_signals: number;
+  wins: number;
+  losses: number;
+  win_rate: number;
+  total_pnl_pct: number;
+  avg_pnl_per_trade: number;
+}
+
+interface SignalHistory {
+  created_at: string;
+  symbol: string;
+  timeframe: string;
+  grade: string;
+  direction: string;
+  status: string;
+  pnl_pct: number;
+}
+
+interface EquityPoint {
+  time: string;
+  equity: number;
+  pnl: number;
+  symbol: string;
+}
+
 export default function AIPerformancePage() {
-  const [stats, setStats] = useState<any>(null);
-  const [history, setHistory] = useState<any[]>([]);
-  const [equity, setEquity] = useState<any[]>([]);
+  const [stats, setStats] = useState<PerformanceStats | null>(null);
+  const [history, setHistory] = useState<SignalHistory[]>([]);
+  const [equity, setEquity] = useState<EquityPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [timeWindow, setTimeWindow] = useState("30d");
 
