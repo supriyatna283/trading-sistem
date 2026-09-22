@@ -194,6 +194,8 @@ class QuickAnalyticsEngine:
         atr: float,
         risk_reward: float = 2.0,
         lookback: int = 60,
+        symbol: str = "UNKNOWN",
+        timeframe: str = "UNKNOWN",
     ) -> Dict[str, Any]:
         """
         Estimate historical win rate for the current signal type using
@@ -204,8 +206,13 @@ class QuickAnalyticsEngine:
         - SELL when RSI > 60 + EMA20 < EMA50
         - Entry at close, SL = 1 ATR away, TP = RR x ATR
         - Evaluates outcome over next 5 candles
+
+        FIX #3 (KRITIS): Cache key sekarang include symbol + timeframe.
+        Sebelumnya hanya {signal}_{lookback}_{atr} — menyebabkan BTCUSDT win rate
+        di-return untuk ETHUSDT jika ATR kebetulan sama (cross-instrument pollution).
         """
-        cache_key = f"{signal}_{lookback}_{round(atr, 2)}"
+        # FIX: include symbol + timeframe di cache key
+        cache_key = f"{symbol.upper()}:{timeframe}:{signal}:{lookback}:{round(atr, 2)}"
         now = time.time()
         cached = _wr_cache.get(cache_key)
         if cached and (now - cached.get("ts", 0)) < _WR_CACHE_TTL:

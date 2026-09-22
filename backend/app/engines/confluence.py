@@ -120,11 +120,25 @@ class ConfluenceEngine:
                 bias_obj = self.structure_analyzer.analyze(df_tf, symbol, tf)
                 htf_biases[tf] = bias_obj.bias
 
-        # Dominant bias: prefer HTF agreement, fall back to entry TF structure
-        htf_non_sw = [b for b in htf_biases.values() if b != "SIDEWAYS"]
-        if len(htf_non_sw) >= 1 and len(set(htf_non_sw)) == 1:
-            dominant_bias = htf_non_sw[0]
+        # ── FIX #1 (KRITIS): Dominant bias dengan strict HTF conflict check ──
+        # Rule: jika 1D dan 4H KEDUANYA directional tapi BERLAWANAN → paksa SIDEWAYS.
+        # Trader profesional tidak pernah entry saat bias HTF tertinggi konflik.
+        # Sebelumnya: fallback ke entry TF → menyebabkan false BUY/SELL saat conflict.
+        bias_1d = htf_biases.get("1d", "SIDEWAYS")
+        bias_4h = htf_biases.get("4h", "SIDEWAYS")
+
+        if bias_1d != "SIDEWAYS" and bias_4h != "SIDEWAYS":
+            # Keduanya directional
+            if bias_1d == bias_4h:
+                dominant_bias = bias_1d          # Agreement → ambil bias bersama
+            else:
+                dominant_bias = "SIDEWAYS"       # KONFLIK 1D vs 4H → wajib WAIT
+        elif bias_1d != "SIDEWAYS":
+            dominant_bias = bias_1d              # Hanya 1D tersedia
+        elif bias_4h != "SIDEWAYS":
+            dominant_bias = bias_4h              # Hanya 4H tersedia
         else:
+            # Keduanya SIDEWAYS: cek entry TF sebagai last resort (tidak override above)
             entry_structure = self.structure_analyzer.analyze(entry_df, symbol, entry_timeframe)
             dominant_bias = entry_structure.bias
 
@@ -267,32 +281,54 @@ class ConfluenceEngine:
         """
         Score Fibonacci signal (0-4 pts).
 
-        4 pts — price within 0.5% of 0.618 (golden ratio) AND bias aligns
-        3 pts — price within 1.0% of 0.382 or 0.5 AND bias aligns
-        2 pts — price within 2.0% of ANY key level (0.382/0.5/0.618)
-        1 pt  — price within 3.0% of any Fib level
-        0 pts — not near any key Fib level
+        ── FIX #5 (KRITIS): Retracement Zone Logic ──
+        Masalah sebelumnya: bias_aligned = (bias=BULLISH AND fib_dir=UP).
+        Ini SALAH untuk setup BUY di retracement: saat harga pullback ke zona
+        0.618 dalam uptrend, fib_dir=DOWN (swing ke bawah) → skor = 0.
+        Akibat: engine miss semua entry di golden pocket selama retracement.
+
+        Fix: gunakan price_zone dari fib_data untuk menentukan apakah harga
+        berada di zona yang TEPAT untuk arah bias:
+          BULLISH entry ideal → price di RETRACEMENT zone (0.382–0.786) dalam upswing
+          BEARISH entry ideal → price di RETRACEMENT zone dalam downswing
+
+        Skor:
+        4 pts — price dalam 0.5% dari level 0.618 (golden ratio) DAN price_zone sesuai bias
+        3 pts — price dalam 1.0% dari level 0.382 atau 0.5 DAN price_zone sesuai bias
+        2 pts — price dalam 2.0% dari level kunci mana pun (0.382/0.5/0.618)
+        1 pt  — price dalam 3.0% dari level Fib mana pun
+        0 pts — tidak dekat level kunci
         """
         if not fib_data or not fib_data.get("retracement_levels"):
             return 0
 
         dist = fib_data.get("nearest_distance_pct")
         nearest = fib_data.get("nearest_level")
-        fib_dir = fib_data.get("direction")
+        price_zone = fib_data.get("price_zone", "")  # e.g. "RETRACEMENT", "EXTENSION", "AT_HIGH", "AT_LOW"
+        fib_dir = fib_data.get("direction")           # "UP" or "DOWN" (arah swing, bukan bias)
 
         if dist is None or nearest is None:
             return 0
 
-        # Bias alignment: fib direction must agree with dominant bias
-        bias_aligned = (
-            (bias == "BULLISH" and fib_dir == "UP") or
-            (bias == "BEARISH" and fib_dir == "DOWN")
-        )
+        # ── Zone alignment berdasarkan price_zone, BUKAN fib_dir ──
+        # Untuk BUY: ideal di zona retracement (harga sedang pullback ke level support Fib)
+        # Untuk SELL: ideal di zona retracement (harga sedang pullback ke level resistance Fib)
+        # Kedua kasus tersebut adalah RETRACEMENT dari swing sebelumnya.
+        is_retracement_zone = price_zone in ("RETRACEMENT", "GOLDEN_POCKET", "DEEP_RETRACEMENT")
+
+        # Jika price_zone tidak tersedia, fallback ke fib_dir dengan logika benar:
+        # BUY setup di uptrend biasanya saat fib_dir=DOWN (sedang pullback)
+        # SELL setup di downtrend biasanya saat fib_dir=UP (sedang bouncing)
+        if not price_zone:
+            is_retracement_zone = (
+                (bias == "BULLISH" and fib_dir == "DOWN") or  # pullback dalam uptrend
+                (bias == "BEARISH" and fib_dir == "UP")       # bounce dalam downtrend
+            )
 
         # Golden ratio 0.618 — strongest reversal/continuation level
-        if nearest == "0.618" and dist < 0.5 and bias_aligned:
+        if nearest == "0.618" and dist < 0.5 and is_retracement_zone:
             return 4
-        if nearest in ("0.382", "0.5") and dist < 1.0 and bias_aligned:
+        if nearest in ("0.382", "0.5") and dist < 1.0 and is_retracement_zone:
             return 3
         if nearest in ("0.382", "0.5", "0.618") and dist < 2.0:
             return 2
@@ -390,7 +426,13 @@ class ConfluenceEngine:
     # ------------------------------------------------------------------
 
     def _check_htf_alignment(self, htf_biases: Dict[str, str]) -> bool:
-        """At least one HTF agrees on direction (not all sideways/opposing)."""
+        """Both 1D and 4H must agree on direction (or at least not conflict).
+
+        FIX: Sebelumnya, 1 directional + 1 sideways langsung return True (full 2 pts).
+        Sekarang, lebih ketat: harus ada minimal 1 directional HTF AND keduanya tidak
+        saling berlawanan. Jika konflik sudah ditangani di dominant_bias, ini hanya
+        memastikan tidak ada HTF yang sideways saat semua harus agree.
+        """
         biases = list(htf_biases.values())
         if not biases:
             return False
@@ -399,9 +441,10 @@ class ConfluenceEngine:
         non_sw = [b for b in biases if b != "SIDEWAYS"]
         if not non_sw:
             return False
-        if len(non_sw) == 1:
-            return True   # 1 directional + 1 sideways = tradeable
-        return len(set(non_sw)) == 1   # both must agree
+        # Keduanya harus sepakat — konflik sudah dihandle di dominant_bias
+        # Jika hanya 1 directional (lainnya SIDEWAYS), beri partial credit → True
+        # tapi dominant_bias sudah di-set ke SIDEWAYS jika konflik nyata
+        return len(set(non_sw)) == 1  # semua directional HTF harus agree
 
     def _check_volume_confirmation(self, df: pd.DataFrame, symbol: str = "") -> bool:
         """
@@ -468,10 +511,18 @@ class ConfluenceEngine:
         """
         Generate recommendation based on score AND signal generator activity.
 
+        FIX: dominant_bias == "SIDEWAYS" selalu menghasilkan NEUTRAL — tidak ada trade.
+        Ini memastikan bahwa konflik HTF (1D vs 4H) yang sudah memaksa dominant_bias
+        ke SIDEWAYS tidak bisa menghasilkan sinyal BUY/SELL dalam kondisi apapun.
+
         STRONG_BUY/STRONG_SELL : score >= 14  AND all 3 generators scored > 0
         BUY/SELL                : score >= 10  AND >= 2 generators scored > 0
-        NEUTRAL                 : otherwise
+        NEUTRAL                 : otherwise (termasuk dominant_bias == SIDEWAYS)
         """
+        # Gate: jika dominant_bias SIDEWAYS → tidak ada trade apapun
+        if dominant_bias == "SIDEWAYS":
+            return "NEUTRAL"
+
         active_generators = sum(1 for s in signal_scores.values() if s > 0)
 
         if score >= 14 and active_generators == 3:

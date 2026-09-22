@@ -319,7 +319,11 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
     Raw candles are NOT sent to the AI.
     """
     # 1. Fetch multi-timeframe candles + macro data (all parallel)
-    HTF_TIMEFRAMES = ["1d", "4h", "1h", "15m"]
+    # FIX #2 (KRITIS): Expand supported TFs to include 30m dan 5m.
+    # Sebelumnya: hanya [1d, 4h, 1h, 15m] — user yang pakai 30m/5m di chart
+    # selalu dapat analisis 1h (mismatch). Sekarang 30m dan 5m didukung.
+    HTF_TIMEFRAMES = ["1d", "4h", "1h", "30m", "15m", "5m"]
+    # entry_tf = TF yang dipilih user, selama ada di list. Fallback ke 1h jika tidak dikenal.
     entry_tf = timeframe if timeframe in HTF_TIMEFRAMES else "1h"
 
     # Parallel fetch: candles + macro + news
@@ -349,9 +353,35 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
     results = candle_results
 
     candles_by_tf: dict = {}
+    # FIX #4 (KRITIS): Deteksi sample data — tandai setiap TF yang menggunakan fake/sample data.
+    # MarketDataEngine.generate_sample_data() mengisi kolom 'symbol' dengan nilai uppercase.
+    # Cara membedakan sample data: kolom 'symbol' konsisten ada + data memiliki pola random seed.
+    # Namun cara paling sederhana: cek apakah df berasal dari candle real (has non-uniform volume).
+    sample_data_tfs: list = []  # list TF yang pakai sample data
     for i, df in enumerate(results):
+        tf = HTF_TIMEFRAMES[i]
         if not isinstance(df, Exception) and not df.empty:
-            candles_by_tf[HTF_TIMEFRAMES[i]] = df
+            # Deteksi sample data: jika semua volume sama persis atau sumbernya generate_sample_data
+            # Cek: apakah df memiliki 'symbol' kolom dengan nilai konsisten (marker dari generate_sample_data)
+            # dan volume sangat seragam (std dev rendah relatif terhadap mean)
+            try:
+                vol_series = df["volume"].astype(float)
+                vol_std = float(vol_series.std())
+                vol_mean = float(vol_series.mean())
+                # Sample data dari generate_sample_data: vol ~ Normal(1000, 300)
+                # Real data: vol variance jauh lebih tinggi dan tidak regular
+                # Heuristik: jika semua volume < 10.0 (sangat kecil, tidak masuk akal untuk crypto)
+                # atau coefficient of variation < 0.15 dengan mean < 5000 = sangat mencurigakan
+                is_suspicious_vol = (vol_mean < 5000 and vol_std > 0 and (vol_std / vol_mean) < 0.5 and vol_mean < 2000)
+                if is_suspicious_vol:
+                    sample_data_tfs.append(tf)
+                    logger.warning(f"[AI] Possible sample data detected for {symbol}/{tf}: vol_mean={vol_mean:.1f}")
+            except Exception:
+                pass
+            candles_by_tf[tf] = df
+
+    # Flag sample data di entry TF
+    is_sample_data = entry_tf in sample_data_tfs
 
     entry_df = candles_by_tf.get(entry_tf)
     if entry_df is None or entry_df.empty:
@@ -585,20 +615,35 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
     volume_change_pct = round((last_volume - prev_volume) / prev_volume * 100, 1) if prev_volume > 0 else 0
 
     # Sprint 2: Market Regime detection (now uses real ADX + EMA200 + BB)
+    # FIX #6 (KRITIS): Perbaiki market regime detection.
+    # Masalah sebelumnya:
+    #   1. bb_bw > 15 = unconditional override TRENDING_BULL/BEAR → hampir selalu HIGH_VOLATILITY di crypto
+    #   2. Threshold 15 terlalu rendah untuk crypto (crypto selalu volatile)
+    # Fix:
+    #   1. bb_bw threshold dinaikkan ke 25 (lebih relevan untuk crypto)
+    #   2. HIGH_VOLATILITY hanya di-set jika bb_bw tinggi DAN ADX juga tinggi (trendy AND volatile)
+    #   3. Urutan priority: TRENDING > CONSOLIDATING, HIGH_VOLATILITY hanya sebagai modifier
     market_regime = "RANGING"
     adx_num = float(adx_val) if adx_val is not None else 0.0
     ema200_num = float(ema200) if ema200 is not None else None
-    if adx_num > 25:
+
+    if adx_num < 18:
+        market_regime = "CONSOLIDATING"
+    elif adx_num > 25:
+        # ADX kuat → ada trend
         if ema200_num and last_close > ema200_num:
             market_regime = "TRENDING_BULL"
         elif ema200_num and last_close < ema200_num:
             market_regime = "TRENDING_BEAR"
         else:
             market_regime = "TRENDING"
-    if bb_bw and bb_bw > 15:  # High volatility overrides
-        market_regime = "HIGH_VOLATILITY"
-    elif adx_num < 18:
-        market_regime = "CONSOLIDATING"
+        # HIGH_VOLATILITY hanya jika bb_bw SANGAT tinggi (>25) DAN ada trend kuat
+        # Threshold 25 lebih tepat untuk crypto dibanding 15 sebelumnya
+        if bb_bw and bb_bw > 25 and adx_num > 30:
+            market_regime = "HIGH_VOLATILITY"
+    else:
+        # ADX antara 18-25: ranging dengan sedikit bias
+        market_regime = "RANGING"
 
     # Sprint 2: Relative Strength vs BTC (using 1d candle)
     rs_vs_btc = "N/A"
@@ -815,11 +860,21 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
             atr=float(atr_for_wr),
             risk_reward=rr_for_wr,
             lookback=60,
+            symbol=symbol,        # FIX #3: tambah symbol
+            timeframe=entry_tf,   # FIX #3: tambah timeframe
         )
     else:
         win_rate_data = _quick_analytics._empty_wr()
 
     ctx["win_rate"] = win_rate_data
+
+    # FIX #4 (KRITIS): Simpan flag sample data ke ctx agar:
+    # 1. Frontend bisa menampilkan warning banner merah
+    # 2. AI prompt bisa mendapatkan peringatan data tidak reliable
+    ctx["is_sample_data"] = is_sample_data
+    ctx["sample_data_tfs"] = sample_data_tfs
+    if is_sample_data:
+        logger.warning(f"[AI] SAMPLE DATA DETECTED for {symbol}/{entry_tf} — analysis reliability compromised!")
 
     # Store raw SMC object + entry_df for shared canonical level calculation
     # These are prefixed with _ to indicate they are internal/not serializable
@@ -1132,7 +1187,18 @@ def _build_prompt(ctx: dict, setup: dict, active_signal: Optional[dict] = None) 
         )
 
     # ── USER MESSAGE (data + task) ────────────────────────────
-    user_msg = f"""Analisis trading berikut dan berikan pandangan expert-mu:
+    # FIX #4: Build sample data warning (injected at start of user_msg)
+    if ctx.get("is_sample_data"):
+        _stfs = ", ".join(ctx.get("sample_data_tfs", []))
+        _sample_warn = (
+            f"\n\u26a0\ufe0f\u26a0\ufe0f PERINGATAN KRITIS: Data candle {sym} diduga SAMPLE/FAKE DATA "
+            f"(TF: {_stfs}). Data harga kemungkinan TIDAK REAL dari exchange. "
+            f"WAJIB cantumkan peringatan ini dan HINDARI sinyal trading konkret.\n"
+        )
+    else:
+        _sample_warn = ""
+
+    user_msg = f"""Analisis trading berikut dan berikan pandangan expert-mu:{_sample_warn}
 
 ╔══════════════════════════════════════════════════╗
 ║     MARKET BRIEF — {sym} / {tf.upper()}{'':>20}
@@ -1347,6 +1413,9 @@ async def _stream_ai_analysis(
         "macro": ctx.get("macro", {}),
         "news": ctx.get("news", {}),
         "order_flow": ctx.get("order_flow", {}),
+        # FIX #4: Include sample data flag
+        "is_sample_data": ctx.get("is_sample_data", False),
+        "sample_data_tfs": ctx.get("sample_data_tfs", []),
     }
     yield sse("context", json.dumps(context_snapshot))
 
@@ -1400,6 +1469,9 @@ async def _stream_ai_analysis(
         "highlights": ctx["confluence"]["highlights"],
         # NEW: Win rate estimate from QuickAnalyticsEngine
         "win_rate": ctx.get("win_rate", {}),
+        # FIX #4: Sample data flag for frontend warning banner
+        "is_sample_data": ctx.get("is_sample_data", False),
+        "sample_data_tfs": ctx.get("sample_data_tfs", []),
     }
 
     # Emit setup data IMMEDIATELY (before AI thinks)

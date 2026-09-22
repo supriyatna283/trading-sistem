@@ -34,6 +34,9 @@ interface SetupData {
   smc: Record<string, any>;
   highlights?: Record<string, boolean>;
   win_rate?: Record<string, any>;
+  // FIX #4: Sample data flags from backend
+  is_sample_data?: boolean;
+  sample_data_tfs?: string[];
 }
 
 interface ChatMessage { role: "user" | "assistant"; content: string; }
@@ -308,6 +311,8 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const answerRef = useRef<HTMLDivElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  // FIX: ref untuk track status stream terkini tanpa closure stale
+  const streamDoneRef = useRef<boolean>(false);
 
   const cancelStream = useCallback(() => {
     if (esRef.current) { esRef.current.close(); esRef.current = null; }
@@ -315,6 +320,7 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
 
   const startAnalysis = useCallback((sym: string, tf: string, force: boolean = false) => {
     cancelStream();
+    streamDoneRef.current = false;  // reset untuk stream baru
     setStatus("computing");
     setAnswer(""); setError(""); setSetup(null); setContext(null);
     setReasoning(""); setAnalysisNewContent(false);
@@ -344,12 +350,10 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
         try { 
           const data = JSON.parse((e as any).data.replace(/\\n/g, "\n"));
           if (data.ts) {
-            // we could store it in context or setup, for now let's just append to context
             setContext((prev: any) => ({ ...prev, analyzed_at: data.ts }));
           }
         } catch (_) { }
       });
-      // NEW: Capture reasoning tokens from Nemotron thinking mode
       es.addEventListener("reasoning", (e) => {
         setReasoning(prev => prev + (e as any).data.replace(/\\n/g, "\n"));
       });
@@ -358,13 +362,21 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
         setAnswer(prev => prev + (e as any).data.replace(/\\n/g, "\n"));
       });
       es.addEventListener("done", () => {
+        streamDoneRef.current = true;  // FIX: set via ref, tidak lewat closure
         setStatus("done");
-        setAnalysisNewContent(true); // light up Analysis tab dot
+        setAnalysisNewContent(true);
         es.close(); esRef.current = null;
         retryCount = 0;
       });
       es.addEventListener("error", (e: any) => {
-        if (retryCount < 3 && status !== "done" && status !== "cached") {
+        // FIX: cek isDone via ref (bukan stale closure `status`)
+        if (streamDoneRef.current) {
+          // Stream sudah selesai, error ini adalah disconnect normal SSE — abaikan
+          es.close(); esRef.current = null;
+          return;
+        }
+
+        if (retryCount < 3) {
           retryCount++;
           console.warn(`[AI] SSE Error. Retrying connection (${retryCount}/3)...`);
           es.close();
@@ -376,7 +388,7 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
           const msg = (e.data || "").replace(/\\n/g, "\n");
           setError(msg || "Connection error");
         } else {
-          if (status !== "done") setError("Stream disconnected");
+          setError("Stream disconnected");
         }
         setStatus("error");
         es.close(); esRef.current = null;
@@ -384,7 +396,7 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
     };
     
     connect();
-  }, [cancelStream, status]);
+  }, [cancelStream]);
 
   const submitChat = useCallback(async () => {
     if (!chatInput.trim() || isChatting) return;
@@ -464,6 +476,9 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
   const score = setup?.confluence_score ?? 0;
   const maxScore = setup?.max_score ?? 33;
   const pct = setup?.confluence_pct ?? 0;
+  // FIX #4: Detect sample/fake data from backend flag
+  const isSampleData = !!(setup?.is_sample_data || context?.is_sample_data);
+  const sampleDataTfs: string[] = setup?.sample_data_tfs || context?.sample_data_tfs || [];
 
   const statusLabel: Record<AIStatus, string> = {
     idle: "Ready", computing: "Computing pipeline…", thinking: "AI deep reasoning…",
@@ -544,6 +559,28 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
           {Object.entries(htfCtx).map(([tf, bias]) => (
             <BiasChip key={tf} tf={tf} bias={bias as string} />
           ))}
+        </div>
+      )}
+
+      {/* ── Sample Data Warning Banner (FIX #4) ── */}
+      {isSampleData && (
+        <div style={{
+          margin: "6px 10px", padding: "8px 12px", borderRadius: 8,
+          background: "linear-gradient(135deg, rgba(239,68,68,0.15), rgba(220,38,38,0.08))",
+          border: "1px solid rgba(239,68,68,0.45)",
+          display: "flex", alignItems: "flex-start", gap: 8,
+        }}>
+          <span style={{ fontSize: "1rem", flexShrink: 0 }}>⚠️</span>
+          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <span style={{ fontSize: "0.63rem", fontWeight: 800, color: "#f87171", letterSpacing: "0.04em" }}>
+              DATA TIDAK REAL — SAMPLE/FAKE DATA
+            </span>
+            <span style={{ fontSize: "0.58rem", color: "#fca5a5", lineHeight: 1.5 }}>
+              API exchange gagal. Data yang digunakan adalah data simulasi acak.
+              {sampleDataTfs.length > 0 && ` TF: ${sampleDataTfs.join(", ")}.`}
+              {" "}Jangan gunakan sinyal ini untuk trading nyata.
+            </span>
+          </div>
         </div>
       )}
 

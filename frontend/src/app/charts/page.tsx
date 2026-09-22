@@ -3,6 +3,7 @@
 import MainLayout from "@/components/layout/MainLayout";
 import TradingViewChart, { SetupOverlay } from "@/components/charts/TradingViewChart";
 import AIAnalysisPanel from "@/components/charts/AIAnalysisPanel";
+import MarketScreenerModal from "@/components/charts/MarketScreenerModal";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
@@ -77,6 +78,7 @@ function ChartsPageContent() {
   const [showSearch, setShowSearch] = useState(false);
   const [activeTimeframe, setActiveTimeframe] = useState(initTf);
   const [showAIPanel, setShowAIPanel] = useState(initAi);
+  const [showScreener, setShowScreener] = useState(!searchParams.get("symbol"));
   // FIX #9: Live prices for watchlist
   const [watchlistPrices, setWatchlistPrices] = useState<Record<string, { price: number; chg: number }>>({});
   const pageRef = useRef<HTMLDivElement>(null);
@@ -289,6 +291,16 @@ function ChartsPageContent() {
               title="Multi-Timeframe Grid"
             >
               <span style={{ fontSize: "0.75rem" }}>⊞</span> MTF
+            </button>
+
+            {/* Screener toggle */}
+            <button
+              onClick={() => setShowScreener(true)}
+              className={`icon-btn icon-btn-active-purple`}
+              title="Market Screener"
+              style={{ background: "rgba(59,130,246,0.15)", color: "#93c5fd", border: "1px solid rgba(59,130,246,0.3)" }}
+            >
+              <span style={{ fontSize: "0.75rem" }}>🔍</span> Screener
             </button>
           </div>
 
@@ -903,6 +915,20 @@ function ChartsPageContent() {
           }
         `}</style>
       </div>
+
+      {showScreener && (
+        <MarketScreenerModal 
+          onClose={() => setShowScreener(false)}
+          onSelect={(sym) => {
+            setSelectedSymbol(sym);
+            setShowScreener(false);
+            if (!watchlist.includes(sym)) {
+              addToWatchlist(sym);
+            }
+            window.history.pushState(null, "", `/charts?symbol=${sym}&tf=${activeTimeframe}`);
+          }}
+        />
+      )}
     </MainLayout>
   );
 }
