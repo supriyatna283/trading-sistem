@@ -4,6 +4,8 @@ import MainLayout from "@/components/layout/MainLayout";
 import TradingViewChart, { SetupOverlay } from "@/components/charts/TradingViewChart";
 import AIAnalysisPanel from "@/components/charts/AIAnalysisPanel";
 import MarketScreenerModal from "@/components/charts/MarketScreenerModal";
+import DerivativesBar from "@/components/charts/DerivativesBar";
+import SymbolNotesPanel from "@/components/charts/SymbolNotesPanel";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
@@ -79,6 +81,7 @@ function ChartsPageContent() {
   const [activeTimeframe, setActiveTimeframe] = useState(initTf);
   const [showAIPanel, setShowAIPanel] = useState(initAi);
   const [showScreener, setShowScreener] = useState(!searchParams.get("symbol"));
+  const [showNotes, setShowNotes] = useState(false);
   // FIX #9: Live prices for watchlist
   const [watchlistPrices, setWatchlistPrices] = useState<Record<string, { price: number; chg: number }>>({});
   const pageRef = useRef<HTMLDivElement>(null);
@@ -249,7 +252,7 @@ function ChartsPageContent() {
 
   // Sidebar widths
   const leftW = showWatchlist ? 180 : 0;
-  const rightW = showSetups && !isMTFGrid ? 280 : 0;
+  const rightW = (showSetups || showNotes) && !isMTFGrid ? 280 : 0;
 
   return (
     <MainLayout>
@@ -315,11 +318,19 @@ function ChartsPageContent() {
               ★
             </button>
             <button
-              onClick={() => setShowSetups(v => !v)}
+              onClick={() => { setShowSetups(v => !v); if (!showSetups) setShowNotes(false); }}
               className={`icon-btn${showSetups ? " icon-btn-active-green" : ""}`}
               title="Active Setups"
             >
               📋
+            </button>
+            <button
+              onClick={() => { setShowNotes(v => !v); if (!showNotes) setShowSetups(false); }}
+              className={`icon-btn${showNotes ? " icon-btn-active-purple" : ""}`}
+              title="Symbol Notes"
+              id="notes-toggle-btn"
+            >
+              <span style={{ fontSize: "0.8rem" }}>📝</span> Notes
             </button>
             <button
               onClick={toggleFullscreen}
@@ -412,6 +423,9 @@ function ChartsPageContent() {
         )}
 
         {/* ── Main layout ── */}
+        {/* Derivatives Bar */}
+        <DerivativesBar symbol={selectedSymbol} />
+
         <div id="charts-body">
 
           {/* Watchlist sidebar */}
@@ -526,7 +540,7 @@ function ChartsPageContent() {
             )}
           </div>
 
-          {/* Right sidebar: Active Setups */}
+          {/* Right sidebar: Active Setups OR Notes */}
           {showSetups && !isMTFGrid && (
             <div id="setups-sidebar" className="glass-card">
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
@@ -616,6 +630,14 @@ function ChartsPageContent() {
                 ))}
               </div>
             </div>
+          )}
+
+          {/* Notes Panel */}
+          {showNotes && !isMTFGrid && (
+            <SymbolNotesPanel
+              symbol={selectedSymbol}
+              onClose={() => setShowNotes(false)}
+            />
           )}
 
           {/* AI Analysis Panel */}

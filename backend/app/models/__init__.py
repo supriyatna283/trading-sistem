@@ -7,6 +7,7 @@ from app.models.alert import Alert
 from app.models.user_settings import UserSettings
 from app.models.scanner_result import ScannerResult
 from app.models.shadow_setup import ShadowSetup
+from app.models.symbol_note import SymbolNote
 
 __all__ = [
     "Candle",
@@ -16,4 +17,5 @@ __all__ = [
     "UserSettings",
     "ScannerResult",
     "ShadowSetup",
+    "SymbolNote",
 ]

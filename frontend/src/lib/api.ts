@@ -241,5 +241,28 @@ export const api = {
     fetchAPI<any>(`/api/v1/orderflow/whales/scan/multi?symbols=${symbols.join(",")}&threshold_usdt=${threshold}&lookback_seconds=${lookback}`),
   getCachedWhales: (symbol?: string) =>
     fetchAPI<any>(`/api/v1/orderflow/whales/live/cached${symbol ? `?symbol=${symbol}` : ""}`),
+
+  // Symbol Notes
+  getNote: (symbol: string) =>
+    fetchAPI<{ note: SymbolNoteRecord }>(`/api/v1/notes/${symbol}`),
+  upsertNote: (symbol: string, data: { content: string; bias: string; key_levels: { label: string; price: number }[] }) =>
+    fetchAPI<{ note: SymbolNoteRecord }>(`/api/v1/notes/${symbol}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+  listNotes: () =>
+    fetchAPI<{ notes: SymbolNoteRecord[] }>("/api/v1/notes"),
+  deleteNote: (symbol: string) =>
+    fetchAPI<{ deleted: string }>(`/api/v1/notes/${symbol}`, { method: "DELETE" }),
 };
+
+export interface SymbolNoteRecord {
+  id?: number;
+  symbol: string;
+  content: string;
+  bias: string;
+  key_levels: { label: string; price: number }[];
+  updated_at: string | null;
+}
+
 
