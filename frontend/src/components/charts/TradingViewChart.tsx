@@ -1041,7 +1041,7 @@ export default function TradingViewChart({
     const volumeSeries = chart.addHistogramSeries({
       color: "#26a69a", priceFormat: { type: "volume" }, priceScaleId: "",
     });
-    chart.priceScale("").applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
+    chart.priceScale("").applyOptions({ visible: false, scaleMargins: { top: 0.85, bottom: 0 } });
 
     const ema20Series = chart.addLineSeries({ color: "rgba(59,130,246,0.9)", lineWidth: 1, crosshairMarkerVisible: false });
     const ema50Series = chart.addLineSeries({ color: "rgba(245,158,11,0.9)", lineWidth: 1, crosshairMarkerVisible: false, visible: false });
