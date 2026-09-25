@@ -39,7 +39,8 @@ class MarketIntelEngine:
         "FETUSDT": "fetch-ai", "RENDERUSDT": "render-token", "TAOUSDT": "bittensor",
         "INJUSDT": "injective-protocol", "TIAUSDT": "celestia", "JUPUSDT": "jupiter-exchange-solana",
         "PYTHUSDT": "pyth-network", "JTOUSDT": "jito-governance-token", "ONDOUSDT": "ondo-finance",
-        "SEIUSDT": "sei-network", "STRKUSDT": "starknet", "AAVEUSDT": "aave", "FILUSDT": "filecoin"
+        "SEIUSDT": "sei-network", "STRKUSDT": "starknet", "AAVEUSDT": "aave", "FILUSDT": "filecoin",
+        "ZECUSDT": "zcash", "ASTRUSDT": "astar", "HYPEUSDT": "hyperliquid"
     }
 
     def __init__(self):

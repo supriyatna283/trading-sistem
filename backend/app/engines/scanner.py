@@ -74,7 +74,9 @@ class MarketScanner:
             # AI & Compute
             "FETUSDT", "RENDERUSDT", "TAOUSDT",
             # Memecoins
-            "WIFUSDT", "1000PEPEUSDT", "1000SHIBUSDT", "1000BONKUSDT"
+            "WIFUSDT", "1000PEPEUSDT", "1000SHIBUSDT", "1000BONKUSDT",
+            # User Requested
+            "ZECUSDT", "ASTERUSDT", "HYPEUSDT"
         ]
         # Intersect: keep only pairs that are both in the fetched list AND in our priority list
         # If the list is smaller than priority list (e.g. new pairs), allow it through
