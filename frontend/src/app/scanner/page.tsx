@@ -37,6 +37,9 @@ interface ScanResult {
   market_cap_tier: string;
   setup: any | null;
   error?: string;
+  volume_delta?: number | null;
+  funding_rate?: number;
+  open_interest?: number;
 }
 
 type FilterType = "ALL" | "A+" | "VALID" | "WEAK" | "BULLISH" | "BEARISH" | "SETUP";
@@ -263,6 +266,34 @@ function ScannerCard({ row, onChart }: { row: ScanResult; onChart: (sym: string)
         )}
       </div>
 
+      {/* ADVANCED METRICS (DELTA, FUNDING, OI) */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+        {row.volume_delta !== undefined && row.volume_delta !== null && row.volume_delta !== 0 && (
+          <div style={{ flex: 1, background: "rgba(0,0,0,0.2)", borderRadius: 6, padding: "5px 8px", border: `1px solid ${row.volume_delta > 0 ? "rgba(34,197,94,0.15)" : "rgba(239,68,68,0.15)"}` }}>
+             <div style={{ fontSize: "0.5rem", color: "#64748b", fontWeight: 700, marginBottom: 2 }}>VOL DELTA</div>
+             <div style={{ fontSize: "0.65rem", color: row.volume_delta > 0 ? "#22c55e" : "#ef4444", fontWeight: 800 }}>
+                {row.volume_delta > 0 ? "+" : ""}{row.volume_delta > 1000000 ? (row.volume_delta/1000000).toFixed(1) + "M" : row.volume_delta > 1000 ? (row.volume_delta/1000).toFixed(1) + "K" : row.volume_delta.toFixed(0)}
+             </div>
+          </div>
+        )}
+        {(row.funding_rate !== undefined && row.funding_rate !== 0) && (
+          <div style={{ flex: 1, background: "rgba(0,0,0,0.2)", borderRadius: 6, padding: "5px 8px", border: `1px solid ${row.funding_rate < -0.0005 ? "rgba(232,121,249,0.2)" : "transparent"}` }}>
+             <div style={{ fontSize: "0.5rem", color: "#64748b", fontWeight: 700, marginBottom: 2 }}>FUNDING</div>
+             <div style={{ fontSize: "0.65rem", color: row.funding_rate < -0.0005 ? "#e879f9" : "#e2e8f0", fontWeight: 800 }}>
+                {(row.funding_rate * 100).toFixed(4)}%
+             </div>
+          </div>
+        )}
+        {(row.open_interest !== undefined && row.open_interest > 0) && (
+          <div style={{ flex: 1, background: "rgba(0,0,0,0.2)", borderRadius: 6, padding: "5px 8px" }}>
+             <div style={{ fontSize: "0.5rem", color: "#64748b", fontWeight: 700, marginBottom: 2 }}>OPEN INT</div>
+             <div style={{ fontSize: "0.65rem", color: "#e2e8f0", fontWeight: 800 }}>
+                {row.open_interest > 1000000 ? "$" + (row.open_interest/1000000).toFixed(1) + "M" : "$" + (row.open_interest/1000).toFixed(1) + "K"}
+             </div>
+          </div>
+        )}
+      </div>
+
       {/* REJECTION */}
       {row.hard_rejected && row.rejection_reasons?.length > 0 && (
         <div style={{ fontSize: "0.6rem", color: "#ef4444", fontWeight: 700, marginBottom: 8, background: "rgba(239,68,68,0.06)", padding: "4px 8px", borderRadius: 6 }}>
@@ -322,13 +353,15 @@ export default function ScannerPage() {
   const [isCached, setIsCached] = useState(false);
   const [filter, setFilter] = useState<FilterType>("ALL");
   const [sort, setSort] = useState<SortType>("score");
+  const [entryTf, setEntryTf] = useState("1h");
+  const [searchQuery, setSearchQuery] = useState("");
   const [autoRefresh, setAutoRefresh] = useState(false);
   const autoRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchData = useCallback(async (silent = false) => {
     if (!silent) setIsLoading(true);
     try {
-      const res = await api.getScanner();
+      const res = await api.getScanner(entryTf);
       setScannerData(Array.isArray(res?.results) ? res.results : []);
       // Use backend's last_scan_at if available, else use now
       if (res?.last_scan_at) {
@@ -342,13 +375,13 @@ export default function ScannerPage() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [entryTf]);
 
   const handleScan = useCallback(async () => {
     setIsScanning(true);
     try {
       // runScanner already returns results — update state directly
-      const res = await api.runScanner();
+      const res = await api.runScanner([], entryTf);
       if (Array.isArray(res?.results)) {
         setScannerData(res.results);
         setLastScan(new Date());
@@ -364,7 +397,7 @@ export default function ScannerPage() {
     } finally {
       setIsScanning(false);
     }
-  }, [fetchData]);
+  }, [fetchData, entryTf]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -380,6 +413,7 @@ export default function ScannerPage() {
 
   // Filter
   const filtered = scannerData.filter(r => {
+    if (searchQuery && !r.symbol.toLowerCase().includes(searchQuery.toLowerCase())) return false;
     if (filter === "ALL") return true;
     if (filter === "A+") return r.signal_grade === "A+";
     if (filter === "VALID") return r.signal_grade === "VALID";
@@ -450,6 +484,24 @@ export default function ScannerPage() {
           </div>
 
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            {/* Entry TF Selector */}
+            <div style={{ display: "flex", background: "rgba(255,255,255,0.05)", borderRadius: 8, padding: 2 }}>
+              {(["15m", "1h", "4h"] as const).map(tf => (
+                <button
+                  key={tf}
+                  onClick={() => setEntryTf(tf)}
+                  style={{
+                    padding: "6px 12px", borderRadius: 6, fontSize: "0.7rem", fontWeight: 800, cursor: "pointer", border: "none",
+                    background: entryTf === tf ? "rgba(59,130,246,0.2)" : "transparent",
+                    color: entryTf === tf ? "#60a5fa" : "#64748b",
+                    transition: "all 0.2s"
+                  }}
+                >
+                  {tf.toUpperCase()}
+                </button>
+              ))}
+            </div>
+
             {/* Auto-refresh toggle */}
             <button
               onClick={() => setAutoRefresh(v => !v)}
@@ -510,7 +562,19 @@ export default function ScannerPage() {
 
       {/* ── FILTER + SORT BAR ── */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 20 }}>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+          <input 
+            type="text" 
+            placeholder="Search coin..." 
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            style={{
+              padding: "7px 12px", borderRadius: 8, fontSize: "0.75rem", fontWeight: 700, 
+              background: "rgba(0,0,0,0.2)", color: "#e2e8f0", border: "1px solid rgba(255,255,255,0.1)",
+              width: 140, outline: "none"
+            }}
+          />
+          <div style={{ width: 1, height: 24, background: "rgba(255,255,255,0.1)", margin: "0 6px" }} />
           {(["ALL", "A+", "VALID", "WEAK", "SETUP", "BULLISH", "BEARISH"] as FilterType[]).map(f => {
             const colors: Record<string, string> = { "A+": "#f59e0b", "VALID": "#10b981", "WEAK": "#60a5fa", "SETUP": "#e879f9", "BULLISH": "#22c55e", "BEARISH": "#ef4444", "ALL": "#94a3b8" };
             const active = filter === f;

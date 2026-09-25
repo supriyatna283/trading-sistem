@@ -49,7 +49,7 @@ class MarketScanner:
         self.intel_engine = MarketIntelEngine()
 
     async def scan(
-        self, symbols: List[str] = None, use_sample: bool = False
+        self, symbols: List[str] = None, use_sample: bool = False, entry_tf: str = "1h"
     ) -> List[Dict]:
         """Scan a list of symbols with full macro + market intel context."""
         if not symbols:
@@ -87,7 +87,7 @@ class MarketScanner:
 
         async def _sc(sym):
             async with semaphore:
-                return await self._scan_symbol(sym, sentiment_data, news_events, btc_dominance)
+                return await self._scan_symbol(sym, sentiment_data, news_events, btc_dominance, entry_tf)
 
         tasks = [_sc(symbol) for symbol in symbols]
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -141,12 +141,19 @@ class MarketScanner:
         sentiment_data: Optional[Dict] = None,
         news_events: Optional[List[Dict]] = None,
         btc_dominance: Optional[Dict] = None,
+        entry_tf: str = "1h"
     ) -> Dict:
         """Scan a single symbol with full V4 pipeline including market intelligence."""
         candles_by_tf = {}
 
-        # Fetch multiple timeframes in parallel
-        tfs = ["1d", "4h", "1h"]
+        # Fetch multiple timeframes in parallel based on entry_tf
+        if entry_tf == "15m":
+            tfs = ["1d", "1h", "15m"]
+        elif entry_tf == "4h":
+            tfs = ["1w", "1d", "4h"]
+        else:
+            tfs = ["1d", "4h", "1h"]
+            
         tasks = [self.data_engine.get_candles(symbol, tf, 200) for tf in tfs]
         dfs = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -163,13 +170,13 @@ class MarketScanner:
                 "confluence_score": 0,
             }
 
-        # Use 1h for entry analysis
-        entry_df = candles_by_tf.get("1h", pd.DataFrame())
+        # Use entry_tf for entry analysis
+        entry_df = candles_by_tf.get(entry_tf, pd.DataFrame())
         if entry_df.empty:
             entry_df = list(candles_by_tf.values())[0]
 
-        structure = self.structure.analyze(entry_df, symbol, "1h")
-        smc = self.smc.analyze(entry_df, symbol, "1h")
+        structure = self.structure.analyze(entry_df, symbol, entry_tf)
+        smc = self.smc.analyze(entry_df, symbol, entry_tf)
 
         # MTF Confirmation
         mtf_result = self.mtf_engine.analyze(candles_by_tf, symbol)
@@ -208,7 +215,7 @@ class MarketScanner:
 
         # Confluence scoring (V4 — 24-point system with market intelligence)
         conf = self.confluence.score(
-            candles_by_tf, symbol, "1h",
+            candles_by_tf, symbol, entry_tf,
             sentiment_data=sentiment_data,
             news_events=news_events,
             mtf_result=mtf_result,
@@ -236,7 +243,7 @@ class MarketScanner:
         if conf.total_score >= 12:
             try:
                 from app.engines.order_flow_engine import order_flow_engine
-                footprint = await order_flow_engine.get_footprint(symbol, "1h", limit=1)
+                footprint = await order_flow_engine.get_footprint(symbol, entry_tf, limit=1)
                 if footprint and len(footprint) > 0:
                     volume_delta = footprint[-1].get("delta", 0)
             except Exception as e:
@@ -244,7 +251,7 @@ class MarketScanner:
 
         # Setup generation (V4 — passes market intel for explanation enrichment)
         setup = self.setup_gen.generate(
-            symbol, "1h", conf, smc, structure, entry_df,
+            symbol, entry_tf, conf, smc, structure, entry_df,
             mtf_result=mtf_result,
             news_events=news_events,
             sentiment_data=sentiment_data,
@@ -419,4 +426,8 @@ class MarketScanner:
             "liquidation_cluster_high": liq_data.get("cluster_zone", {}).get("high", 0),
             "market_cap_tier": mcap_data.get("tier", "UNKNOWN") if isinstance(mcap_data, dict) else "UNKNOWN",
             "market_cap_usd": mcap_data.get("market_cap_usd", 0) if isinstance(mcap_data, dict) else 0,
+            # --- New Features ---
+            "volume_delta": volume_delta,
+            "funding_rate": next((m.get("funding_rate", 0) for m in (sentiment_data.get("market_metrics", []) if sentiment_data else []) if m["symbol"] == symbol), 0),
+            "open_interest": next((m.get("open_interest", 0) for m in (sentiment_data.get("market_metrics", []) if sentiment_data else []) if m["symbol"] == symbol), 0),
         }

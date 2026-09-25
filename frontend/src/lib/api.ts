@@ -111,11 +111,11 @@ export const api = {
     fetchAPI<any>("/api/v1/setups/test-telegram"),
 
   // Scanner
-  getScanner: () => fetchAPI<any>("/api/v1/scanner"),
-  runScanner: (symbols?: string[]) =>
-    fetchAPI<any>("/api/v1/scanner/run", {
+  getScanner: (entryTf: string = "1h") => fetchAPI<any>(`/api/v1/scanner?entry_tf=${entryTf}`),
+  runScanner: (symbols?: string[], entryTf: string = "1h") =>
+    fetchAPI<any>(`/api/v1/scanner/run?entry_tf=${entryTf}`, {
       method: "POST",
-      body: JSON.stringify(symbols),
+      body: JSON.stringify(symbols || []),
     }),
 
   // Risk
