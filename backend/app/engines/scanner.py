@@ -365,6 +365,18 @@ class MarketScanner:
                 hard_rejected = True
                 rejection_reasons.append("Oversold RSI")
 
+        # Prevent Buying into Resistance / Selling into Support
+        if structure.bias == "BULLISH":
+            res_dist = sr_data.get("resistance_distance_pct")
+            if res_dist is not None and res_dist < 1.0:
+                hard_rejected = True
+                rejection_reasons.append("Buying into Resistance")
+        elif structure.bias == "BEARISH":
+            sup_dist = sr_data.get("support_distance_pct")
+            if sup_dist is not None and sup_dist < 1.0:
+                hard_rejected = True
+                rejection_reasons.append("Selling into Support")
+
         return {
             "symbol": symbol,
             "trend": structure.bias,

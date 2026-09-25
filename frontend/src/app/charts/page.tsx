@@ -317,15 +317,9 @@ function ChartsPageContent() {
             >
               ★
             </button>
+
             <button
-              onClick={() => { setShowSetups(v => !v); if (!showSetups) setShowNotes(false); }}
-              className={`icon-btn${showSetups ? " icon-btn-active-green" : ""}`}
-              title="Active Setups"
-            >
-              📋
-            </button>
-            <button
-              onClick={() => { setShowNotes(v => !v); if (!showNotes) setShowSetups(false); }}
+              onClick={() => setShowNotes(v => !v)}
               className={`icon-btn${showNotes ? " icon-btn-active-purple" : ""}`}
               title="Symbol Notes"
               id="notes-toggle-btn"
@@ -540,97 +534,7 @@ function ChartsPageContent() {
             )}
           </div>
 
-          {/* Right sidebar: Active Setups OR Notes */}
-          {showSetups && !isMTFGrid && (
-            <div id="setups-sidebar" className="glass-card">
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                <div className="sidebar-title" style={{ marginBottom: 0 }}>ACTIVE SETUPS</div>
-                <span className="badge badge-score" style={{ fontSize: "0.65rem" }}>
-                  {filteredSetups.length}
-                </span>
-              </div>
 
-              {/* Filters */}
-              <div style={{ display: "flex", gap: 4, marginBottom: 10, flexWrap: "wrap" }}>
-                {(["ALL", "BUY", "SELL"] as const).map(d => (
-                  <button key={d} onClick={() => setSetupDirFilter(d)} className={`dir-filter-btn${setupDirFilter === d ? ` dir-filter-${d}` : ""}`}>
-                    {d === "BUY" ? "▲ " : d === "SELL" ? "▼ " : ""}{d}
-                  </button>
-                ))}
-                {setupTimeframes.length > 2 && (
-                  <select
-                    value={setupTfFilter}
-                    onChange={e => setSetupTfFilter(e.target.value)}
-                    className="tf-select"
-                  >
-                    {setupTimeframes.map(tf => <option key={tf} value={tf}>{tf}</option>)}
-                  </select>
-                )}
-              </div>
-
-              <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8 }}>
-                {isLoading ? (
-                  <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                    <div className="animate-pulse-dot" style={{ width: 16, height: 16, borderRadius: "50%", background: "var(--accent-blue)" }} />
-                  </div>
-                ) : filteredSetups.length === 0 ? (
-                  <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", fontSize: "0.8rem", textAlign: "center", padding: 20 }}>
-                    <div>
-                      <div style={{ fontSize: "1.8rem", marginBottom: 8, opacity: 0.4 }}>📊</div>
-                      No active setups.<br />Run scanner to find opportunities.
-                    </div>
-                  </div>
-                ) : filteredSetups.map((setup: any, idx: number) => (
-                  <div
-                    key={setup.id || idx}
-                    className={`setup-card${selectedSymbol === setup.symbol ? " setup-card-active" : ""}`}
-                    onClick={() => {
-                      setSelectedSymbol(setup.symbol);
-                      setSelectedSetup({
-                        direction: setup.direction,
-                        entry_low: setup.entry_low,
-                        entry_high: setup.entry_high,
-                        stop_loss: setup.stop_loss,
-                        take_profit_1: setup.take_profit_1,
-                        take_profit_2: setup.take_profit_2,
-                        take_profit_3: setup.take_profit_3,
-                      });
-                    }}
-                  >
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                      <span style={{ fontWeight: 800, fontSize: "0.88rem" }}>{setup.symbol.replace("USDT", "")}<span style={{ color: "var(--text-muted)", fontWeight: 400, fontSize: "0.72rem" }}>/USDT</span></span>
-                      <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                        {/* FIX #14: Price alert badge if current price is inside entry zone */}
-                        {(() => {
-                          const liveP = watchlistPrices[setup.symbol]?.price;
-                          if (liveP && setup.entry_low && setup.entry_high && liveP >= setup.entry_low && liveP <= setup.entry_high) {
-                            return <span title="Price is now inside entry zone!" style={{ fontSize: "0.58rem", fontWeight: 900, padding: "2px 6px", borderRadius: 4, background: "rgba(34,197,94,0.2)", color: "#22c55e", border: "1px solid rgba(34,197,94,0.4)", animation: "pulse-entry 1.5s ease-in-out infinite" }}>⚡ IN ZONE</span>;
-                          }
-                          return null;
-                        })()}
-                        <span className={`badge ${setup.direction === "BUY" ? "badge-buy" : "badge-sell"}`}>{setup.direction}</span>
-                        <span style={{ fontSize: "0.62rem", padding: "2px 5px", borderRadius: 4, background: "rgba(255,255,255,0.05)", color: "var(--text-muted)" }}>{setup.timeframe}</span>
-                      </div>
-                    </div>
-                    <div className="setup-grid">
-                      {/* FIX #6: Show entry zone range, not just entry_low */}
-                      <div>Entry<span className="setup-val" style={{ fontSize: "0.6rem" }}>{(setup.entry_low ?? 0).toLocaleString("en-US", { maximumFractionDigits: 4 })}–{(setup.entry_high ?? 0).toLocaleString("en-US", { maximumFractionDigits: 4 })}</span></div>
-                      <div>SL<span className="setup-val setup-val-red">{(setup.stop_loss ?? 0).toLocaleString("en-US", { maximumFractionDigits: 4 })}</span></div>
-                      <div>TP1<span className="setup-val setup-val-green">{(setup.take_profit_1 ?? 0).toLocaleString("en-US", { maximumFractionDigits: 4 })}</span></div>
-                      <div>R:R<span className="setup-val setup-val-blue">1:{(setup.risk_reward ?? 0).toFixed(1)}</span></div>
-                    </div>
-                    <div style={{ marginTop: 6, display: "flex", justifyContent: "space-between", fontSize: "0.67rem", color: "var(--text-muted)" }}>
-                      <span>{setup.setup_type}</span>
-                      {/* FIX #3: Score displayed as consistent % */}
-                      <span style={{ color: (setup.signal_score_pct ?? 0) >= 70 ? "#10b981" : (setup.signal_score_pct ?? 0) >= 50 ? "#f59e0b" : "var(--text-muted)" }}>
-                        ⚡ {setup.signal_score_pct ?? setup.signal_score ?? 0}%
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
 
           {/* Notes Panel */}
           {showNotes && !isMTFGrid && (

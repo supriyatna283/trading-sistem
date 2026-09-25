@@ -40,7 +40,7 @@ interface ScanResult {
 }
 
 type FilterType = "ALL" | "A+" | "VALID" | "WEAK" | "BULLISH" | "BEARISH" | "SETUP";
-type SortType = "score" | "rsi_low" | "change" | "rr";
+type SortType = "score" | "rsi_extreme" | "change" | "rr";
 
 // ─── Sub-components ─────────────────────────────────────────────
 
@@ -386,7 +386,10 @@ export default function ScannerPage() {
   // Sort
   const sorted = [...filtered].sort((a, b) => {
     if (sort === "score") return (b.signal_score ?? 0) - (a.signal_score ?? 0);
-    if (sort === "rsi_low") return (a.rsi_1h ?? 100) - (b.rsi_1h ?? 100);
+    if (sort === "rsi_extreme") {
+      if (filter === "BEARISH") return (b.rsi_1h ?? 0) - (a.rsi_1h ?? 0);
+      return (a.rsi_1h ?? 100) - (b.rsi_1h ?? 100);
+    }
     if (sort === "change") return Math.abs(b.price_change_24h ?? 0) - Math.abs(a.price_change_24h ?? 0);
     return 0;
   });
@@ -521,7 +524,7 @@ export default function ScannerPage() {
 
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
           <span style={{ fontSize: "0.7rem", color: "#475569", fontWeight: 700 }}>Sort:</span>
-          {([["score", "Score ↓"], ["rsi_low", "RSI Low ↑"], ["change", "Volatility ↓"]] as [SortType, string][]).map(([k, label]) => (
+          {([["score", "Score ↓"], ["rsi_extreme", filter === "BEARISH" ? "RSI High ↓" : "RSI Low ↑"], ["change", "Volatility ↓"]] as [SortType, string][]).map(([k, label]) => (
             <button key={k} onClick={() => setSort(k)} className="filter-btn"
               style={{
                 padding: "6px 12px", borderRadius: 7, fontSize: "0.68rem", fontWeight: 700, cursor: "pointer",
