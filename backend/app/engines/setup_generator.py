@@ -98,16 +98,19 @@ def calculate_trade_levels(direction: str, last_price: float, smc, df: pd.DataFr
             # Pick the nearest OB below current price
             ob = max(reachable_obs, key=lambda x: x.low)
             entry_low = ob.low
-            entry_high = min(ob.high, last_price)  # cap at current price
+            # Avoid entry exactly at last_price, expect at least a small pullback
+            entry_high = max(entry_low, min(ob.high, last_price - (atr * 0.1)))
         else:
-            # Fallback: current price - small pullback zone
-            entry_low = last_price - atr * 0.2
-            entry_high = last_price
+            # Fallback: deeper pullback zone
+            entry_high = last_price - (atr * 0.3)
+            entry_low = last_price - (atr * 0.8)
 
         swing_low = _find_nearest_swing_low(df, entry_low)
-        sl = (swing_low - atr * 0.1) if (swing_low is not None and swing_low < entry_low) else (entry_low - atr * 0.8)
+        # Trader Pro: Fallback SL dilebarkan dari 0.8 ke 1.5 ATR untuk menghindari liquidity hunt (wicks)
+        sl = (swing_low - atr * 0.1) if (swing_low is not None and swing_low < entry_low) else (entry_low - atr * 1.5)
 
-        risk = max(entry_low - sl, atr * 0.3)  # minimum risk = 0.3 ATR to avoid zero-division
+        # Trader Pro: Hitung risk dari worst-case fill (entry_high) agar RR realistis
+        risk = max(entry_high - sl, atr * 0.3)  # minimum risk = 0.3 ATR to avoid zero-division
         tp1 = entry_high + risk * 1.5
         tp2 = entry_high + risk * 2.5
         tp3 = entry_high + risk * 3.5
@@ -123,16 +126,19 @@ def calculate_trade_levels(direction: str, last_price: float, smc, df: pd.DataFr
             # Pick the nearest OB above current price
             ob = min(reachable_obs, key=lambda x: x.high)
             entry_high = ob.high
-            entry_low = max(ob.low, last_price)  # cap at current price
+            # Avoid entry exactly at last_price, expect at least a small pullback
+            entry_low = min(entry_high, max(ob.low, last_price + (atr * 0.1)))
         else:
-            # Fallback: current price + small pullback zone
-            entry_low = last_price
-            entry_high = last_price + atr * 0.2
+            # Fallback: deeper pullback zone
+            entry_low = last_price + (atr * 0.3)
+            entry_high = last_price + (atr * 0.8)
 
         swing_high = _find_nearest_swing_high(df, entry_high)
-        sl = (swing_high + atr * 0.1) if (swing_high is not None and swing_high > entry_high) else (entry_high + atr * 0.8)
+        # Trader Pro: Fallback SL dilebarkan dari 0.8 ke 1.5 ATR untuk menghindari liquidity hunt
+        sl = (swing_high + atr * 0.1) if (swing_high is not None and swing_high > entry_high) else (entry_high + atr * 1.5)
 
-        risk = max(sl - entry_high, atr * 0.3)  # minimum risk = 0.3 ATR
+        # Trader Pro: Hitung risk dari worst-case fill (entry_low) agar RR realistis
+        risk = max(sl - entry_low, atr * 0.3)  # minimum risk = 0.3 ATR
         tp1 = entry_low - risk * 1.5
         tp2 = entry_low - risk * 2.5
         tp3 = entry_low - risk * 3.5

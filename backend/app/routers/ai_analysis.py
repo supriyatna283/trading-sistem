@@ -226,23 +226,27 @@ def _calculate_setup_levels(ctx: dict, smc_obj=None, entry_df=None) -> dict:
     else:
         # Minimal ATR fallback when SMC object not available
         sl_dist = max(atr * 1.5, price * 0.003) if atr > 0 else price * 0.005
-        entry_low = entry_high = price
         if direction == "BUY":
-            sl = price - sl_dist
-            risk = entry_low - sl
+            entry_high = price - (atr * 0.3 if atr > 0 else price * 0.001)
+            entry_low = price - (atr * 0.8 if atr > 0 else price * 0.003)
+            sl = entry_low - sl_dist
+            risk = entry_high - sl
             effective_risk = max(risk, atr * 1.0) if atr > 0 else risk
             tp1 = entry_high + effective_risk * 2.0
             tp2 = entry_high + effective_risk * 3.0
             tp3 = entry_high + effective_risk * 4.5
         else:
-            sl = price + sl_dist
-            risk = sl - entry_high
+            entry_low = price + (atr * 0.3 if atr > 0 else price * 0.001)
+            entry_high = price + (atr * 0.8 if atr > 0 else price * 0.003)
+            sl = entry_high + sl_dist
+            risk = sl - entry_low
             effective_risk = max(risk, atr * 1.0) if atr > 0 else risk
             tp1 = entry_low - effective_risk * 2.0
             tp2 = entry_low - effective_risk * 3.0
             tp3 = entry_low - effective_risk * 4.5
 
-    risk = abs(price - sl) if sl else 0
+    # Trader Pro: Risk dihitung dari worst-case fill (entry_high untuk BUY, entry_low untuk SELL)
+    risk = abs(entry_high - sl) if direction == "BUY" else abs(sl - entry_low)
     atr_val = ctx.get("atr") or ctx.get("indicators", {}).get("atr") or 0
 
     # ── BUG FIX #1: SL must be at minimum 0.5×ATR away from entry. ──
@@ -254,7 +258,7 @@ def _calculate_setup_levels(ctx: dict, smc_obj=None, entry_df=None) -> dict:
             sl = entry_low - atr_val * 1.0
         else:
             sl = entry_high + atr_val * 1.0
-        risk = abs(entry_low - sl) if direction == "BUY" else abs(sl - entry_high)
+        risk = abs(entry_high - sl) if direction == "BUY" else abs(sl - entry_low)
         effective_risk = max(risk, atr_val * 1.0)
         if direction == "BUY":
             tp1 = entry_high + effective_risk * 2.0
@@ -275,7 +279,7 @@ def _calculate_setup_levels(ctx: dict, smc_obj=None, entry_df=None) -> dict:
             sl = entry_low - atr_val * 1.0
         else:
             sl = entry_high + atr_val * 1.0
-        risk = abs(entry_low - sl) if direction == "BUY" else abs(sl - entry_high)
+        risk = abs(entry_high - sl) if direction == "BUY" else abs(sl - entry_low)
         effective_risk = max(risk, atr_val * 1.0)
         if direction == "BUY":
             tp1 = entry_high + effective_risk * 2.0
