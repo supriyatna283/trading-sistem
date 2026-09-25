@@ -270,6 +270,13 @@ function ScannerCard({ row, onChart }: { row: ScanResult; onChart: (sym: string)
         </div>
       )}
 
+      {/* OVEREXTENDED WARNING */}
+      {Math.abs(row.price_change_24h ?? 0) >= 15 && (
+        <div style={{ fontSize: "0.6rem", color: "#f59e0b", fontWeight: 700, marginBottom: 8, background: "rgba(245,158,11,0.06)", padding: "4px 8px", borderRadius: 6 }}>
+          ⚠️ OVEREXTENDED (Late entry risk)
+        </div>
+      )}
+
       {/* SETUP STATUS + CTA */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>

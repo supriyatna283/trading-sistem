@@ -328,6 +328,15 @@ class MarketScanner:
         sr_dist = sr_data.get("support_distance_pct", 100) if structure.bias == "BULLISH" else sr_data.get("resistance_distance_pct", 100)
         if sr_dist is not None and sr_dist < 1.5:
             rr_points += 1  # Price very near key S/R level — RR favorable
+            
+        # Liquidation Magnet for RR
+        liq_low = liq_data.get("cluster_zone", {}).get("low", 0)
+        liq_high = liq_data.get("cluster_zone", {}).get("high", 0)
+        if structure.bias == "BULLISH" and liq_high > latest_price:
+            rr_points += 1  # Strong magnet above
+        elif structure.bias == "BEARISH" and liq_low > 0 and liq_low < latest_price:
+            rr_points += 1  # Strong magnet below
+            
         rr_pct = round(min(rr_points, rr_max) / rr_max * 100)
 
         score_breakdown = {
