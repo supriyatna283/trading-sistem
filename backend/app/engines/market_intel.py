@@ -30,10 +30,16 @@ class MarketIntelEngine:
         "BTCUSDT": "bitcoin", "ETHUSDT": "ethereum", "BNBUSDT": "binancecoin",
         "SOLUSDT": "solana", "XRPUSDT": "ripple", "ADAUSDT": "cardano",
         "DOGEUSDT": "dogecoin", "AVAXUSDT": "avalanche-2", "DOTUSDT": "polkadot",
-        "LINKUSDT": "chainlink", "MATICUSDT": "matic-network", "NEARUSDT": "near",
+        "LINKUSDT": "chainlink", "POLUSDT": "polygon-ecosystem-token", "NEARUSDT": "near",
         "LTCUSDT": "litecoin", "UNIUSDT": "uniswap", "ATOMUSDT": "cosmos",
         "APTUSDT": "aptos", "ARBUSDT": "arbitrum", "OPUSDT": "optimism",
-        "SUIUSDT": "sui", "PEPEUSDT": "pepe", "SHIBUSDT": "shiba-inu",
+        "SUIUSDT": "sui", "PEPEUSDT": "pepe", "1000PEPEUSDT": "pepe",
+        "SHIBUSDT": "shiba-inu", "1000SHIBUSDT": "shiba-inu", "BONKUSDT": "bonk",
+        "1000BONKUSDT": "bonk", "WIFUSDT": "dogwifcoin", "TONUSDT": "the-open-network",
+        "FETUSDT": "fetch-ai", "RENDERUSDT": "render-token", "TAOUSDT": "bittensor",
+        "INJUSDT": "injective-protocol", "TIAUSDT": "celestia", "JUPUSDT": "jupiter-exchange-solana",
+        "PYTHUSDT": "pyth-network", "JTOUSDT": "jito-governance-token", "ONDOUSDT": "ondo-finance",
+        "SEIUSDT": "sei-network", "STRKUSDT": "starknet", "AAVEUSDT": "aave", "FILUSDT": "filecoin"
     }
 
     def __init__(self):

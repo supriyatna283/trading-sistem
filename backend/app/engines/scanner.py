@@ -61,16 +61,20 @@ class MarketScanner:
         # Only scan pairs that meet minimum liquidity requirements.
         # This prevents false signals from illiquid markets.
         PRIORITY_PERPETUALS = [
-            # Major
-            "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
-            # Large Cap
+            # Major & L1s
+            "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "TONUSDT",
+            # Large Cap & Old Guards
             "ADAUSDT", "AVAXUSDT", "DOGEUSDT", "DOTUSDT", "LINKUSDT",
-            # FIX #4: MATIC renamed to POL on Binance (Aug 2024)
             "POLUSDT", "UNIUSDT", "AAVEUSDT", "ATOMUSDT", "LTCUSDT",
-            "NEARUSDT", "FILUSDT", "APTUSDT", "ARBUSDT", "OPUSDT",
-            "INJUSDT", "SUIUSDT", "TIAUSDT", "WIFUSDT", "JUPUSDT",
-            # DeFi
-            "SEIUSDT", "STRKUSDT", "PYTHUSDT", "JITOUSDT",
+            "NEARUSDT", "FILUSDT",
+            # New L1s/L2s
+            "APTUSDT", "ARBUSDT", "OPUSDT", "SUIUSDT", "SEIUSDT", "STRKUSDT",
+            # Ecosystem & Alts
+            "INJUSDT", "TIAUSDT", "JUPUSDT", "PYTHUSDT", "JTOUSDT", "ONDOUSDT",
+            # AI & Compute
+            "FETUSDT", "RENDERUSDT", "TAOUSDT",
+            # Memecoins
+            "WIFUSDT", "1000PEPEUSDT", "1000SHIBUSDT", "1000BONKUSDT"
         ]
         # Intersect: keep only pairs that are both in the fetched list AND in our priority list
         # If the list is smaller than priority list (e.g. new pairs), allow it through
