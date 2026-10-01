@@ -51,9 +51,13 @@ export default function ProToolsPage() {
             <p style={{ color: "var(--text-muted)", fontSize: "0.8rem", margin: 0, marginTop: 4 }}>
               <span style={{ color: "#ef4444", fontWeight: 700 }}>Sprint 1</span>
               {" "}·{" "}
-              <span>Killzone · P/D Zones · Liquidity Sweep · OB Strength · Position Sizing</span>
+              <span>Killzone · P/D Zones · Liquidity Sweep · OB Strength · FVG+Breaker · Position Sizing</span>
             </p>
           </div>
+          {/* Guide shortcut */}
+          <a href="/guide-pro" style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 7, padding: "8px 16px", borderRadius: 10, background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.3)", color: "#6366f1", fontSize: "0.75rem", fontWeight: 800, textDecoration: "none", whiteSpace: "nowrap", transition: "all 0.2s" }}>
+            📚 Panduan Cara Pakai
+          </a>
         </div>
       </div>
 
