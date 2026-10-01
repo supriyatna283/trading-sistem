@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import MainLayout from '@/components/layout/MainLayout';
-import { DollarSign, TrendingUp, TrendingDown, Activity, Clock } from 'lucide-react';
+import { DollarSign, TrendingUp, TrendingDown, Activity, Clock, Search } from 'lucide-react';
 import Link from 'next/link';
 
 const FOREX_PAIRS = [
