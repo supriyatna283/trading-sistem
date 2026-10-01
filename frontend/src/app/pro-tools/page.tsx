@@ -8,6 +8,7 @@ import { OBStrengthPanel } from "@/components/pro/OBStrengthPanel";
 import { PositionSizingCalculator } from "@/components/pro/PositionSizingCalculator";
 import { ProChart } from "@/components/pro/ProChart";
 import { FVGBreakerPanel } from "@/components/pro/FVGBreakerPanel";
+import { SessionPairsWidget } from "@/components/pro/SessionPairsWidget";
 import { useState } from "react";
 
 type Tab = "killzone" | "pd-zones" | "sweep" | "ob-strength" | "fvg-breaker" | "position";
@@ -110,60 +111,41 @@ export default function ProToolsPage() {
         </div>
       </div>
 
-      {/* ══════════════════════════════════════════════
-          KILLZONE TAB
-      ══════════════════════════════════════════════ */}
+      {/* KILLZONE TAB */}
       {activeTab === "killzone" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
           {/* Chart with session markers */}
-          <ProChart mode="killzone" symbol="BTCUSDT" timeframe="1h" height={440} />
+          <ProChart mode="killzone" symbol="BTCUSDT" timeframe="1h" height={420} />
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
-            {/* Main killzone timer */}
-            <div style={{ gridColumn: "1 / -1" }}>
+          {/* 2-col: Timer + Session Pairs */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr", gap: 20, alignItems: "start" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
               <KillzoneTimer />
-            </div>
 
-            {/* Educational info */}
-            <div style={{ padding: 24, borderRadius: 16, background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)" }}>
-              <div style={{ fontWeight: 800, fontSize: "0.9rem", marginBottom: 16 }}>🎯 ICT Killzone Strategy</div>
-              {[
-                { session: "🌏 ASIA (00-07 UTC)",    rule: "Observe range forming. Mark Asia High (AH) and Asia Low (AL). These are liquidity magnets." },
-                { session: "🇬🇧 LONDON (07-10 UTC)",  rule: "High volume. Market often sweeps Asia High OR Low (JUDAS swing) before real move." },
-                { session: "🗽 NY OPEN (12-15 UTC)", rule: "Most powerful killzone. Confirms or reverses London direction. Look for displacement after sweep." },
-                { session: "😴 DEAD ZONE (21-00)",   rule: "Avoid trading. Low liquidity = unpredictable whipsaw. Rest & review setups." },
-              ].map(({ session, rule }) => (
-                <div key={session} style={{ marginBottom: 12, padding: "10px 12px", borderRadius: 8, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
-                  <div style={{ fontSize: "0.72rem", fontWeight: 700, color: "#fff", marginBottom: 3 }}>{session}</div>
-                  <div style={{ fontSize: "0.68rem", color: "var(--text-muted)", lineHeight: 1.5 }}>{rule}</div>
-                </div>
-              ))}
-            </div>
-
-            <div style={{ padding: 24, borderRadius: 16, background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)" }}>
-              <div style={{ fontWeight: 800, fontSize: "0.9rem", marginBottom: 16 }}>📋 Killzone Checklist</div>
-              {[
-                { check: "Wait for killzone to start",                  done: true },
-                { check: "Mark Asia High and Asia Low",                 done: true },
-                { check: "Identify HTF PD zone (buy in discount)",      done: false },
-                { check: "Wait for liquidity sweep of equal high/low",  done: false },
-                { check: "Confirm displacement candle after sweep",     done: false },
-                { check: "Calculate position size (1% risk max)",       done: false },
-                { check: "Enter at FVG or OB with OTE Fibonacci",      done: false },
-              ].map(({ check, done }, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                  <div style={{
-                    width: 16, height: 16, borderRadius: 4, flexShrink: 0,
-                    background: done ? "rgba(16,185,129,0.2)" : "rgba(255,255,255,0.04)",
-                    border: `1px solid ${done ? "#10b981" : "rgba(255,255,255,0.08)"}`,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: "0.6rem", color: "#10b981",
-                  }}>
-                    {done ? "✓" : ""}
+              {/* Strategy info */}
+              <div style={{ padding: 20, borderRadius: 14, background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)" }}>
+                <div style={{ fontWeight: 800, fontSize: "0.85rem", marginBottom: 14 }}>🎯 ICT Killzone Strategy</div>
+                {[
+                  { session: "🌏 ASIA (00-07 UTC)",    rule: "Observe range. Mark Asia High (AH) & Low (AL) — these become liquidity targets." },
+                  { session: "🇬🇧 LONDON (07-10 UTC)",  rule: "Sweeps Asia range (Judas Swing) then reverses to real direction." },
+                  { session: "🗽 NY OPEN (12-15 UTC)", rule: "Most powerful. Confirms or reverses London. Best setup window." },
+                  { session: "😴 DEAD ZONE (20-00)",   rule: "Low volume, unpredictable. No new entries." },
+                ].map(({ session, rule }) => (
+                  <div key={session} style={{ marginBottom: 10, padding: "9px 12px", borderRadius: 8, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
+                    <div style={{ fontSize: "0.7rem", fontWeight: 700, color: "#fff", marginBottom: 3 }}>{session}</div>
+                    <div style={{ fontSize: "0.65rem", color: "var(--text-muted)", lineHeight: 1.5 }}>{rule}</div>
                   </div>
-                  <span style={{ fontSize: "0.72rem", color: done ? "#10b981" : "var(--text-muted)" }}>{check}</span>
-                </div>
-              ))}
+                ))}
+              </div>
+            </div>
+
+            {/* Session Pairs — live volume list */}
+            <div style={{ padding: 20, borderRadius: 16, background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)" }}>
+              <div style={{ fontWeight: 800, fontSize: "0.88rem", marginBottom: 14, display: "flex", alignItems: "center", gap: 8 }}>
+                <span>📈 Active Pairs — Sesi Ini</span>
+                <span style={{ fontSize: "0.6rem", padding: "2px 8px", borderRadius: 5, background: "rgba(16,185,129,0.12)", color: "#10b981", fontWeight: 700, border: "1px solid rgba(16,185,129,0.25)" }}>LIVE</span>
+              </div>
+              <SessionPairsWidget />
             </div>
           </div>
         </div>

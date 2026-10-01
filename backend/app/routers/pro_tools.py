@@ -23,6 +23,7 @@ from app.engines.position_sizing import PositionSizingEngine
 from app.engines.market_data import MarketDataEngine
 from app.engines.smart_money import SmartMoneyConceptsEngine
 from app.engines.fvg_breaker import FVGBreakerEngine
+from app.engines.session_pairs import SessionPairsEngine
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/pro", tags=["Pro Tools — Sprint 1"])
@@ -35,6 +36,7 @@ _size_engine  = PositionSizingEngine()
 _data_engine  = MarketDataEngine()
 _smc_engine   = SmartMoneyConceptsEngine()
 _fvg_engine   = FVGBreakerEngine()
+_session_engine = SessionPairsEngine()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -486,4 +488,29 @@ async def get_fvg_breaker(req: FVGRequest):
         }
     except Exception as e:
         logger.exception("FVG/Breaker error")
+        return {"error": str(e)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SESSION PAIRS — top volume pairs per killzone
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@router.get("/session-pairs")
+async def get_session_pairs(
+    session: Optional[str] = Query(None, description="Override session: ASIA|LONDON|NY_OPEN|NY_PM|DEAD"),
+    top_n:   int           = Query(20,   ge=5, le=50, description="Max pairs to return"),
+):
+    """
+    Returns top-volume trading pairs for the current (or specified) trading session.
+    Live data from Binance 24hr ticker. Cached 60 seconds.
+    """
+    try:
+        result = await _session_engine.get_session_pairs(
+            session_override=session,
+            top_n=top_n,
+        )
+        return _session_engine.to_dict(result)
+    except Exception as e:
+        logger.exception("Session pairs error")
         return {"error": str(e)}
