@@ -55,6 +55,9 @@ export const WhaleHeader: React.FC<WhaleHeaderProps> = ({
             { id: 'visualizer', icon: BarChart2, label: 'Flow Visualizer' },
             { id: 'trends', icon: TrendingUp, label: 'Market Trends' },
             { id: 'entities', icon: Shield, label: 'Smart Money' },
+            { id: 'scores', icon: Activity, label: 'Pro Scores' },
+            { id: 'watchlist', icon: Shield, label: 'Watchlist' },
+            { id: 'backtest', icon: TrendingUp, label: 'Backtest' },
           ].map((tab) => (
             <button
               key={tab.id}

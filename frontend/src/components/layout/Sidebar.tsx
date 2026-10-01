@@ -22,7 +22,9 @@ import {
   ChevronLeft,
   ChevronRight,
   Zap,
-  Waves
+  Waves,
+  DollarSign,
+  Crosshair,
 } from "lucide-react";
 
 const NAV_GROUPS = [
@@ -31,12 +33,13 @@ const NAV_GROUPS = [
     items: [
       { href: "/", label: "Dashboard", icon: LayoutDashboard, color: "#3b82f6" },
       { href: "/markets", label: "Live Markets", icon: Globe, color: "#10b981" },
+      { href: "/forex", label: "Forex", icon: DollarSign, color: "#22c55e" },
       { href: "/scanner", label: "Scanner", icon: Search, color: "#8b5cf6" },
-      { href: "/setups", label: "Setups", icon: Target, color: "#f43f5e" },
       { href: "/charts", label: "Charts", icon: LineChart, color: "#0ea5e9" },
       { href: "/market-intel", label: "Market Intel", icon: Brain, color: "#f59e0b" },
       { href: "/ai-performance", label: "AI Performance", icon: Activity, color: "#10b981" },
       { href: "/whale-tracker", label: "Whale Tracker", icon: Waves, color: "#06b6d4" },
+      { href: "/pro-tools",    label: "Pro Tools ⚡",  icon: Crosshair, color: "#ef4444" },
     ],
   },
   {

@@ -56,6 +56,7 @@ export const LiveStreamTable: React.FC<LiveStreamTableProps> = React.memo(({
               <th className="py-3 px-4">Token Amount</th>
               <th className="py-3 px-4">From Entity</th>
               <th className="py-3 px-4">To Entity</th>
+              <th className="py-3 px-4 text-center">Smart Score</th>
               <th className="py-3 px-4 text-center">Inspect</th>
             </tr>
           </thead>
@@ -67,7 +68,7 @@ export const LiveStreamTable: React.FC<LiveStreamTableProps> = React.memo(({
                   animate={{ opacity: 1 }} 
                   exit={{ opacity: 0 }}
                 >
-                  <td colSpan={8} className="py-12 text-center text-slate-500">
+                  <td colSpan={9} className="py-12 text-center text-slate-500">
                     <AlertTriangle className="w-8 h-8 mx-auto mb-2 text-slate-600" />
                     No whale transactions match your active filters.
                   </td>
@@ -174,6 +175,17 @@ export const LiveStreamTable: React.FC<LiveStreamTableProps> = React.memo(({
                           <span className="text-[10px] text-slate-500 font-mono">{tx.to}</span>
                         </td>
 
+                        {/* Smart Score */}
+                        <td className="py-3 px-4 text-center whitespace-nowrap">
+                          <span className={`inline-block px-2.5 py-1 rounded-lg text-xs font-black tracking-wider border shadow-sm ${
+                            tx.smartScore >= 85 ? 'bg-gradient-to-r from-emerald-500/20 to-teal-500/20 text-emerald-400 border-emerald-500/30' :
+                            tx.smartScore >= 60 ? 'bg-gradient-to-r from-amber-500/20 to-yellow-500/20 text-amber-400 border-amber-500/30' :
+                            'bg-slate-800/50 text-slate-400 border-slate-700/50'
+                          }`}>
+                            {tx.smartScore >= 85 ? '🧠 ' : ''}{tx.smartScore}/100
+                          </span>
+                        </td>
+
                         {/* Action Buttons */}
                         <td className="py-3 px-4 text-center whitespace-nowrap">
                           <button
@@ -198,7 +210,7 @@ export const LiveStreamTable: React.FC<LiveStreamTableProps> = React.memo(({
                             exit={{ opacity: 0, height: 0 }}
                             className="bg-slate-900/60 border-b border-slate-700/50 overflow-hidden"
                           >
-                            <td colSpan={8} className="p-0">
+                            <td colSpan={9} className="p-0">
                               <div className="p-5 m-3 rounded-2xl bg-gradient-to-b from-slate-900 to-slate-950 border border-slate-700/50 shadow-inner space-y-4">
                                 <div className="flex items-center justify-between text-xs text-slate-400">
                                   <span className="font-semibold text-slate-300 flex items-center gap-1">

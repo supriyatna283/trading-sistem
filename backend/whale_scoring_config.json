@@ -1,0 +1,28 @@
+{
+  "weight_accumulation": 0.35,
+  "weight_netflow": 0.25,
+  "weight_smart_wallet": 0.20,
+  "weight_concentration": -0.15,
+  "weight_new_project": 0.05,
+  "accumulation_days": 14,
+  "netflow_days": 7,
+  "smart_wallet_lookback_hours": 48,
+  "concentration_high_threshold_pct": 60.0,
+  "concentration_very_high_pct": 75.0,
+  "grade_a_min": 80.0,
+  "grade_b_min": 60.0,
+  "grade_c_min": 40.0,
+  "grade_d_min": 20.0,
+  "alert_threshold": 70.0,
+  "alert_critical_threshold": 85.0,
+  "stale_price_move_pct": 8.0,
+  "default_provider": "auto",
+  "enable_new_project_signal": true,
+  "grade_labels": {
+    "A": "Sangat Bullish",
+    "B": "Bullish",
+    "C": "Netral",
+    "D": "Waspada",
+    "F": "Bearish / Risiko Tinggi"
+  }
+}

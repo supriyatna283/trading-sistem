@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useState, useEffect } from "react";
 import { api } from "@/lib/api";
 import { API_URL } from "@/lib/utils";
+import { KillzoneTimer } from "@/components/pro/KillzoneTimer";
 
 const EXCHANGES = [
   { key: "bybit", label: "Bybit", color: "#f7931a" },
@@ -198,6 +199,7 @@ export default function DashboardPage() {
               <span style={{ fontSize: "0.72rem", color: "var(--text-secondary)", fontWeight: 700, letterSpacing: "0.02em" }}>{ex.label}</span>
             </div>
           ))}
+          <KillzoneTimer compact />
         </div>
       </div>
 

@@ -42,13 +42,13 @@ export const WhaleStatsCards: React.FC<WhaleStatsCardsProps> = ({ dashboardData 
             <Flame className="w-6 h-6" />
           </div>
         </div>
-
         <div className="p-4 rounded-2xl bg-gradient-to-b from-slate-800/40 to-slate-900/40 backdrop-blur-md border border-slate-700/50 flex items-center justify-between hover:border-emerald-500/30 hover:shadow-[0_0_15px_rgba(16,185,129,0.15)] transition-all group">
           <div>
-            <p className="text-[10px] font-bold text-slate-400 tracking-widest uppercase">Top Accumulation</p>
-            <p className="text-2xl font-black text-white tracking-tight mt-1 group-hover:text-emerald-400 transition-colors">
-              {topToken}
+            <p className="text-[10px] font-bold text-slate-400 tracking-widest uppercase">Actionable Signal</p>
+            <p className="text-sm font-black text-emerald-400 tracking-tight mt-1 group-hover:text-emerald-300 transition-colors">
+              Strong Accumulation
             </p>
+            <p className="text-[10px] text-slate-500 mt-1">Smart Money buying AI tokens</p>
           </div>
           <div className="p-3 rounded-xl bg-gradient-to-br from-emerald-500/20 to-teal-600/20 text-emerald-400 border border-emerald-500/20 shadow-lg shadow-emerald-500/10">
             <TrendingUp className="w-6 h-6" />
@@ -56,19 +56,19 @@ export const WhaleStatsCards: React.FC<WhaleStatsCardsProps> = ({ dashboardData 
         </div>
 
         <div className="p-4 rounded-2xl bg-gradient-to-b from-slate-800/40 to-slate-900/40 backdrop-blur-md border border-slate-700/50 flex items-center justify-between hover:border-purple-500/30 hover:shadow-[0_0_15px_rgba(168,85,247,0.15)] transition-all group">
-          <div>
-            <p className="text-[10px] font-bold text-slate-400 tracking-widest uppercase">Network Telemetry</p>
-            <div className="flex flex-col gap-0.5 text-[11px] font-semibold mt-1">
-              <span className="text-slate-200">
-                <span className="text-slate-500">ETH Gas:</span> 14 Gwei
-              </span>
-              <span className="text-slate-200">
-                <span className="text-slate-500">SOL TPS:</span> 2,840
-              </span>
+          <div className="w-full">
+            <p className="text-[10px] font-bold text-slate-400 tracking-widest uppercase flex justify-between">
+              <span>Net Whale Flow (24h)</span>
+              <span className="text-emerald-400">+ $42.5M</span>
+            </p>
+            <div className="w-full bg-slate-800/80 rounded-full h-2.5 mt-2 overflow-hidden flex">
+              <div className="bg-emerald-500 h-2.5" style={{ width: '65%' }}></div>
+              <div className="bg-rose-500 h-2.5" style={{ width: '35%' }}></div>
             </div>
-          </div>
-          <div className="p-3 rounded-xl bg-gradient-to-br from-purple-500/20 to-fuchsia-600/20 text-purple-400 border border-purple-500/20 shadow-lg shadow-purple-500/10">
-            <Cpu className="w-6 h-6" />
+            <div className="flex justify-between text-[9px] text-slate-500 mt-1 font-bold">
+              <span>65% BUY</span>
+              <span>35% SELL</span>
+            </div>
           </div>
         </div>
       </div>

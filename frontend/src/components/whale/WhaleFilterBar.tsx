@@ -11,6 +11,14 @@ interface WhaleFilterBarProps {
   setSearchQuery: (query: string) => void;
   actionFilter: string;
   setActionFilter: (action: string) => void;
+  tokenFilter: string;
+  setTokenFilter: (token: string) => void;
+  timeframe: string;
+  setTimeframe: (timeframe: string) => void;
+  sortBy: string;
+  setSortBy: (sort: string) => void;
+  smartMoneyOnly: boolean;
+  setSmartMoneyOnly: (smart: boolean) => void;
 }
 
 export const WhaleFilterBar: React.FC<WhaleFilterBarProps> = ({
@@ -22,6 +30,14 @@ export const WhaleFilterBar: React.FC<WhaleFilterBarProps> = ({
   setSearchQuery,
   actionFilter,
   setActionFilter,
+  tokenFilter,
+  setTokenFilter,
+  timeframe,
+  setTimeframe,
+  sortBy,
+  setSortBy,
+  smartMoneyOnly,
+  setSmartMoneyOnly,
 }) => {
   return (
     <div className="p-5 rounded-2xl bg-slate-900/40 backdrop-blur-xl border border-slate-700/50 shadow-[0_8px_30px_rgba(0,0,0,0.12)] space-y-4 relative z-10">
@@ -70,6 +86,44 @@ export const WhaleFilterBar: React.FC<WhaleFilterBarProps> = ({
             </button>
           ))}
         </div>
+
+        {/* Top Filters (Timeframe, Token, Smart Money) */}
+        <div className="flex items-center gap-2 shrink-0">
+          <select
+            value={timeframe}
+            onChange={(e) => setTimeframe(e.target.value)}
+            className="bg-slate-900/80 border border-slate-700 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-300 focus:outline-none focus:border-cyan-500 cursor-pointer"
+          >
+            <option value="ALL">All Time</option>
+            <option value="1H">Last 1 Hour</option>
+            <option value="24H">Last 24 Hours</option>
+            <option value="7D">Last 7 Days</option>
+          </select>
+
+          <select
+            value={tokenFilter}
+            onChange={(e) => setTokenFilter(e.target.value)}
+            className="bg-slate-900/80 border border-slate-700 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-300 focus:outline-none focus:border-cyan-500 cursor-pointer"
+          >
+            <option value="ALL">All Tokens</option>
+            <option value="BTC">BTC</option>
+            <option value="ETH">ETH</option>
+            <option value="SOL">SOL</option>
+            <option value="USDT">USDT</option>
+            <option value="USDC">USDC</option>
+          </select>
+
+          <button
+            onClick={() => setSmartMoneyOnly(!smartMoneyOnly)}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all border flex items-center gap-1.5 ${
+              smartMoneyOnly
+                ? 'bg-gradient-to-r from-emerald-500 to-teal-500 text-white border-transparent shadow-[0_0_15px_rgba(16,185,129,0.4)]'
+                : 'bg-slate-800/50 text-slate-400 border-slate-700 hover:bg-slate-700 hover:text-white'
+            }`}
+          >
+            🧠 Smart Money Only
+          </button>
+        </div>
       </div>
 
       <div className="pt-4 border-t border-slate-700/50 flex flex-wrap items-center justify-between gap-4">
@@ -93,9 +147,21 @@ export const WhaleFilterBar: React.FC<WhaleFilterBarProps> = ({
           )}
         </div>
 
-        {/* Action Type Dropdown / Selector */}
+        {/* Sort & Action Dropdowns */}
         <div className="flex items-center gap-3">
-          <span className="text-xs text-slate-400 font-bold tracking-widest uppercase">Action:</span>
+          <span className="text-xs text-slate-400 font-bold tracking-widest uppercase">Sort:</span>
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value)}
+            className="bg-slate-950/50 border border-slate-700 rounded-xl px-3 py-2 text-sm font-semibold text-slate-200 focus:outline-none focus:border-cyan-500 transition-all cursor-pointer"
+          >
+            <option value="TIME_DESC">Newest First</option>
+            <option value="TIME_ASC">Oldest First</option>
+            <option value="USD_DESC">Highest USD</option>
+            <option value="USD_ASC">Lowest USD</option>
+          </select>
+
+          <span className="text-xs text-slate-400 font-bold tracking-widest uppercase ml-2">Action:</span>
           <select
             value={actionFilter}
             onChange={(e) => setActionFilter(e.target.value)}
@@ -115,8 +181,12 @@ export const WhaleFilterBar: React.FC<WhaleFilterBarProps> = ({
               setMinUsdFilter(10000);
               setSearchQuery('');
               setActionFilter('ALL');
+              setTokenFilter('ALL');
+              setTimeframe('ALL');
+              setSortBy('TIME_DESC');
+              setSmartMoneyOnly(false);
             }}
-            className="px-4 py-2 rounded-xl bg-slate-800 border border-slate-700 text-slate-300 hover:text-white hover:bg-slate-700 hover:border-slate-600 transition-all text-xs font-bold"
+            className="px-4 py-2 rounded-xl bg-slate-800 border border-slate-700 text-slate-300 hover:text-white hover:bg-slate-700 hover:border-slate-600 transition-all text-xs font-bold ml-2"
           >
             Reset Filters
           </button>

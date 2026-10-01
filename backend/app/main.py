@@ -37,6 +37,8 @@ from app.routers import (
     markets,
     whale_api,
     notes,
+    whale_scoring,
+    pro_tools,
 )
 from app.services.auto_scheduler import run_scheduler, stop_scheduler, scheduler_state
 from app.services.whale_detector import start_whale_pollers, stop_whale_pollers
@@ -116,6 +118,14 @@ async def lifespan(app: FastAPI):
     # 6. Start Whale Tracker RPC Pollers
     start_whale_pollers(get_db)
     logger.info("✅ Whale Tracker RPC Pollers started")
+
+    # 7. Start Whale Scoring Scheduler (every 15 minutes)
+    try:
+        from app.services.whale_scoring_scheduler import run_scoring_scheduler
+        asyncio.create_task(run_scoring_scheduler(get_db))
+        logger.info("✅ Whale Scoring Scheduler started (every 15 min)")
+    except Exception as e:
+        logger.error(f"❌ Whale Scoring Scheduler failed to start: {e}")
 
     yield
 
@@ -202,6 +212,8 @@ app.include_router(ai_performance.router)
 app.include_router(markets.router)
 app.include_router(whale_api.router)
 app.include_router(notes.router)
+app.include_router(whale_scoring.router)
+app.include_router(pro_tools.router)
 
 
 @app.get("/")

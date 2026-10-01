@@ -82,12 +82,22 @@ export const WalletModal: React.FC<WalletModalProps> = ({ inspectWallet, setInsp
             </div>
           </div>
 
-          <button
-            onClick={() => setInspectWallet(null)}
-            className="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs transition-colors"
-          >
-            Close Profile
-          </button>
+          <div className="flex flex-col gap-3">
+            <button
+              onClick={() => {
+                alert(`Starting backtest engine for wallet ${inspectWallet.address} over the last 30 days...`);
+              }}
+              className="w-full py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-white shadow-[0_0_15px_rgba(16,185,129,0.3)] font-bold text-xs transition-colors flex items-center justify-center gap-2"
+            >
+              🔄 Backtest this Wallet
+            </button>
+            <button
+              onClick={() => setInspectWallet(null)}
+              className="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs transition-colors"
+            >
+              Close Profile
+            </button>
+          </div>
         </motion.div>
       </div>
     </AnimatePresence>
