@@ -6,16 +6,17 @@ import { PDZoneWidget } from "@/components/pro/PDZoneWidget";
 import { LiquiditySweepPanel } from "@/components/pro/LiquiditySweepPanel";
 import { OBStrengthPanel } from "@/components/pro/OBStrengthPanel";
 import { PositionSizingCalculator } from "@/components/pro/PositionSizingCalculator";
+import { ProChart } from "@/components/pro/ProChart";
 import { useState } from "react";
 
 type Tab = "killzone" | "pd-zones" | "sweep" | "ob-strength" | "position";
 
 const TABS: { id: Tab; label: string; icon: string; desc: string; color: string }[] = [
-  { id: "killzone",   label: "Killzone Timer",      icon: "🎯", desc: "ICT session tracker",          color: "#10b981" },
-  { id: "pd-zones",   label: "P/D Zones",           icon: "📊", desc: "Premium & Discount arrays",    color: "#3b82f6" },
-  { id: "sweep",      label: "Liquidity Sweep",     icon: "🌊", desc: "Market maker sweep detector",  color: "#ef4444" },
-  { id: "ob-strength",label: "OB Strength",         icon: "🧱", desc: "Order block quality scoring",  color: "#f59e0b" },
-  { id: "position",   label: "Position Sizing",     icon: "⚖️", desc: "Kelly criterion calculator",   color: "#a78bfa" },
+  { id: "killzone",    label: "Killzone Timer",   icon: "🎯", desc: "ICT session tracker",          color: "#10b981" },
+  { id: "pd-zones",   label: "P/D Zones",         icon: "📊", desc: "Premium & Discount arrays",    color: "#3b82f6" },
+  { id: "sweep",      label: "Liquidity Sweep",   icon: "🌊", desc: "Market maker sweep detector",  color: "#ef4444" },
+  { id: "ob-strength",label: "OB Strength",       icon: "🧱", desc: "Order block quality scoring",  color: "#f59e0b" },
+  { id: "position",   label: "Position Sizing",   icon: "⚖️", desc: "Kelly criterion calculator",   color: "#a78bfa" },
 ];
 
 export default function ProToolsPage() {
@@ -103,106 +104,136 @@ export default function ProToolsPage() {
         </div>
       </div>
 
-      {/* ── Tab Content ── */}
+      {/* ══════════════════════════════════════════════
+          KILLZONE TAB
+      ══════════════════════════════════════════════ */}
       {activeTab === "killzone" && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
-          {/* Main killzone timer */}
-          <div style={{ gridColumn: "1 / -1" }}>
-            <KillzoneTimer />
-          </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+          {/* Chart with session markers */}
+          <ProChart mode="killzone" symbol="BTCUSDT" timeframe="1h" height={440} />
 
-          {/* Educational info */}
-          <div style={{ padding: 24, borderRadius: 16, background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)" }}>
-            <div style={{ fontWeight: 800, fontSize: "0.9rem", marginBottom: 16 }}>🎯 ICT Killzone Strategy</div>
-            {[
-              { session: "🌏 ASIA (00-07 UTC)",    rule: "Observe range forming. Mark Asia High (AH) and Asia Low (AL). These are liquidity magnets." },
-              { session: "🇬🇧 LONDON (07-10 UTC)",  rule: "High volume. Market often sweeps Asia High OR Low (JUDAS swing) before real move." },
-              { session: "🗽 NY OPEN (12-15 UTC)", rule: "Most powerful killzone. Confirms or reverses London direction. Look for displacement after sweep." },
-              { session: "😴 DEAD ZONE (21-00)",   rule: "Avoid trading. Low liquidity = unpredictable whipsaw. Rest & review setups." },
-            ].map(({ session, rule }) => (
-              <div key={session} style={{ marginBottom: 12, padding: "10px 12px", borderRadius: 8, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
-                <div style={{ fontSize: "0.72rem", fontWeight: 700, color: "#fff", marginBottom: 3 }}>{session}</div>
-                <div style={{ fontSize: "0.68rem", color: "var(--text-muted)", lineHeight: 1.5 }}>{rule}</div>
-              </div>
-            ))}
-          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+            {/* Main killzone timer */}
+            <div style={{ gridColumn: "1 / -1" }}>
+              <KillzoneTimer />
+            </div>
 
-          <div style={{ padding: 24, borderRadius: 16, background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)" }}>
-            <div style={{ fontWeight: 800, fontSize: "0.9rem", marginBottom: 16 }}>📋 Killzone Checklist</div>
-            {[
-              { check: "Wait for killzone to start",                  done: true },
-              { check: "Mark Asia High and Asia Low",                 done: true },
-              { check: "Identify HTF PD zone (buy in discount)",      done: false },
-              { check: "Wait for liquidity sweep of equal high/low",  done: false },
-              { check: "Confirm displacement candle after sweep",     done: false },
-              { check: "Calculate position size (1% risk max)",       done: false },
-              { check: "Enter at FVG or OB with OTE Fibonacci",      done: false },
-            ].map(({ check, done }, i) => (
-              <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                <div style={{
-                  width: 16, height: 16, borderRadius: 4, flexShrink: 0,
-                  background: done ? "rgba(16,185,129,0.2)" : "rgba(255,255,255,0.04)",
-                  border: `1px solid ${done ? "#10b981" : "rgba(255,255,255,0.08)"}`,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  fontSize: "0.6rem", color: "#10b981",
-                }}>
-                  {done ? "✓" : ""}
+            {/* Educational info */}
+            <div style={{ padding: 24, borderRadius: 16, background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)" }}>
+              <div style={{ fontWeight: 800, fontSize: "0.9rem", marginBottom: 16 }}>🎯 ICT Killzone Strategy</div>
+              {[
+                { session: "🌏 ASIA (00-07 UTC)",    rule: "Observe range forming. Mark Asia High (AH) and Asia Low (AL). These are liquidity magnets." },
+                { session: "🇬🇧 LONDON (07-10 UTC)",  rule: "High volume. Market often sweeps Asia High OR Low (JUDAS swing) before real move." },
+                { session: "🗽 NY OPEN (12-15 UTC)", rule: "Most powerful killzone. Confirms or reverses London direction. Look for displacement after sweep." },
+                { session: "😴 DEAD ZONE (21-00)",   rule: "Avoid trading. Low liquidity = unpredictable whipsaw. Rest & review setups." },
+              ].map(({ session, rule }) => (
+                <div key={session} style={{ marginBottom: 12, padding: "10px 12px", borderRadius: 8, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
+                  <div style={{ fontSize: "0.72rem", fontWeight: 700, color: "#fff", marginBottom: 3 }}>{session}</div>
+                  <div style={{ fontSize: "0.68rem", color: "var(--text-muted)", lineHeight: 1.5 }}>{rule}</div>
                 </div>
-                <span style={{ fontSize: "0.72rem", color: done ? "#10b981" : "var(--text-muted)" }}>{check}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+              ))}
+            </div>
 
-      {activeTab === "pd-zones" && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 20 }}>
-          {/* PD Widget */}
-          <PDZoneWidget symbol="BTCUSDT" htf="1d" timeframe="1h" />
-
-          {/* Explanation */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <div style={{ padding: 24, borderRadius: 16, background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)" }}>
-              <div style={{ fontWeight: 800, fontSize: "0.9rem", marginBottom: 16 }}>📖 Premium/Discount Theory (ICT)</div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-                {[
-                  { zone: "PREMIUM (>62%)", color: "#ef4444", rule: "SELL zone. Smart money distributes longs here. Only sell setups are valid.", icon: "🔴" },
-                  { zone: "EQUILIBRIUM (38–62%)", color: "#f59e0b", rule: "WAIT zone. Market makers may push either direction. No clear institutional bias.", icon: "🟡" },
-                  { zone: "DISCOUNT (<38%)", color: "#10b981", rule: "BUY zone. Smart money accumulates longs here. Only buy setups are valid.", icon: "🟢" },
-                ].map(({ zone, color, rule, icon }) => (
-                  <div key={zone} style={{ padding: 14, borderRadius: 10, background: `${color}08`, border: `1px solid ${color}20` }}>
-                    <div style={{ fontSize: "1.2rem", marginBottom: 6 }}>{icon}</div>
-                    <div style={{ fontSize: "0.72rem", fontWeight: 700, color, marginBottom: 6 }}>{zone}</div>
-                    <div style={{ fontSize: "0.65rem", color: "var(--text-muted)", lineHeight: 1.5 }}>{rule}</div>
+              <div style={{ fontWeight: 800, fontSize: "0.9rem", marginBottom: 16 }}>📋 Killzone Checklist</div>
+              {[
+                { check: "Wait for killzone to start",                  done: true },
+                { check: "Mark Asia High and Asia Low",                 done: true },
+                { check: "Identify HTF PD zone (buy in discount)",      done: false },
+                { check: "Wait for liquidity sweep of equal high/low",  done: false },
+                { check: "Confirm displacement candle after sweep",     done: false },
+                { check: "Calculate position size (1% risk max)",       done: false },
+                { check: "Enter at FVG or OB with OTE Fibonacci",      done: false },
+              ].map(({ check, done }, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                  <div style={{
+                    width: 16, height: 16, borderRadius: 4, flexShrink: 0,
+                    background: done ? "rgba(16,185,129,0.2)" : "rgba(255,255,255,0.04)",
+                    border: `1px solid ${done ? "#10b981" : "rgba(255,255,255,0.08)"}`,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: "0.6rem", color: "#10b981",
+                  }}>
+                    {done ? "✓" : ""}
                   </div>
-                ))}
-              </div>
+                  <span style={{ fontSize: "0.72rem", color: done ? "#10b981" : "var(--text-muted)" }}>{check}</span>
+                </div>
+              ))}
             </div>
+          </div>
+        </div>
+      )}
 
-            <div style={{ padding: 24, borderRadius: 16, background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)" }}>
-              <div style={{ fontWeight: 800, fontSize: "0.9rem", marginBottom: 14 }}>★ OTE — Optimal Trade Entry</div>
-              <p style={{ fontSize: "0.75rem", color: "var(--text-muted)", lineHeight: 1.6, margin: 0 }}>
-                OTE (Optimal Trade Entry) adalah zona Fibonacci 0.62–0.79 dari swing terakhir.
-                Ini adalah zona di mana Smart Money paling sering entry dengan menggunakan
-                partial fill strategy. Price di OTE + dalam Discount zone = setup terbaik untuk BUY.
-                Price di OTE + dalam Premium zone = setup terbaik untuk SELL.
-              </p>
-              <div style={{ marginTop: 12, padding: "10px 14px", borderRadius: 8, background: "rgba(139,92,246,0.08)", border: "1px solid rgba(139,92,246,0.2)", fontSize: "0.72rem", color: "#a78bfa", fontWeight: 600 }}>
-                💡 Rule: BUY di Discount OTE + Killzone + Liquidity Sweep = A+ setup
+      {/* ══════════════════════════════════════════════
+          PD ZONES TAB
+      ══════════════════════════════════════════════ */}
+      {activeTab === "pd-zones" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+          {/* Chart with PD zone overlays */}
+          <ProChart mode="pd-zones" symbol="BTCUSDT" timeframe="1h" height={460} />
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 20 }}>
+            <PDZoneWidget symbol="BTCUSDT" htf="1d" timeframe="1h" />
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+              <div style={{ padding: 24, borderRadius: 16, background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)" }}>
+                <div style={{ fontWeight: 800, fontSize: "0.9rem", marginBottom: 16 }}>📖 Premium/Discount Theory (ICT)</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+                  {[
+                    { zone: "PREMIUM (>62%)", color: "#ef4444", rule: "SELL zone. Smart money distributes longs here. Only sell setups are valid.", icon: "🔴" },
+                    { zone: "EQUILIBRIUM (38–62%)", color: "#f59e0b", rule: "WAIT zone. Market makers may push either direction. No clear institutional bias.", icon: "🟡" },
+                    { zone: "DISCOUNT (<38%)", color: "#10b981", rule: "BUY zone. Smart money accumulates longs here. Only buy setups are valid.", icon: "🟢" },
+                  ].map(({ zone, color, rule, icon }) => (
+                    <div key={zone} style={{ padding: 14, borderRadius: 10, background: `${color}08`, border: `1px solid ${color}20` }}>
+                      <div style={{ fontSize: "1.2rem", marginBottom: 6 }}>{icon}</div>
+                      <div style={{ fontSize: "0.72rem", fontWeight: 700, color, marginBottom: 6 }}>{zone}</div>
+                      <div style={{ fontSize: "0.65rem", color: "var(--text-muted)", lineHeight: 1.5 }}>{rule}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ padding: 24, borderRadius: 16, background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)" }}>
+                <div style={{ fontWeight: 800, fontSize: "0.9rem", marginBottom: 14 }}>★ OTE — Optimal Trade Entry</div>
+                <p style={{ fontSize: "0.75rem", color: "var(--text-muted)", lineHeight: 1.6, margin: 0 }}>
+                  OTE (Optimal Trade Entry) adalah zona Fibonacci 0.62–0.79 dari swing terakhir.
+                  Ini adalah zona di mana Smart Money paling sering entry dengan menggunakan
+                  partial fill strategy. Price di OTE + dalam Discount zone = setup terbaik untuk BUY.
+                  Price di OTE + dalam Premium zone = setup terbaik untuk SELL.
+                </p>
+                <div style={{ marginTop: 12, padding: "10px 14px", borderRadius: 8, background: "rgba(139,92,246,0.08)", border: "1px solid rgba(139,92,246,0.2)", fontSize: "0.72rem", color: "#a78bfa", fontWeight: 600 }}>
+                  💡 Rule: BUY di Discount OTE + Killzone + Liquidity Sweep = A+ setup
+                </div>
               </div>
             </div>
           </div>
         </div>
       )}
 
+      {/* ══════════════════════════════════════════════
+          SWEEP TAB
+      ══════════════════════════════════════════════ */}
       {activeTab === "sweep" && (
-        <LiquiditySweepPanel symbol="BTCUSDT" timeframe="1h" autoLoad={false} />
+        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+          {/* Chart with sweep markers */}
+          <ProChart mode="sweep" symbol="BTCUSDT" timeframe="1h" height={460} />
+          <LiquiditySweepPanel symbol="BTCUSDT" timeframe="1h" autoLoad={false} />
+        </div>
       )}
 
+      {/* ══════════════════════════════════════════════
+          OB STRENGTH TAB
+      ══════════════════════════════════════════════ */}
       {activeTab === "ob-strength" && (
-        <OBStrengthPanel />
+        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+          {/* Chart with OB markers */}
+          <ProChart mode="ob-strength" symbol="BTCUSDT" timeframe="1h" height={460} />
+          <OBStrengthPanel />
+        </div>
       )}
 
+      {/* ══════════════════════════════════════════════
+          POSITION SIZING TAB
+      ══════════════════════════════════════════════ */}
       {activeTab === "position" && (
         <div>
           <PositionSizingCalculator />
