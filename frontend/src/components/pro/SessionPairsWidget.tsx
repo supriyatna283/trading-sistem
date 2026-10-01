@@ -58,6 +58,7 @@ const SESSION_LABELS: Record<string, string> = {
 
 /* ─── Helpers ── */
 function fmt(price: number): string {
+  if (!isFinite(price) || price <= 0) return "--";
   if (price >= 1000)    return price.toLocaleString("en", { maximumFractionDigits: 2 });
   if (price >= 1)       return price.toFixed(4);
   if (price >= 0.001)   return price.toFixed(5);
@@ -257,7 +258,6 @@ export function SessionPairsWidget({ onSymbolSelect, compact = false }: SessionP
         "ADAUSDT","DOGEUSDT","AVAXUSDT","LINKUSDT","DOTUSDT",
         "OPUSDT","ARBUSDT","NEARUSDT","INJUSDT","PEPEUSDT",
         "SUIUSDT","TONUSDT","MATICUSDT","LTCUSDT","ATOMUSDT",
-        "BNXUSDT","TIAUSDT","FTMUSDT","APTUSDT","SEIUSDT",
       ]);
       const url = `https://api.binance.com/api/v3/ticker/24hr?symbols=${encodeURIComponent(syms)}`;
       const r = await window.fetch(url);
@@ -269,13 +269,14 @@ export function SessionPairsWidget({ onSymbolSelect, compact = false }: SessionP
         for (const t of arr) {
           const newPrice  = parseFloat(t.lastPrice);
           const newChange = parseFloat(t.priceChangePercent);
+          if (!isFinite(newPrice) || newPrice <= 0) continue;
           const old = prev[t.symbol];
 
           let flash: "up" | "down" | null = null;
           if (old && Math.abs(newPrice - old.price) > 0) {
             flash = newPrice > old.price ? "up" : "down";
           }
-          next[t.symbol] = { price: newPrice, change: newChange, flash };
+          next[t.symbol] = { price: newPrice, change: isFinite(newChange) ? newChange : 0, flash };
 
           if (flash) {
             clearTimeout(flashTimers.current[t.symbol]);

@@ -19,6 +19,7 @@ interface TickerData {
 }
 
 function fmt(price: number): string {
+  if (!isFinite(price) || price <= 0) return "--";
   if (price >= 10000) return price.toLocaleString("en", { maximumFractionDigits: 0 });
   if (price >= 100)   return price.toLocaleString("en", { maximumFractionDigits: 2 });
   if (price >= 1)     return price.toFixed(4);
@@ -54,6 +55,7 @@ export function LiveTickerBar() {
               if (!TICKER_SYMBOLS.includes(t.s)) continue;
               const newPrice  = parseFloat(t.c);
               const newChange = parseFloat(t.P);
+              if (!isFinite(newPrice) || newPrice <= 0) continue;
               const old = prev[t.s];
 
               let flash: "up" | "down" | null = null;
@@ -99,6 +101,7 @@ export function LiveTickerBar() {
         for (const t of arr) {
           const newPrice  = parseFloat(t.lastPrice);
           const newChange = parseFloat(t.priceChangePercent);
+          if (!isFinite(newPrice) || newPrice <= 0) continue;
           const old = prev[t.symbol];
           let flash: "up" | "down" | null = null;
           if (old && Math.abs(newPrice - old.price) > 0) flash = newPrice > old.price ? "up" : "down";
@@ -133,7 +136,7 @@ export function LiveTickerBar() {
 
   const ordered = TICKER_SYMBOLS
     .map(s => tickers[s])
-    .filter(Boolean) as TickerData[];
+    .filter((t): t is TickerData => !!t && isFinite(t.price) && t.price > 0);
 
   // Duplicate list for seamless infinite scroll
   const doubled = [...ordered, ...ordered];
