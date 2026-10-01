@@ -3,6 +3,7 @@
 import { Toaster } from "react-hot-toast";
 import Sidebar from "./Sidebar";
 import ApiStatusBanner from "@/components/ui/ApiStatusBanner";
+import { LiveTickerBar } from "./LiveTickerBar";
 import { useState, useEffect } from "react";
 import { Menu } from "lucide-react";
 
@@ -52,6 +53,9 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
             }
           }
         `}} />
+        {/* ── Live Price Ticker ── */}
+        <LiveTickerBar />
+
         <div className="responsive-main" style={{ minHeight: "100vh", transition: "all 0.22s cubic-bezier(.4,0,.2,1)" }}>
           {/* Mobile Header (Hamburger) */}
           <div className="md:hidden flex items-center justify-between mb-6 pb-4 border-b border-white/5">
