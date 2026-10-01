@@ -25,6 +25,7 @@ import {
   Waves,
   DollarSign,
   Crosshair,
+  Rocket,
 } from "lucide-react";
 
 const NAV_GROUPS = [
@@ -39,7 +40,8 @@ const NAV_GROUPS = [
       { href: "/market-intel", label: "Market Intel", icon: Brain, color: "#f59e0b" },
       { href: "/ai-performance", label: "AI Performance", icon: Activity, color: "#10b981" },
       { href: "/whale-tracker", label: "Whale Tracker", icon: Waves, color: "#06b6d4" },
-      { href: "/pro-tools",    label: "Pro Tools ⚡",  icon: Crosshair, color: "#ef4444" },
+      { href: "/pro-tools",    label: "Pro Tools ⚡",    icon: Crosshair, color: "#ef4444" },
+      { href: "/advanced",     label: "Advanced Suite 🚀", icon: Rocket,    color: "#a78bfa" },
     ],
   },
   {

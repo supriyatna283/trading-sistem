@@ -39,6 +39,7 @@ from app.routers import (
     notes,
     whale_scoring,
     pro_tools,
+    advanced_tools,
 )
 from app.services.auto_scheduler import run_scheduler, stop_scheduler, scheduler_state
 from app.services.whale_detector import start_whale_pollers, stop_whale_pollers
@@ -214,6 +215,7 @@ app.include_router(whale_api.router)
 app.include_router(notes.router)
 app.include_router(whale_scoring.router)
 app.include_router(pro_tools.router)
+app.include_router(advanced_tools.router)
 
 
 @app.get("/")
