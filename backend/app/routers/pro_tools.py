@@ -22,17 +22,19 @@ from app.engines.ob_strength import OBStrengthMeter
 from app.engines.position_sizing import PositionSizingEngine
 from app.engines.market_data import MarketDataEngine
 from app.engines.smart_money import SmartMoneyConceptsEngine
+from app.engines.fvg_breaker import FVGBreakerEngine
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/pro", tags=["Pro Tools — Sprint 1"])
 
 # Engine singletons
-_pd_engine   = PDZoneEngine()
+_pd_engine    = PDZoneEngine()
 _sweep_engine = LiquiditySweepEngine()
-_ob_meter    = OBStrengthMeter()
-_size_engine = PositionSizingEngine()
-_data_engine = MarketDataEngine()
-_smc_engine  = SmartMoneyConceptsEngine()
+_ob_meter     = OBStrengthMeter()
+_size_engine  = PositionSizingEngine()
+_data_engine  = MarketDataEngine()
+_smc_engine   = SmartMoneyConceptsEngine()
+_fvg_engine   = FVGBreakerEngine()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -449,3 +451,39 @@ async def get_full_sprint1_analysis(req: FullAnalysisRequest):
     except Exception as e:
         logger.exception("Full Sprint 1 analysis error")
         return {"error": str(e), "symbol": req.symbol}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FVG + BREAKER BLOCK endpoint
+# ─────────────────────────────────────────────────────────────────────────────
+
+class FVGRequest(BaseModel):
+    symbol: str = Field(..., example="BTCUSDT")
+    timeframe: str = Field("1h", example="1h")
+    limit: int = Field(150, ge=30, le=300)
+
+
+@router.post("/fvg-breaker")
+async def get_fvg_breaker(req: FVGRequest):
+    """
+    Fair Value Gap (FVG) + Breaker Block detection.
+    - Detects all bullish/bearish FVGs (3-candle imbalance)
+    - Identifies IFVG (Inversion FVG) when price mitigates through
+    - Detects Consequent Encroachment (CE) level for each FVG
+    - Finds Breaker Blocks (failed OBs that reversed)
+    - Returns nearest key levels to current price
+    """
+    try:
+        df = await _data_engine.get_candles(req.symbol, req.timeframe, limit=req.limit)
+        if df is None or df.empty:
+            return {"error": "No candle data", "symbol": req.symbol}
+
+        result = _fvg_engine.analyze(df)
+        return {
+            "symbol":    req.symbol,
+            "timeframe": req.timeframe,
+            **_fvg_engine.to_dict(result),
+        }
+    except Exception as e:
+        logger.exception("FVG/Breaker error")
+        return {"error": str(e)}

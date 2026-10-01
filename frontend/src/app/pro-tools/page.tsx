@@ -7,16 +7,18 @@ import { LiquiditySweepPanel } from "@/components/pro/LiquiditySweepPanel";
 import { OBStrengthPanel } from "@/components/pro/OBStrengthPanel";
 import { PositionSizingCalculator } from "@/components/pro/PositionSizingCalculator";
 import { ProChart } from "@/components/pro/ProChart";
+import { FVGBreakerPanel } from "@/components/pro/FVGBreakerPanel";
 import { useState } from "react";
 
-type Tab = "killzone" | "pd-zones" | "sweep" | "ob-strength" | "position";
+type Tab = "killzone" | "pd-zones" | "sweep" | "ob-strength" | "fvg-breaker" | "position";
 
 const TABS: { id: Tab; label: string; icon: string; desc: string; color: string }[] = [
-  { id: "killzone",    label: "Killzone Timer",   icon: "🎯", desc: "ICT session tracker",          color: "#10b981" },
-  { id: "pd-zones",   label: "P/D Zones",         icon: "📊", desc: "Premium & Discount arrays",    color: "#3b82f6" },
-  { id: "sweep",      label: "Liquidity Sweep",   icon: "🌊", desc: "Market maker sweep detector",  color: "#ef4444" },
-  { id: "ob-strength",label: "OB Strength",       icon: "🧱", desc: "Order block quality scoring",  color: "#f59e0b" },
-  { id: "position",   label: "Position Sizing",   icon: "⚖️", desc: "Kelly criterion calculator",   color: "#a78bfa" },
+  { id: "killzone",    label: "Killzone Timer",       icon: "🎯", desc: "ICT session tracker",                    color: "#10b981" },
+  { id: "pd-zones",   label: "P/D Zones",             icon: "📊", desc: "Premium & Discount arrays",              color: "#3b82f6" },
+  { id: "sweep",      label: "Liquidity Sweep",       icon: "🌊", desc: "Market maker sweep detector",            color: "#ef4444" },
+  { id: "ob-strength",label: "OB Strength",           icon: "🧱", desc: "Order block quality scoring",            color: "#f59e0b" },
+  { id: "fvg-breaker",label: "FVG + Breaker",         icon: "⬜", desc: "Fair Value Gap & Breaker Block (ICT)",  color: "#6366f1" },
+  { id: "position",   label: "Position Sizing",       icon: "⚖️", desc: "Kelly criterion calculator",             color: "#a78bfa" },
 ];
 
 export default function ProToolsPage() {
@@ -228,6 +230,54 @@ export default function ProToolsPage() {
           {/* Chart with OB markers */}
           <ProChart mode="ob-strength" symbol="BTCUSDT" timeframe="1h" height={460} />
           <OBStrengthPanel />
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════
+          FVG + BREAKER BLOCK TAB
+      ══════════════════════════════════════════════ */}
+      {activeTab === "fvg-breaker" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+          {/* FVG panel */}
+          <FVGBreakerPanel />
+
+          {/* Theory explanation */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+            <div style={{ padding: 20, borderRadius: 14, background: "rgba(99,102,241,0.05)", border: "1px solid rgba(99,102,241,0.15)" }}>
+              <div style={{ fontWeight: 800, fontSize: "0.88rem", marginBottom: 12, color: "#6366f1" }}>⬜ Fair Value Gap (FVG)</div>
+              <p style={{ fontSize: "0.74rem", color: "var(--text-muted)", lineHeight: 1.7, margin: 0 }}>
+                FVG terbentuk saat <strong style={{ color: "#fff" }}>3 candle berurutan</strong> menciptakan gap antara
+                high candle[i-1] dan low candle[i+1]. Gap ini adalah <em>ketidakseimbangan</em> — Smart Money meninggalkan
+                area ini kosong. Price cenderung <strong style={{ color: "#6366f1" }}>kembali ke FVG</strong> sebelum melanjutkan.
+              </p>
+              <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+                {[
+                  { label: "CE Level (50%)", desc: "Consequent Encroachment — titik 50% gap. Entry paling presisi untuk Smart Money.", color: "#f59e0b" },
+                  { label: "IFVG (Inversion)", desc: "FVG yang ditembus price sepenuhnya — berbalik peran jadi zone berlawanan.", color: "#a78bfa" },
+                  { label: "Institutional FVG", desc: "Gap > 1.5x ATR — imbalance besar dari order institusi, magnet paling kuat.", color: "#6366f1" },
+                ].map(({ label, desc, color }) => (
+                  <div key={label} style={{ padding: "8px 10px", borderRadius: 8, background: `${color}08`, border: `1px solid ${color}20` }}>
+                    <div style={{ fontSize: "0.7rem", fontWeight: 800, color, marginBottom: 2 }}>{label}</div>
+                    <div style={{ fontSize: "0.63rem", color: "var(--text-muted)", lineHeight: 1.5 }}>{desc}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div style={{ padding: 20, borderRadius: 14, background: "rgba(245,158,11,0.05)", border: "1px solid rgba(245,158,11,0.15)" }}>
+              <div style={{ fontWeight: 800, fontSize: "0.88rem", marginBottom: 12, color: "#f59e0b" }}>🧱 Breaker Block</div>
+              <p style={{ fontSize: "0.74rem", color: "var(--text-muted)", lineHeight: 1.7, margin: 0 }}>
+                Breaker adalah <strong style={{ color: "#fff" }}>Order Block yang gagal</strong> — saat OB ditembus dengan momentum
+                kuat, area tersebut berbalik fungsi. Bullish OB yang dibreak ke bawah → <strong style={{ color: "#ef4444" }}>Bearish Breaker</strong>.
+                Bearish OB yang dibreak ke atas → <strong style={{ color: "#10b981" }}>Bullish Breaker</strong>.
+              </p>
+              <div style={{ marginTop: 12, padding: "10px 14px", borderRadius: 8, background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.2)", fontSize: "0.72rem", color: "#f59e0b" }}>
+                💡 ICT Rule: Pullback ke Breaker setelah breakout = <strong>entry searah breakout</strong>. Setup dengan RR tertinggi (sering 1:5+)
+              </div>
+              <div style={{ marginTop: 10, padding: "10px 14px", borderRadius: 8, background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.15)", fontSize: "0.7rem", color: "#10b981" }}>
+                🏆 A+ Setup: Bullish FVG + Bullish Breaker + Discount Zone + London Killzone = Full ICT confluence
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
