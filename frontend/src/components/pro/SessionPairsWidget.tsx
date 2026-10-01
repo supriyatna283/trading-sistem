@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { API_URL } from "@/lib/utils";
 
 /* ─────────────────────────────────────────────────────────
@@ -91,19 +91,30 @@ function SessionTab({ id, active, onClick }: { id: string; active: boolean; onCl
 
 /* ─── Pair Row ── */
 function PairRow({
-  pair, rank, maxVol, onSelect, selected,
+  pair, rank, maxVol, onSelect, selected, livePrice,
 }: {
   pair: PairData;
   rank: number;
   maxVol: number;
   onSelect: (sym: string) => void;
   selected: boolean;
+  livePrice?: { price: number; change: number; flash: "up" | "down" | null };
 }) {
-  const isGreen = pair.change_24h >= 0;
+  // Prefer WebSocket live data over REST snapshot
+  const price    = livePrice?.price  ?? pair.price;
+  const change   = livePrice?.change ?? pair.change_24h;
+  const flash    = livePrice?.flash;
+  const isGreen = change >= 0;
   const changeColor = isGreen ? "#10b981" : "#ef4444";
   const volPct = maxVol > 0 ? (pair.volume_24h_usd / maxVol) * 100 : 0;
   const isPrimary = pair.session_relevance === "PRIMARY";
-  const isSecondary = pair.session_relevance === "SECONDARY";
+
+  // Flash background color for price change
+  const flashBg = flash === "up"
+    ? "rgba(16,185,129,0.12)"
+    : flash === "down"
+      ? "rgba(239,68,68,0.12)"
+      : undefined;
 
   return (
     <div
@@ -117,11 +128,11 @@ function PairRow({
         borderRadius: 10,
         cursor: "pointer",
         transition: "background 0.15s",
-        background: selected
+        background: flashBg ?? (selected
           ? "rgba(59,130,246,0.08)"
           : isPrimary
             ? "rgba(255,255,255,0.025)"
-            : "transparent",
+            : "transparent"),
         border: `1px solid ${selected ? "rgba(59,130,246,0.3)" : isPrimary ? "rgba(255,255,255,0.05)" : "transparent"}`,
         marginBottom: 4,
       }}
@@ -156,17 +167,21 @@ function PairRow({
         </div>
       </div>
 
-      {/* Price */}
-      <div style={{ textAlign: "right", fontFamily: "monospace", fontSize: "0.75rem", fontWeight: 700 }}>
-        {fmt(pair.price)}
+      {/* Price — real-time via WS */}
+      <div style={{
+        textAlign: "right", fontFamily: "monospace", fontSize: "0.75rem", fontWeight: 700,
+        color: flash === "up" ? "#10b981" : flash === "down" ? "#ef4444" : "#fff",
+        transition: "color 0.3s",
+      }}>
+        {fmt(price)}
       </div>
 
-      {/* Change */}
+      {/* Change — real-time */}
       <div style={{
         textAlign: "right", fontFamily: "monospace", fontSize: "0.75rem", fontWeight: 800,
         color: changeColor,
       }}>
-        {isGreen ? "+" : ""}{pair.change_24h.toFixed(2)}%
+        {isGreen ? "+" : ""}{change.toFixed(2)}%
       </div>
 
       {/* 24h range mini-bar */}
@@ -193,6 +208,9 @@ interface SessionPairsWidgetProps {
   compact?: boolean;
 }
 
+// Real-time price overrides from WebSocket
+type PriceMap = Record<string, { price: number; change: number; flash: "up" | "down" | null }>;
+
 export function SessionPairsWidget({ onSymbolSelect, compact = false }: SessionPairsWidgetProps) {
   const [data, setData] = useState<SessionPairsData | null>(null);
   const [loading, setLoading] = useState(false);
@@ -200,8 +218,13 @@ export function SessionPairsWidget({ onSymbolSelect, compact = false }: SessionP
   const [selected, setSelected] = useState<string>("");
   const [filter, setFilter] = useState<"ALL" | "KZ" | "TOP10">("ALL");
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
+  const [prices, setPrices] = useState<PriceMap>({});
+  const [wsStatus, setWsStatus] = useState<"connecting" | "live" | "error" | "off">("off");
+  const wsRef = useRef<WebSocket | null>(null);
+  const flashTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
-  const fetch = useCallback(async (sessionOverride?: string) => {
+  /* ── REST fetch (volume + session metadata, every 60s) ── */
+  const fetchData = useCallback(async (sessionOverride?: string) => {
     setLoading(true);
     try {
       const params = new URLSearchParams({ top_n: "25" });
@@ -218,12 +241,82 @@ export function SessionPairsWidget({ onSymbolSelect, compact = false }: SessionP
     }
   }, []);
 
-  // Auto-fetch on mount, then every 60s
   useEffect(() => {
-    fetch(viewSession ?? undefined);
-    const id = setInterval(() => fetch(viewSession ?? undefined), 60_000);
+    fetchData(viewSession ?? undefined);
+    const id = setInterval(() => fetchData(viewSession ?? undefined), 60_000);
     return () => clearInterval(id);
-  }, [viewSession, fetch]);
+  }, [viewSession, fetchData]);
+
+  /* ── Binance WebSocket: !miniTicker@arr → real-time price every ~1s ── */
+  useEffect(() => {
+    // Binance public stream — no auth needed
+    const WS_URL = "wss://stream.binance.com:9443/ws/!miniTicker@arr";
+
+    const connect = () => {
+      try {
+        setWsStatus("connecting");
+        const ws = new WebSocket(WS_URL);
+        wsRef.current = ws;
+
+        ws.onopen = () => setWsStatus("live");
+
+        ws.onmessage = (evt) => {
+          try {
+            const tickers: Array<{
+              s: string;  // symbol
+              c: string;  // close/last price
+              P: string;  // price change percent
+            }> = JSON.parse(evt.data);
+
+            if (!Array.isArray(tickers)) return;
+
+            setPrices(prev => {
+              const next = { ...prev };
+              for (const t of tickers) {
+                if (!t.s.endsWith("USDT")) continue;
+                const newPrice  = parseFloat(t.c);
+                const newChange = parseFloat(t.P);
+                const old = prev[t.s];
+
+                // Determine flash direction
+                let flash: "up" | "down" | null = null;
+                if (old && Math.abs(newPrice - old.price) > 0) {
+                  flash = newPrice > old.price ? "up" : "down";
+                }
+
+                next[t.s] = { price: newPrice, change: newChange, flash };
+
+                // Clear flash after 400ms
+                if (flash) {
+                  clearTimeout(flashTimers.current[t.s]);
+                  flashTimers.current[t.s] = setTimeout(() => {
+                    setPrices(p => ({ ...p, [t.s]: { ...p[t.s], flash: null } }));
+                  }, 400);
+                }
+              }
+              return next;
+            });
+          } catch {}
+        };
+
+        ws.onerror = () => setWsStatus("error");
+        ws.onclose = () => {
+          setWsStatus("off");
+          // Reconnect after 5s if closed unexpectedly
+          setTimeout(connect, 5000);
+        };
+      } catch {
+        setWsStatus("error");
+      }
+    };
+
+    connect();
+
+    return () => {
+      wsRef.current?.close();
+      Object.values(flashTimers.current).forEach(clearTimeout);
+    };
+  }, []);
 
   const handleSelect = useCallback((sym: string) => {
     setSelected(sym);
@@ -331,7 +424,7 @@ export function SessionPairsWidget({ onSymbolSelect, compact = false }: SessionP
       {/* ── Session Selector ── */}
       <div style={{ display: "flex", gap: 5, marginBottom: 12, overflowX: "auto", padding: "2px 0" }}>
         <button
-          onClick={() => { setViewSession(null); fetch(undefined); }}
+          onClick={() => { setViewSession(null); fetchData(undefined); }}
           style={{
             padding: "6px 12px", borderRadius: 8, fontSize: "0.72rem", fontWeight: 700,
             cursor: "pointer", whiteSpace: "nowrap",
@@ -346,11 +439,11 @@ export function SessionPairsWidget({ onSymbolSelect, compact = false }: SessionP
           <SessionTab
             key={s} id={s}
             active={viewSession === s}
-            onClick={() => { setViewSession(s); fetch(s); }}
+            onClick={() => { setViewSession(s); fetchData(s); }}
           />
         ))}
         <button
-          onClick={() => fetch(viewSession ?? undefined)}
+          onClick={() => fetchData(viewSession ?? undefined)}
           disabled={loading}
           style={{ marginLeft: "auto", padding: "6px 12px", borderRadius: 8, fontSize: "0.7rem", fontWeight: 700, cursor: "pointer", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "var(--text-muted)" }}
         >
@@ -372,8 +465,17 @@ export function SessionPairsWidget({ onSymbolSelect, compact = false }: SessionP
             </button>
           ))}
         </div>
-        <div style={{ fontSize: "0.6rem", color: "var(--text-muted)", marginLeft: "auto" }}>
-          {visiblePairs.length} pairs · <span style={{ color: "#f59e0b" }}>★ KZ</span> = Killzone favorite
+        <div style={{ fontSize: "0.6rem", color: "var(--text-muted)", marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
+          {/* WebSocket status badge */}
+          <span style={{
+            fontSize: "0.58rem", padding: "1px 7px", borderRadius: 4, fontWeight: 800,
+            background: wsStatus === "live" ? "rgba(16,185,129,0.12)" : wsStatus === "connecting" ? "rgba(245,158,11,0.12)" : "rgba(239,68,68,0.12)",
+            color:      wsStatus === "live" ? "#10b981"               : wsStatus === "connecting" ? "#f59e0b"               : "#ef4444",
+            border:     `1px solid ${wsStatus === "live" ? "rgba(16,185,129,0.3)" : wsStatus === "connecting" ? "rgba(245,158,11,0.3)" : "rgba(239,68,68,0.3)"}`,
+          }}>
+            {wsStatus === "live" ? "● WS LIVE" : wsStatus === "connecting" ? "⟳ WS" : "○ WS OFF"}
+          </span>
+          {visiblePairs.length} pairs · <span style={{ color: "#f59e0b" }}>★ KZ</span>
         </div>
       </div>
 
@@ -407,6 +509,7 @@ export function SessionPairsWidget({ onSymbolSelect, compact = false }: SessionP
               maxVol={maxVol}
               selected={selected === pair.symbol}
               onSelect={handleSelect}
+              livePrice={prices[pair.symbol]}
             />
           ))}
         </div>
