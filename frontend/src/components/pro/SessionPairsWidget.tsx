@@ -247,9 +247,59 @@ export function SessionPairsWidget({ onSymbolSelect, compact = false }: SessionP
     return () => clearInterval(id);
   }, [viewSession, fetchData]);
 
+  /* ── Direct Binance REST price fetch (every 5s) — bypasses backend ── */
+  /* This is the PRIMARY price source; WS layered on top for 1s updates  */
+  const fetchBinancePrices = useCallback(async () => {
+    try {
+      // Fetch only the symbols we display — much faster than full ticker
+      const syms = JSON.stringify([
+        "BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT",
+        "ADAUSDT","DOGEUSDT","AVAXUSDT","LINKUSDT","DOTUSDT",
+        "OPUSDT","ARBUSDT","NEARUSDT","INJUSDT","PEPEUSDT",
+        "SUIUSDT","TONUSDT","MATICUSDT","LTCUSDT","ATOMUSDT",
+        "BNXUSDT","TIAUSDT","FTMUSDT","APTUSDT","SEIUSDT",
+      ]);
+      const url = `https://api.binance.com/api/v3/ticker/24hr?symbols=${encodeURIComponent(syms)}`;
+      const r = await window.fetch(url);
+      if (!r.ok) return;
+      const arr: Array<{ symbol: string; lastPrice: string; priceChangePercent: string; highPrice: string; lowPrice: string }> = await r.json();
+
+      setPrices(prev => {
+        const next = { ...prev };
+        for (const t of arr) {
+          const newPrice  = parseFloat(t.lastPrice);
+          const newChange = parseFloat(t.priceChangePercent);
+          const old = prev[t.symbol];
+
+          let flash: "up" | "down" | null = null;
+          if (old && Math.abs(newPrice - old.price) > 0) {
+            flash = newPrice > old.price ? "up" : "down";
+          }
+          next[t.symbol] = { price: newPrice, change: newChange, flash };
+
+          if (flash) {
+            clearTimeout(flashTimers.current[t.symbol]);
+            flashTimers.current[t.symbol] = setTimeout(() => {
+              setPrices(p => p[t.symbol] ? { ...p, [t.symbol]: { ...p[t.symbol], flash: null } } : p);
+            }, 500);
+          }
+        }
+        return next;
+      });
+    } catch {
+      // Silent — WS will cover if REST fails
+    }
+  }, []);
+
+  useEffect(() => {
+    // Fetch immediately on mount, then every 5 seconds
+    fetchBinancePrices();
+    const id = setInterval(fetchBinancePrices, 5_000);
+    return () => clearInterval(id);
+  }, [fetchBinancePrices]);
+
   /* ── Binance WebSocket: !miniTicker@arr → real-time price every ~1s ── */
   useEffect(() => {
-    // Binance public stream — no auth needed
     const WS_URL = "wss://stream.binance.com:9443/ws/!miniTicker@arr";
 
     const connect = () => {
@@ -262,12 +312,7 @@ export function SessionPairsWidget({ onSymbolSelect, compact = false }: SessionP
 
         ws.onmessage = (evt) => {
           try {
-            const tickers: Array<{
-              s: string;  // symbol
-              c: string;  // close/last price
-              P: string;  // price change percent
-            }> = JSON.parse(evt.data);
-
+            const tickers: Array<{ s: string; c: string; P: string }> = JSON.parse(evt.data);
             if (!Array.isArray(tickers)) return;
 
             setPrices(prev => {
@@ -278,15 +323,12 @@ export function SessionPairsWidget({ onSymbolSelect, compact = false }: SessionP
                 const newChange = parseFloat(t.P);
                 const old = prev[t.s];
 
-                // Determine flash direction
                 let flash: "up" | "down" | null = null;
                 if (old && Math.abs(newPrice - old.price) > 0) {
                   flash = newPrice > old.price ? "up" : "down";
                 }
-
                 next[t.s] = { price: newPrice, change: newChange, flash };
 
-                // Clear flash after 400ms
                 if (flash) {
                   clearTimeout(flashTimers.current[t.s]);
                   flashTimers.current[t.s] = setTimeout(() => {
@@ -302,7 +344,6 @@ export function SessionPairsWidget({ onSymbolSelect, compact = false }: SessionP
         ws.onerror = () => setWsStatus("error");
         ws.onclose = () => {
           setWsStatus("off");
-          // Reconnect after 5s if closed unexpectedly
           setTimeout(connect, 5000);
         };
       } catch {

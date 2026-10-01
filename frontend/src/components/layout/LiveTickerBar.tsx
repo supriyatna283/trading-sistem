@@ -61,21 +61,12 @@ export function LiveTickerBar() {
                 flash = newPrice > old.price ? "up" : "down";
               }
 
-              next[t.s] = {
-                symbol: t.s,
-                base: t.s.replace("USDT", ""),
-                price: newPrice,
-                change: newChange,
-                flash,
-              };
+              next[t.s] = { symbol: t.s, base: t.s.replace("USDT", ""), price: newPrice, change: newChange, flash };
 
               if (flash) {
                 clearTimeout(flashTimers.current[t.s]);
                 flashTimers.current[t.s] = setTimeout(() => {
-                  setTickers(p => p[t.s]
-                    ? { ...p, [t.s]: { ...p[t.s], flash: null } }
-                    : p
-                  );
+                  setTickers(p => p[t.s] ? { ...p, [t.s]: { ...p[t.s], flash: null } } : p);
                 }, 500);
               }
             }
@@ -85,15 +76,43 @@ export function LiveTickerBar() {
       };
 
       ws.onerror = () => setWsStatus("error");
-
       ws.onclose = () => {
         setWsStatus("off");
-        // Auto-reconnect after 4s
         reconnectTimer.current = setTimeout(connect, 4000);
       };
     } catch {
       setWsStatus("error");
     }
+  }, []);
+
+  /* ── Direct Binance REST fetch (primary price source, every 5s) ── */
+  const fetchRestPrices = useCallback(async () => {
+    try {
+      const syms = JSON.stringify(TICKER_SYMBOLS);
+      const url = `https://api.binance.com/api/v3/ticker/24hr?symbols=${encodeURIComponent(syms)}`;
+      const r = await window.fetch(url);
+      if (!r.ok) return;
+      const arr: Array<{ symbol: string; lastPrice: string; priceChangePercent: string }> = await r.json();
+
+      setTickers(prev => {
+        const next = { ...prev };
+        for (const t of arr) {
+          const newPrice  = parseFloat(t.lastPrice);
+          const newChange = parseFloat(t.priceChangePercent);
+          const old = prev[t.symbol];
+          let flash: "up" | "down" | null = null;
+          if (old && Math.abs(newPrice - old.price) > 0) flash = newPrice > old.price ? "up" : "down";
+          next[t.symbol] = { symbol: t.symbol, base: t.symbol.replace("USDT",""), price: newPrice, change: newChange, flash };
+          if (flash) {
+            clearTimeout(flashTimers.current[t.symbol]);
+            flashTimers.current[t.symbol] = setTimeout(() => {
+              setTickers(p => p[t.symbol] ? { ...p, [t.symbol]: { ...p[t.symbol], flash: null } } : p);
+            }, 500);
+          }
+        }
+        return next;
+      });
+    } catch {}
   }, []);
 
   useEffect(() => {
@@ -104,6 +123,13 @@ export function LiveTickerBar() {
       Object.values(flashTimers.current).forEach(clearTimeout);
     };
   }, [connect]);
+
+  // Fetch live prices immediately from Binance REST, then every 5s
+  useEffect(() => {
+    fetchRestPrices();
+    const id = setInterval(fetchRestPrices, 5_000);
+    return () => clearInterval(id);
+  }, [fetchRestPrices]);
 
   const ordered = TICKER_SYMBOLS
     .map(s => tickers[s])
