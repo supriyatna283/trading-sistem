@@ -108,15 +108,48 @@ export function WAAlertConfigPanel() {
     setLoading(false);
   };
 
+  /* ── Build a test message locally (no backend dependency) ── */
+  const buildTestMessage = (cfg: AlertConfig) => {
+    return (
+      `✅ *TEST ALERT — TradingSistem WA Aktif!*\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `🎉 Koneksi WhatsApp berhasil!\n\n` +
+      `📱 *Alert yang kamu aktifkan:*\n` +
+      (cfg.composite_score ? `  • 🎯 ICT Setup A/A+ grade\n` : ``) +
+      (cfg.fvg_hit         ? `  • ⬜ FVG hit alert (CE level)\n` : ``) +
+      (cfg.sweep_confirmed ? `  • 🌊 Liquidity sweep confirmed\n` : ``) +
+      (cfg.killzone_start  ? `  • 🗽 Killzone start reminder\n` : ``) +
+      (cfg.daily_brief     ? `  • 🌅 Daily brief (London open)\n` : ``) +
+      `\n⚙️ *Konfigurasi:*\n` +
+      `  Min score: ${cfg.min_score}/100\n` +
+      `  Min grade: ${cfg.min_grade}\n` +
+      `  Cooldown: ${cfg.cooldown_hours}h | Max: ${cfg.max_per_hour}/jam\n` +
+      `  Only killzone: ${cfg.only_killzone ? "Ya" : "Tidak"}\n\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `_TradingSistem · ICT Methodology_`
+    );
+  };
+
   const handleTest = async () => {
     if (!phone) { setTestStatus({ ok: false, message: "Masukkan nomor HP terlebih dahulu" }); return; }
     setLoading(true);
     setTestStatus(null);
     try {
-      const r = await fetch(`${API_URL}/api/v1/alerts/test?phone=${phone}`, { method: "POST" });
+      const message = buildTestMessage(config);
+      // Kirim via Next.js API route (Vercel) — API key aman di server
+      const r = await fetch(`/api/send-wa`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ number: phone, message }),
+      });
       const data = await r.json();
-      setTestStatus({ ok: data.ok, message: data.ok ? "✅ Test berhasil! Cek WA kamu." : `❌ ${data.detail || "Gagal kirim"}` });
-      if (data.preview) setPreview(data.preview);
+      setTestStatus({
+        ok: data.ok,
+        message: data.ok
+          ? `✅ Test berhasil! (${data.messageId || data.detail}) — Cek WA kamu.`
+          : `❌ ${data.detail || "Gagal kirim"}`,
+      });
+      if (data.ok) setPreview(message);
     } catch (e: any) {
       setTestStatus({ ok: false, message: `Error: ${e.message}` });
     }
@@ -410,13 +443,13 @@ export function WAAlertConfigPanel() {
       {/* ══ TEST TAB ══ */}
       {activeTab === "test" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          <div style={{ padding: "16px 20px", borderRadius: 12, background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.2)", fontSize: "0.72rem", color: "var(--text-muted)", lineHeight: 1.6 }}>
-            💡 <strong style={{ color: "#f59e0b" }}>Cara konfigurasi WA API:</strong><br/>
-            Set environment variable di backend:<br/>
-            <code style={{ fontFamily: "monospace", fontSize: "0.68rem", color: "#fff" }}>
-              WA_PROVIDER=fonnte (atau wablas/twilio/waha)<br/>
-              WA_API_KEY=your_token_here<br/>
-              WA_FROM=no_pengirim (jika diperlukan)
+          <div style={{ padding: "16px 20px", borderRadius: 12, background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.2)", fontSize: "0.72rem", color: "var(--text-muted)", lineHeight: 1.8 }}>
+            ✅ <strong style={{ color: "#10b981" }}>WA sudah dikonfigurasi via senderme.my.id</strong><br/>
+            Set di <strong style={{ color: "#fff" }}>Vercel Dashboard → Settings → Environment Variables:</strong><br/>
+            <code style={{ fontFamily: "monospace", fontSize: "0.68rem", color: "#94a3b8", display: "block", marginTop: 6, padding: "8px", background: "rgba(0,0,0,0.2)", borderRadius: 6, lineHeight: 2 }}>
+              WA_API_KEY = wa_key_787f15b9ce664d8fb98a426befba34ca<br/>
+              WA_API_URL = https://senderme.my.id/api/send-message<br/>
+              WA_OWNER_PHONE = 6281112300343
             </code>
           </div>
 
@@ -433,20 +466,24 @@ export function WAAlertConfigPanel() {
                     if (!phone) { alert("Masukkan nomor HP dulu!"); return; }
                     setLoading(true);
                     try {
-                      const r = await fetch(`${API_URL}/api/v1/alerts/send`, {
+                      // Build preview from backend (no WA send)
+                      const previewResp = await fetch(`${API_URL}/api/v1/alerts/preview/${at.id}?symbol=BTCUSDT&score=85&grade=A%2B&entry=67000&sl=66500&tp1=68500&tp2=70000&rr=3.0`);
+                      const previewData = await previewResp.json();
+                      const message = previewData.preview || `[${at.label} alert]`;
+
+                      // Send via Vercel proxy (API key server-side)
+                      const r = await fetch(`/api/send-wa`, {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                          phone, alert_type: at.id, symbol: "BTCUSDT",
-                          score: 85, grade: "A+",
-                          entry: 67000, sl: 66500, tp1: 68500, tp2: 70000, rr: 3.0,
-                        }),
+                        body: JSON.stringify({ number: phone, message }),
                       });
                       const d = await r.json();
-                      if (d.preview) setPreview(d.preview);
+                      setPreview(message);
                       setActiveTab("preview");
                       setTestStatus({ ok: d.ok, message: d.ok ? `✅ ${at.label} terkirim!` : `❌ ${d.detail}` });
-                    } catch {}
+                    } catch (e: any) {
+                      setTestStatus({ ok: false, message: `Error: ${e.message}` });
+                    }
                     setLoading(false);
                   }}
                   disabled={loading}
