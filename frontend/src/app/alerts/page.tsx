@@ -4,6 +4,7 @@ import MainLayout from "@/components/layout/MainLayout";
 import { notifyApiError } from "@/components/ui/ApiStatusBanner";
 import { api, type AlertRecord } from "@/lib/api";
 import { useCallback, useEffect, useState } from "react";
+import { WAAlertConfigPanel } from "@/components/alerts/WAAlertConfigPanel";
 
 const typeColors: Record<string, string> = {
   SETUP: "var(--accent-blue)",
@@ -300,6 +301,11 @@ function AlertSettingsPanel({
       <p style={{ fontSize: "0.68rem", color: "var(--text-muted)", marginTop: 16, lineHeight: 1.5 }}>
         Web alerts via WebSocket. Telegram butuh <code>TELEGRAM_BOT_TOKEN</code> di backend. Email butuh SMTP di <code>.env</code>.
       </p>
+
+      {/* ── WhatsApp Alert Config ── */}
+      <div style={{ marginTop: 28, paddingTop: 28, borderTop: "1px solid var(--border)" }}>
+        <WAAlertConfigPanel />
+      </div>
     </div>
   );
 }
