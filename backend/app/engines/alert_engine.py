@@ -130,6 +130,10 @@ class ICTAlertEngine:
         if not config.enabled:
             return None
 
+        # ── TEST alert bypasses ALL filters ────────────────────────────────
+        if alert_type == AlertType.TEST:
+            return self._build_alert(AlertType.TEST, symbol, "INFO", 100, "NY_OPEN", data)
+
         # ── Grade / Score filter ───────────────────────────────────────────
         score = data.get("score", 0)
         grade = data.get("grade", "C")

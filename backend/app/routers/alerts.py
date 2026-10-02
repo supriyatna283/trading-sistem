@@ -80,11 +80,28 @@ async def send_test_alert(phone: str = Query(..., description="Phone e.g. 628123
     dummy_cfg = AlertConfig(
         phone=phone, enabled=True, only_killzone=False,
         min_score=0, min_grade="C", cooldown_hours=0, max_per_hour=999,
+        symbols=[],  # empty = no symbol filter
     )
     data = {"score": 85, "grade": "A+", "min_score": 70, "min_grade": "A", "cooldown_hours": 4, "max_per_hour": 3}
     alert = _alert_engine.generate_alert(AlertType.TEST, "TEST", dummy_cfg, data)
     if not alert:
-        return {"ok": False, "detail": "Alert engine returned None"}
+        # Fallback: build message directly and send without going through engine filters
+        from app.engines.alert_engine import TradeAlert
+        test_msg = (
+            f"\u2705 *TEST ALERT \u2014 TradingSistem WA Aktif!*\n"
+            f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+            f"\U0001f389 Koneksi WhatsApp berhasil!\n\n"
+            f"\U0001f4f1 *Alert yang aktif:*\n"
+            f"  \u2022 \U0001f3af ICT Setup A/A+ grade\n"
+            f"  \u2022 \u2b1c FVG hit alert (CE level)\n"
+            f"  \u2022 \U0001f30a Liquidity sweep confirmed\n"
+            f"  \u2022 \U0001f5fd Killzone start reminder\n"
+            f"  \u2022 \U0001f305 Daily brief (London open)\n\n"
+            f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+            f"_TradingSistem \u00b7 ICT Methodology_"
+        )
+        result = await _wa_service.send(WAMessage(to=phone, text=test_msg))
+        return {"ok": result["ok"], "detail": result.get("detail"), "preview": test_msg}
 
     result = await _wa_service.send(WAMessage(to=phone, text=alert.message))
     return {"ok": result["ok"], "detail": result.get("detail"), "preview": alert.message}
@@ -96,7 +113,7 @@ async def send_manual_alert(req: ManualAlertRequest):
     dummy_cfg = AlertConfig(
         phone=req.phone, enabled=True, only_killzone=False,
         min_score=0, min_grade="C", cooldown_hours=0, max_per_hour=999,
-        symbols=[req.symbol],
+        symbols=[],  # empty = no symbol filter
     )
     data = {
         "score": req.score, "grade": req.grade,
