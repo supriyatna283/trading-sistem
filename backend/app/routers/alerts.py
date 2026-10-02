@@ -164,6 +164,35 @@ async def preview_alert(
         return {"ok": False, "preview": "Alert suppressed by engine"}
     return {"ok": True, "alert_type": alert_type, "symbol": symbol, "preview": alert.message}
 
+@router.post("/test-broadcast")
+async def test_broadcast(
+    symbol: str = Query("BTCUSDT"),
+    score: float = Query(26.0, description="Score out of 30. e.g. 26 = A+"),
+    direction: str = Query("LONG")
+):
+    """Simulate auto_scheduler generating a setup to test the broadcast filters (grade, killzone)."""
+    class MockSetup:
+        pass
+    
+    setup = MockSetup()
+    setup.symbol = symbol
+    setup.direction = direction
+    setup.entry_low = 65000
+    setup.entry_high = 65200
+    setup.stop_loss = 64500
+    setup.take_profit_1 = 66000
+    setup.take_profit_2 = 67000
+    setup.take_profit_3 = 68000
+    setup.risk_reward = 2.5
+    setup.confluence_score = score
+    setup.confluence_details = {
+        "smc": {"fvgs": [{"type": "bullish"}], "liquidity_sweeps": True},
+        "structure": {"in_discount": True}
+    }
+    
+    await broadcast_setup_alert(setup, "1h")
+    return {"ok": True, "message": f"Broadcast triggered for {symbol}. Check WA."}
+
 @router.get("/status")
 async def alert_status():
     return {
