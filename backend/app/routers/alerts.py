@@ -199,12 +199,46 @@ async def test_broadcast(
 
 @router.get("/status")
 async def alert_status():
+    from app.services.live_alert_scanner import scan_state
     return {
-        "wa_configured":    _wa_service.enabled,
-        "wa_provider":      _wa_service.provider,
+        "wa_configured":     _wa_service.enabled,
+        "wa_provider":       _wa_service.provider,
         "registered_phones": list(_configs.keys()),
-        "total_configs":    len(_configs),
+        "total_configs":     len(_configs),
+        "scanner_running":   scan_state["running"],
+        "scanner_last_scan": scan_state["last_scan_at"],
+        "scanner_next_scan": scan_state["next_scan_at"],
+        "scanner_cycles":    scan_state["total_cycles"],
+        "scanner_alerts_fired": scan_state["alerts_fired"],
     }
+
+@router.get("/scanner/status")
+async def scanner_status():
+    """Full scanner diagnostic — last cycle log, stats, next scan time."""
+    from app.services.live_alert_scanner import scan_state
+    return scan_state
+
+@router.post("/scanner/trigger")
+async def trigger_scan_now():
+    """Manually trigger one scan cycle immediately (for testing)."""
+    from app.services.live_alert_scanner import _run_scan_cycle, scan_state
+    from app.database import get_db
+    try:
+        fired, blocked, log = await _run_scan_cycle(get_db)
+        scan_state["total_cycles"]   += 1
+        scan_state["alerts_fired"]   += fired
+        scan_state["alerts_blocked"] += blocked
+        scan_state["last_cycle_log"]  = log
+        scan_state["last_scan_at"]    = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
+        return {
+            "ok": True,
+            "alerts_fired": fired,
+            "alerts_blocked": blocked,
+            "symbols_checked": len(log),
+            "log": log[:20],   # first 20 for readability
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 # ─── Internal Broadcast API ────────────────────────────────────────────────────

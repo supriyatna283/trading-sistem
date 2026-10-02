@@ -136,6 +136,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"❌ Signal State Watchdog failed to start: {e}")
 
+    # 9. Start Live Alert Scanner (entry-zone polling every 5 min)
+    try:
+        from app.services.live_alert_scanner import run_alert_scanner
+        asyncio.create_task(run_alert_scanner(get_db))
+        logger.info("✅ Live Alert Scanner started (OKX price poll every 5 min)")
+    except Exception as e:
+        logger.error(f"❌ Live Alert Scanner failed to start: {e}")
+
     yield
 
     # Shutdown
