@@ -164,7 +164,6 @@ async def preview_alert(
         return {"ok": False, "preview": "Alert suppressed by engine"}
     return {"ok": True, "alert_type": alert_type, "symbol": symbol, "preview": alert.message}
 
-
 @router.get("/status")
 async def alert_status():
     return {
@@ -173,3 +172,60 @@ async def alert_status():
         "registered_phones": list(_configs.keys()),
         "total_configs":    len(_configs),
     }
+
+
+# ─── Internal Broadcast API ────────────────────────────────────────────────────
+import os
+
+# Pre-seed owner config if available
+_owner_phone = os.getenv("WA_OWNER_PHONE")
+if _owner_phone:
+    _configs[_owner_phone] = AlertConfig(
+        phone=_owner_phone, enabled=True, only_killzone=True,
+        min_score=70, min_grade="A", cooldown_hours=4, max_per_hour=5,
+        symbols=["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
+    )
+
+async def broadcast_setup_alert(setup_schema, timeframe: str):
+    """Called internally by auto_scheduler to broadcast generated setups to WhatsApp."""
+    if not _configs:
+        return
+
+    score_scaled = int((setup_schema.confluence_score / 30.0) * 100)
+    
+    if score_scaled >= 85: grade = "A+"
+    elif score_scaled >= 75: grade = "A"
+    elif score_scaled >= 60: grade = "B"
+    else: grade = "C"
+
+    bias = "STRONG BUY" if setup_schema.direction.upper() == "LONG" else "STRONG SELL" if setup_schema.direction.upper() == "SHORT" else "NEUTRAL"
+
+    data = {
+        "score": score_scaled,
+        "grade": grade,
+        "entry_bias": bias,
+        "entry": setup_schema.entry_low,
+        "sl": setup_schema.stop_loss,
+        "tp1": setup_schema.take_profit_1,
+        "tp2": setup_schema.take_profit_2,
+        "rr": setup_schema.risk_reward,
+        "timeframe": timeframe,
+    }
+
+    # Extract some SMC/ICT context for the message
+    try:
+        data["fvg_fresh"] = bool(setup_schema.confluence_details.get("smc", {}).get("fvgs", []))
+        data["sweep_confirmed"] = bool(setup_schema.confluence_details.get("smc", {}).get("liquidity_sweeps", []))
+        data["in_discount"] = bool(setup_schema.confluence_details.get("structure", {}).get("in_discount", False))
+    except:
+        pass
+
+    logger.info(f"Broadcasting WA alert for {setup_schema.symbol} [{timeframe}] score={score_scaled} grade={grade}")
+
+    for phone, config in _configs.items():
+        if not config.enabled:
+            continue
+        
+        alert = _alert_engine.generate_alert(AlertType.COMPOSITE_SCORE, setup_schema.symbol, config, data)
+        if alert:
+            await _wa_service.send(WAMessage(to=phone, text=alert.message))

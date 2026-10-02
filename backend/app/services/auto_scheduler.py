@@ -170,6 +170,13 @@ async def _run_once(db_factory) -> int:
                     # 🔔 Send Telegram Alert
                     from app.services.telegram_bot import send_telegram_signal
                     asyncio.create_task(send_telegram_signal(setup_schema, timeframe))
+                    
+                    # 📱 Send WhatsApp Alert
+                    try:
+                        from app.routers.alerts import broadcast_setup_alert
+                        asyncio.create_task(broadcast_setup_alert(setup_schema, timeframe))
+                    except Exception as e:
+                        logger.warning(f"⚠️ Failed to queue WhatsApp broadcast: {e}")
 
                     # ⚡ Auto-Trade Execution (if enabled)
                     try:
