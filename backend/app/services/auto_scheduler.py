@@ -25,7 +25,7 @@ def _sanitize_details(details: dict) -> dict:
 # Configuration
 # ──────────────────────────────────────────────
 TIMEFRAMES = ["1h", "4h"]          # Generate for each TF
-INTERVAL_MINUTES = 30              # Re-generate every 30 minutes
+INTERVAL_MINUTES = 5               # Re-generate every 5 minutes
 CONCURRENCY_LIMIT = 5              # Max concurrent symbol scans
 MAX_SYMBOLS = 100                  # Max pairs to scan per cycle (top by OKX listing order)
 
