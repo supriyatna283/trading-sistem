@@ -209,6 +209,7 @@ async def alert_status():
 
 # ─── Internal Broadcast API ────────────────────────────────────────────────────
 import os
+from app.services.signal_state_manager import signal_state_manager
 
 # Pre-seed owner config if available
 _owner_phone = os.getenv("WA_OWNER_PHONE")
@@ -220,53 +221,99 @@ if _owner_phone:
     )
 
 async def broadcast_setup_alert(setup_schema, timeframe: str):
-    """Called internally by auto_scheduler to broadcast generated setups to WhatsApp."""
+    """Called internally by auto_scheduler. Includes fingerprint-based dedup."""
     if not _configs:
         logger.warning("No WA configs available for broadcast.")
         return []
 
     score_scaled = int((setup_schema.confluence_score / 30.0) * 100)
-    
     if score_scaled >= 85: grade = "A+"
     elif score_scaled >= 75: grade = "A"
     elif score_scaled >= 60: grade = "B"
     else: grade = "C"
 
+    # ── Fingerprint check (real-time dedup) ──────────────────────────────────
+    allowed, reason = signal_state_manager.can_broadcast(
+        setup_schema.symbol,
+        setup_schema.direction,
+        setup_schema.entry_low,
+        getattr(setup_schema, "entry_high", setup_schema.entry_low * 1.001),
+        timeframe,
+    )
+    if not allowed:
+        logger.info(f"Signal blocked by state manager: {setup_schema.symbol} — {reason}")
+        return [{"phone": "ALL", "status": "blocked_by_state_manager", "reason": reason}]
+
     bias = "STRONG BUY" if setup_schema.direction.upper() == "LONG" else "STRONG SELL" if setup_schema.direction.upper() == "SHORT" else "NEUTRAL"
-
     data = {
-        "score": score_scaled,
-        "grade": grade,
-        "entry_bias": bias,
-        "entry": setup_schema.entry_low,
-        "sl": setup_schema.stop_loss,
-        "tp1": setup_schema.take_profit_1,
-        "tp2": setup_schema.take_profit_2,
-        "rr": setup_schema.risk_reward,
-        "timeframe": timeframe,
+        "score": score_scaled, "grade": grade, "entry_bias": bias,
+        "entry": setup_schema.entry_low, "sl": setup_schema.stop_loss,
+        "tp1": setup_schema.take_profit_1, "tp2": setup_schema.take_profit_2,
+        "rr": setup_schema.risk_reward, "timeframe": timeframe,
     }
-
-    # Extract some SMC/ICT context for the message
     try:
-        data["fvg_fresh"] = bool(setup_schema.confluence_details.get("smc", {}).get("fvgs", []))
+        data["fvg_fresh"]       = bool(setup_schema.confluence_details.get("smc", {}).get("fvgs", []))
         data["sweep_confirmed"] = bool(setup_schema.confluence_details.get("smc", {}).get("liquidity_sweeps", []))
-        data["in_discount"] = bool(setup_schema.confluence_details.get("structure", {}).get("in_discount", False))
+        data["in_discount"]     = bool(setup_schema.confluence_details.get("structure", {}).get("in_discount", False))
     except:
         pass
 
-    logger.info(f"Broadcasting WA alert for {setup_schema.symbol} [{timeframe}] score={score_scaled} grade={grade}")
+    logger.info(f"Broadcasting WA: {setup_schema.symbol} [{timeframe}] score={score_scaled} grade={grade}")
 
     results = []
+    wa_sent = False
     for phone, config in _configs.items():
         if not config.enabled:
             results.append({"phone": phone, "status": "skipped_disabled"})
             continue
-        
         alert = _alert_engine.generate_alert(AlertType.COMPOSITE_SCORE, setup_schema.symbol, config, data)
         if alert:
             res = await _wa_service.send(WAMessage(to=phone, text=alert.message))
-            results.append({"phone": phone, "status": "sent", "wa_response": res})
+            wa_sent = True
+            logger.info(f"WA send to {phone}: ok={res.get('ok')} | {res.get('detail','')}")
+            results.append({"phone": phone, "status": "sent", "wa_ok": res.get("ok"), "wa_detail": res.get("detail")})
         else:
             results.append({"phone": phone, "status": "suppressed_by_ict_filters"})
-            
+
+    # ── Register into state manager only if at least 1 WA actually sent ──────
+    if wa_sent:
+        signal_state_manager.register_signal(
+            symbol=setup_schema.symbol,
+            direction=setup_schema.direction,
+            entry_low=setup_schema.entry_low,
+            entry_high=getattr(setup_schema, "entry_high", setup_schema.entry_low * 1.001),
+            stop_loss=setup_schema.stop_loss,
+            take_profit_1=setup_schema.take_profit_1,
+            take_profit_2=setup_schema.take_profit_2,
+            timeframe=timeframe,
+            score=score_scaled,
+            grade=grade,
+        )
+
     return results
+
+
+# ─── Signal Log Endpoints ─────────────────────────────────────────────────────
+
+@router.get("/signal-log")
+async def get_signal_log(limit: int = Query(50, description="Max records to return")):
+    """View all signals (active + resolved) tracked by the state manager."""
+    return {
+        "active":  signal_state_manager.get_active_signals(),
+        "history": signal_state_manager.get_all_signals(limit=limit),
+        "total_active": len(signal_state_manager.get_active_signals()),
+    }
+
+@router.get("/signal-log/{symbol}")
+async def get_signal_for_symbol(symbol: str):
+    """Check the current signal state for a specific symbol."""
+    result = signal_state_manager.get_signal(symbol.upper())
+    if not result:
+        return {"found": False, "message": f"No signal tracked for {symbol.upper()}"}
+    return {"found": True, "signal": result}
+
+@router.post("/signal-cancel/{symbol}")
+async def cancel_signal(symbol: str, reason: str = Query("manual_cancel")):
+    """Manually cancel an active signal to allow a new one for that symbol."""
+    signal_state_manager.force_cancel(symbol.upper(), reason)
+    return {"ok": True, "message": f"Signal for {symbol.upper()} cancelled. New signals now allowed."}

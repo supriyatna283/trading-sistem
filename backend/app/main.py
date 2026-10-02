@@ -128,6 +128,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"❌ Whale Scoring Scheduler failed to start: {e}")
 
+    # 8. Start Signal State Watchdog (real-time TP/SL tracker, every 60s)
+    try:
+        from app.services.signal_state_manager import signal_state_manager
+        await signal_state_manager.start_watchdog()
+        logger.info("✅ Signal State Watchdog started (OKX price check every 60s)")
+    except Exception as e:
+        logger.error(f"❌ Signal State Watchdog failed to start: {e}")
+
     yield
 
     # Shutdown
