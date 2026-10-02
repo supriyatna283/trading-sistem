@@ -190,8 +190,12 @@ async def test_broadcast(
         "structure": {"in_discount": True}
     }
     
-    await broadcast_setup_alert(setup, "1h")
-    return {"ok": True, "message": f"Broadcast triggered for {symbol}. Check WA."}
+    log_result = await broadcast_setup_alert(setup, "1h")
+    return {
+        "ok": True, 
+        "message": f"Broadcast triggered for {symbol}.", 
+        "broadcast_log": log_result
+    }
 
 @router.get("/status")
 async def alert_status():
@@ -218,7 +222,8 @@ if _owner_phone:
 async def broadcast_setup_alert(setup_schema, timeframe: str):
     """Called internally by auto_scheduler to broadcast generated setups to WhatsApp."""
     if not _configs:
-        return
+        logger.warning("No WA configs available for broadcast.")
+        return []
 
     score_scaled = int((setup_schema.confluence_score / 30.0) * 100)
     
@@ -251,10 +256,17 @@ async def broadcast_setup_alert(setup_schema, timeframe: str):
 
     logger.info(f"Broadcasting WA alert for {setup_schema.symbol} [{timeframe}] score={score_scaled} grade={grade}")
 
+    results = []
     for phone, config in _configs.items():
         if not config.enabled:
+            results.append({"phone": phone, "status": "skipped_disabled"})
             continue
         
         alert = _alert_engine.generate_alert(AlertType.COMPOSITE_SCORE, setup_schema.symbol, config, data)
         if alert:
-            await _wa_service.send(WAMessage(to=phone, text=alert.message))
+            res = await _wa_service.send(WAMessage(to=phone, text=alert.message))
+            results.append({"phone": phone, "status": "sent", "wa_response": res})
+        else:
+            results.append({"phone": phone, "status": "suppressed_by_ict_filters"})
+            
+    return results
