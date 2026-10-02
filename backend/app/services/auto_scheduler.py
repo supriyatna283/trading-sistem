@@ -171,6 +171,13 @@ async def _run_once(db_factory) -> int:
                     from app.services.telegram_bot import send_telegram_signal
                     asyncio.create_task(send_telegram_signal(setup_schema, timeframe))
                     
+                    # 📡 Push to in-memory scanner cache (DB-free scanner)
+                    try:
+                        from app.services.live_alert_scanner import push_setup_to_cache
+                        push_setup_to_cache(setup_schema, timeframe)
+                    except Exception as e:
+                        logger.warning(f"Failed to push to scanner cache: {e}")
+
                     # 📱 Send WhatsApp Alert
                     try:
                         from app.routers.alerts import broadcast_setup_alert
