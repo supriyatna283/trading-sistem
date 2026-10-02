@@ -35,13 +35,12 @@ class WhatsAppService:
 
     # ─── Provider endpoint configs ────────────────────────────────────────────
     PROVIDERS = {
-        # ── senderme.my.id ── (PRIMARY — user's provider)
+        # ── Vercel Proxy (PRIMARY — uses uwowo.vercel.app) ──
         "senderme": {
-            "url":        "https://senderme.my.id/api/send-message",
+            "url":        "https://uwowo.vercel.app/api/send-wa",
             "method":     "POST",
             "headers_fn": lambda key: {
                 "Content-Type": "application/json",
-                "x-api-key": key,
             },
             "body_fn": lambda msg, key: {
                 "number":  msg.to,
@@ -109,7 +108,7 @@ class WhatsAppService:
         self.api_url     = os.getenv("WA_API_URL", "")
         self.account_sid = os.getenv("WA_TWILIO_SID", "")
         self.owner_phone = os.getenv("WA_OWNER_PHONE", os.getenv("WA_FROM", ""))
-        self.enabled     = bool(self.api_key or self.api_url)
+        self.enabled     = bool(self.api_key or self.api_url or self.provider == "senderme")
 
         if not self.enabled:
             logger.warning("WhatsApp not configured — set WA_PROVIDER, WA_API_KEY env vars")
