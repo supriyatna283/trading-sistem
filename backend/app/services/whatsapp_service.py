@@ -35,6 +35,20 @@ class WhatsAppService:
 
     # ─── Provider endpoint configs ────────────────────────────────────────────
     PROVIDERS = {
+        # ── senderme.my.id ── (PRIMARY — user's provider)
+        "senderme": {
+            "url":        "https://senderme.my.id/api/send-message",
+            "method":     "POST",
+            "headers_fn": lambda key: {
+                "Content-Type": "application/json",
+                "x-api-key": key,
+            },
+            "body_fn": lambda msg, key: {
+                "number":  msg.to,
+                "message": msg.text,
+            },
+        },
+        # ── Fonnte (Indonesia) ──
         "fonnte": {
             "url": "https://api.fonnte.com/send",
             "method": "POST",
@@ -45,6 +59,7 @@ class WhatsAppService:
                 **({"url": msg.media_url} if msg.media_url else {}),
             },
         },
+        # ── WaBlas ──
         "wablas": {
             "url": "https://solo.wablas.com/api/send-message",
             "method": "POST",
@@ -54,18 +69,19 @@ class WhatsAppService:
                 "message": msg.text,
             },
         },
+        # ── Twilio ──
         "twilio": {
             "url": "https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json",
             "method": "POST",
-            "headers_fn": lambda key: {},  # uses Basic Auth
+            "headers_fn": lambda key: {},
             "body_fn": lambda msg, key: {
                 "To": f"whatsapp:+{msg.to}",
                 "From": os.getenv("WA_FROM", ""),
                 "Body": msg.text,
             },
         },
+        # ── WAHA self-hosted ──
         "waha": {
-            # WAHA self-hosted — default port 3000
             "url": "{base}/api/sendText",
             "method": "POST",
             "headers_fn": lambda key: {"X-Api-Key": key} if key else {},
@@ -75,8 +91,8 @@ class WhatsAppService:
                 "session": "default",
             },
         },
+        # ── Custom ──
         "custom": {
-            # For user's own provider — configure WA_API_URL
             "url": "{base}/send",
             "method": "POST",
             "headers_fn": lambda key: {"Authorization": f"Bearer {key}"},
@@ -88,14 +104,17 @@ class WhatsAppService:
     }
 
     def __init__(self):
-        self.provider   = os.getenv("WA_PROVIDER", "fonnte").lower()
-        self.api_key    = os.getenv("WA_API_KEY", "")
-        self.api_url    = os.getenv("WA_API_URL", "")
+        self.provider    = os.getenv("WA_PROVIDER", "senderme").lower()
+        self.api_key     = os.getenv("WA_API_KEY", "")
+        self.api_url     = os.getenv("WA_API_URL", "")
         self.account_sid = os.getenv("WA_TWILIO_SID", "")
-        self.enabled    = bool(self.api_key or self.api_url)
+        self.owner_phone = os.getenv("WA_OWNER_PHONE", os.getenv("WA_FROM", ""))
+        self.enabled     = bool(self.api_key or self.api_url)
 
         if not self.enabled:
             logger.warning("WhatsApp not configured — set WA_PROVIDER, WA_API_KEY env vars")
+        else:
+            logger.info(f"WhatsApp service ready: provider={self.provider}")
 
     async def send(self, msg: WAMessage) -> dict:
         """Send a WhatsApp message. Returns {ok: bool, detail: str}."""
@@ -122,9 +141,23 @@ class WhatsAppService:
                 else:
                     resp = await client.post(url, json=body, headers=headers)
 
+            # Parse response to detect success
             ok = resp.status_code in (200, 201)
-            logger.info(f"WA send {'OK' if ok else 'FAIL'} [{resp.status_code}] to {msg.to}")
-            return {"ok": ok, "status": resp.status_code, "detail": resp.text[:200]}
+            detail = resp.text[:300]
+            try:
+                rjson = resp.json()
+                # senderme: {"success": true, "messageId": "...", "status": "queued"}
+                if "success" in rjson:
+                    ok = bool(rjson["success"])
+                    detail = f"messageId={rjson.get('messageId','?')} status={rjson.get('status','?')}"
+                # fonnte: {"status": true}
+                elif "status" in rjson and isinstance(rjson["status"], bool):
+                    ok = rjson["status"]
+            except Exception:
+                pass
+
+            logger.info(f"WA send {'OK' if ok else 'FAIL'} [{resp.status_code}] to {msg.to} | {detail}")
+            return {"ok": ok, "status": resp.status_code, "detail": detail}
 
         except Exception as e:
             logger.error(f"WA send error: {e}")
