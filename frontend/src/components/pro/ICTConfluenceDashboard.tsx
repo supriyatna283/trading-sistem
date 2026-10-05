@@ -10,6 +10,14 @@
 import { useState, useEffect, useCallback } from "react";
 import { API_URL } from "@/lib/utils";
 
+/** Adaptive precision: more decimals for low-priced coins */
+const fmtPrice = (v?: number | null) => {
+  if (v === undefined || v === null || isNaN(v)) return "-";
+  const a = Math.abs(v);
+  const d = a >= 1000 ? 2 : a >= 1 ? 4 : a >= 0.01 ? 5 : 8;
+  return v.toLocaleString("en", { maximumFractionDigits: d });
+};
+
 interface ConfluenceProps {
   symbol: string;
   timeframe: string;
@@ -195,17 +203,19 @@ export function ICTConfluenceDashboard({ symbol, timeframe, htfTimeframe, autoRe
       {/* ── Confluence Score Card ── */}
       <div style={{ padding: "16px 20px", borderRadius: 14, background: `${GRADE_COLOR[confluenceGrade]}08`, border: `1px solid ${GRADE_COLOR[confluenceGrade]}30`, marginBottom: 16, display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap" }}>
         {/* Score Ring */}
-        <div style={{ position: "relative", width: 80, height: 80, flexShrink: 0 }}>
-          <svg width={80} height={80} viewBox="0 0 80 80">
-            <circle cx={40} cy={40} r={28} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={6} />
-            <circle cx={40} cy={40} r={28} fill="none" stroke={GRADE_COLOR[confluenceGrade]} strokeWidth={6}
-              strokeDasharray={`${(confluenceScore / 100) * (2 * Math.PI * 28)} ${2 * Math.PI * 28}`}
-              strokeLinecap="round" transform="rotate(-90 40 40)"
-              style={{ transition: "stroke-dasharray .8s ease" }} />
+        <div style={{ position: "relative", width: 90, height: 90, flexShrink: 0 }}>
+          <svg width={90} height={90} viewBox="0 0 90 90">
+            <circle cx={45} cy={45} r={32} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={7} />
+            <circle cx={45} cy={45} r={32} fill="none" stroke={GRADE_COLOR[confluenceGrade]} strokeWidth={7}
+              strokeDasharray={`${(confluenceScore / 100) * (2 * Math.PI * 32)} ${2 * Math.PI * 32}`}
+              strokeLinecap="round" transform="rotate(-90 45 45)"
+              style={{ transition: "stroke-dasharray .8s ease", filter: `drop-shadow(0 0 6px ${GRADE_COLOR[confluenceGrade]}60)` }} />
           </svg>
-          <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
-            <div style={{ fontSize: "1.1rem", fontWeight: 900, color: GRADE_COLOR[confluenceGrade] }}>{confluenceGrade}</div>
-            <div style={{ fontSize: "0.48rem", color: "var(--text-muted)" }}>{confluenceScore}/100</div>
+          <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 1 }}>
+            <div style={{ fontSize: "1.6rem", fontWeight: 900, color: GRADE_COLOR[confluenceGrade], lineHeight: 1, letterSpacing: "-0.05em", textShadow: `0 0 12px ${GRADE_COLOR[confluenceGrade]}80` }}>
+              {confluenceGrade}
+            </div>
+            <div style={{ fontSize: "0.5rem", color: "rgba(255,255,255,0.45)", fontWeight: 700 }}>{confluenceScore}/100</div>
           </div>
         </div>
 
@@ -217,27 +227,34 @@ export function ICTConfluenceDashboard({ symbol, timeframe, htfTimeframe, autoRe
             {activeSignals.map(s => <Pill key={s} label={s} color="#10b981" size="xs" />)}
             {activeSignals.length === 0 && <span style={{ fontSize: "0.65rem", color: "var(--text-muted)" }}>Belum ada sinyal terkonfirmasi</span>}
           </div>
-          <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
             {[
-              { label: "Fresh FVGs", val: freshFVGs, color: "#6366f1" },
-              { label: "Tradeable OBs", val: activeOBs, color: "#f59e0b" },
-              { label: "Sweeps", val: confirmedSweeps, color: "#ef4444" },
+              { label: "Fresh FVGs",    val: freshFVGs,       color: "#6366f1" },
+              { label: "Tradeable OBs", val: activeOBs,       color: "#f59e0b" },
+              { label: "Sweeps",        val: confirmedSweeps, color: "#ef4444" },
+              { label: "PD Zone",       val: pd?.zone || "—", color: pd?.trade_allowed ? "#10b981" : "#64748b", isStr: true },
             ].map(item => (
-              <div key={item.label} style={{ textAlign: "center" }}>
-                <div style={{ fontSize: "1.1rem", fontWeight: 900, color: item.color }}>{item.val}</div>
-                <div style={{ fontSize: "0.55rem", color: "var(--text-muted)" }}>{item.label}</div>
+              <div key={item.label} style={{ textAlign: "center", minWidth: 48 }}>
+                <div style={{ fontSize: (item as any).isStr ? "0.72rem" : "1.1rem", fontWeight: 900, color: item.color }}>{item.val}</div>
+                <div style={{ fontSize: "0.52rem", color: "var(--text-muted)" }}>{item.label}</div>
               </div>
             ))}
           </div>
         </div>
 
-        {/* WA Alert button */}
-        {onSetWAAlert && confluenceScore >= 50 && (
+        {/* WA Alert button — show always after analysis */}
+        {onSetWAAlert && confluenceScore > 0 && (
           <button
             onClick={() => onSetWAAlert({ symbol, score: confluenceScore, grade: confluenceGrade, signals: activeSignals })}
-            style={{ padding: "10px 16px", borderRadius: 10, background: "rgba(16,185,129,0.12)", border: "1px solid rgba(16,185,129,0.3)", color: "#10b981", fontSize: "0.72rem", fontWeight: 800, cursor: "pointer", whiteSpace: "nowrap" }}
+            style={{
+              padding: "10px 16px", borderRadius: 10, cursor: "pointer", whiteSpace: "nowrap",
+              background: confluenceScore >= 50 ? "rgba(16,185,129,0.15)" : "rgba(100,116,139,0.15)",
+              border: `1px solid ${confluenceScore >= 50 ? "rgba(16,185,129,0.4)" : "rgba(100,116,139,0.3)"}`,
+              color: confluenceScore >= 50 ? "#10b981" : "#94a3b8",
+              fontSize: "0.72rem", fontWeight: 800,
+            }}
           >
-            📱 Set WA Alert
+            📱 {confluenceScore >= 50 ? "Set WA Alert" : "WA (Low Score)"}
           </button>
         )}
       </div>
@@ -339,7 +356,7 @@ export function ICTConfluenceDashboard({ symbol, timeframe, htfTimeframe, autoRe
                     {sweep.latest_sweep.has_displacement && <Pill label="Displaced" color="#6366f1" size="xs" />}
                   </div>
                   <div style={{ fontSize: "0.63rem", color: "var(--text-muted)" }}>
-                    Entry zone: <strong style={{ color: "#fff" }}>{sweep.latest_sweep.entry_zone_low?.toLocaleString("en", { maximumFractionDigits: 2 })} – {sweep.latest_sweep.entry_zone_high?.toLocaleString("en", { maximumFractionDigits: 2 })}</strong>
+                    Entry zone: <strong style={{ color: "#fff" }}>{fmtPrice(Math.min(sweep.latest_sweep.entry_zone_low, sweep.latest_sweep.entry_zone_high))} – {fmtPrice(Math.max(sweep.latest_sweep.entry_zone_low, sweep.latest_sweep.entry_zone_high))}</strong>
                   </div>
                 </div>
               ) : (
