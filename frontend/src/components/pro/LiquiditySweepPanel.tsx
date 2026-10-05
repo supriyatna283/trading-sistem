@@ -60,20 +60,28 @@ export function LiquiditySweepPanel({
   const [sym, setSym]       = useState(symbol);
   const [tf, setTf]         = useState(timeframe);
 
-  const fetch = useCallback(async () => {
+  const fetch = useCallback(async (s?: string, t?: string) => {
     setLoading(true);
     try {
       const res = await window.fetch(`${API_URL}/api/v1/pro/liquidity-sweep`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbol: sym.toUpperCase(), timeframe: tf, lookback: 100 }),
+        body: JSON.stringify({ symbol: (s || sym).toUpperCase(), timeframe: t || tf, lookback: 100 }),
       });
       const json = await res.json();
       if (!json.error) setData(json);
     } catch { /* ignore */ } finally { setLoading(false); }
   }, [sym, tf]);
 
-  useEffect(() => { if (autoLoad) fetch(); }, [autoLoad, fetch]);
+  // Sync props → local state + auto-fetch when props change
+  useEffect(() => {
+    setSym(symbol);
+    setTf(timeframe);
+    if (autoLoad) fetch(symbol, timeframe);
+  }, [symbol, timeframe, autoLoad]);
+
+  useEffect(() => { if (autoLoad) fetch(); }, []);  // initial load
+
 
   const latest = data?.latest_sweep;
   const biasColor = data?.bias_from_sweep === "BUY" ? "#10b981" : data?.bias_from_sweep === "SELL" ? "#ef4444" : "#64748b";
@@ -99,7 +107,7 @@ export function LiquiditySweepPanel({
             style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: "6px 10px", color: "#fff", fontSize: "0.78rem" }}>
             {["5m","15m","1h","4h","1d"].map(t => <option key={t} value={t}>{t}</option>)}
           </select>
-          <button onClick={fetch} disabled={loading} style={{
+          <button onClick={() => fetch()} disabled={loading} style={{
             padding: "6px 16px", borderRadius: 8, background: "rgba(239,68,68,0.15)",
             border: "1px solid rgba(239,68,68,0.3)", color: "#ef4444", fontWeight: 800,
             fontSize: "0.75rem", cursor: "pointer",
