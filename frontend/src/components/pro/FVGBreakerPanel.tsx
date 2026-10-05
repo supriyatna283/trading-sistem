@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { API_URL } from "@/lib/utils";
 
 /* ─────────────────────────────────────────────────────────
@@ -272,9 +272,20 @@ function BreakerCard({ bb, price, expanded, onToggle }: { bb: BreakerBlock; pric
 /* ─────────────────────────────────────────────────────────
    Main Panel
 ───────────────────────────────────────────────────────── */
-export function FVGBreakerPanel({ onSetWAAlert }: { onSetWAAlert?: (data: any) => void } = {}) {
-  const [sym,   setSym]    = useState("BTCUSDT");
-  const [tf,    setTf]     = useState("1h");
+interface FVGBreakerPanelProps {
+  symbol?: string;
+  timeframe?: string;
+  autoLoad?: boolean;
+  onSetWAAlert?: (data: any) => void;
+}
+
+export function FVGBreakerPanel({ symbol, timeframe, autoLoad = true, onSetWAAlert }: FVGBreakerPanelProps = {}) {
+  const [sym,   setSym]    = useState(symbol || "BTCUSDT");
+  const [tf,    setTf]     = useState(timeframe || "1h");
+
+  // Sync with global selector
+  useEffect(() => { if (symbol) setSym(symbol); }, [symbol]);
+  useEffect(() => { if (timeframe) setTf(timeframe); }, [timeframe]);
   const [data,  setData]   = useState<FVGResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [view,  setView]   = useState<"fvg" | "breaker" | "stacks" | "rb">("fvg");
@@ -298,6 +309,13 @@ export function FVGBreakerPanel({ onSetWAAlert }: { onSetWAAlert?: (data: any) =
     } catch {}
     finally { setLoading(false); }
   }, [sym, tf]);
+
+  // Auto-scan when symbol/TF changes (debounced so typing doesn't spam API)
+  useEffect(() => {
+    if (!autoLoad || sym.length < 5) return;
+    const t = setTimeout(() => { scan(); }, 600);
+    return () => clearTimeout(t);
+  }, [scan, autoLoad, sym]);
 
   const biasC: Record<string, string> = { STRONG_BUY:"#10b981", BUY:"#34d399", SELL:"#f87171", STRONG_SELL:"#ef4444", NEUTRAL:"#64748b" };
   const gradeC: Record<string, string> = { "A+":"#10b981", A:"#34d399", B:"#3b82f6", C:"#f59e0b", D:"#f97316", WAIT:"#64748b" };

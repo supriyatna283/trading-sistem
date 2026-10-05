@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { API_URL } from "@/lib/utils";
 
 interface ScoredOB {
@@ -56,12 +56,25 @@ function ScoreBar({ value, max = 30, color }: { value: number; max?: number; col
   );
 }
 
-export function OBStrengthPanel({ onSetWAAlert }: { onSetWAAlert?: (data: any) => void } = {}) {
+interface OBStrengthPanelProps {
+  symbol?: string;
+  timeframe?: string;
+  htfTimeframe?: string;
+  autoLoad?: boolean;
+  onSetWAAlert?: (data: any) => void;
+}
+
+export function OBStrengthPanel({ symbol, timeframe, htfTimeframe, autoLoad = true, onSetWAAlert }: OBStrengthPanelProps = {}) {
   const [data, setData]       = useState<OBStrengthData | null>(null);
   const [loading, setLoading] = useState(false);
-  const [sym, setSym]         = useState("BTCUSDT");
-  const [tf, setTf]           = useState("1h");
-  const [htf, setHtf]         = useState("4h");
+  const [sym, setSym]         = useState(symbol || "BTCUSDT");
+  const [tf, setTf]           = useState(timeframe || "1h");
+  const [htf, setHtf]         = useState(htfTimeframe || "4h");
+
+  // Sync with global selector
+  useEffect(() => { if (symbol) setSym(symbol); }, [symbol]);
+  useEffect(() => { if (timeframe) setTf(timeframe); }, [timeframe]);
+  useEffect(() => { if (htfTimeframe) setHtf(htfTimeframe); }, [htfTimeframe]);
   const [selected, setSelected] = useState<ScoredOB | null>(null);
 
   const fetch = useCallback(async () => {
@@ -80,6 +93,13 @@ export function OBStrengthPanel({ onSetWAAlert }: { onSetWAAlert?: (data: any) =
     } catch { /* ignore */ } finally { setLoading(false); }
   }, [sym, tf, htf]);
 
+  // Auto-score when symbol/TF changes (debounced)
+  useEffect(() => {
+    if (!autoLoad || sym.length < 5) return;
+    const t = setTimeout(() => { fetch(); }, 600);
+    return () => clearTimeout(t);
+  }, [fetch, autoLoad, sym]);
+
   return (
     <div style={{ padding: 24, borderRadius: 16, background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)" }}>
       {/* Header */}
@@ -97,11 +117,11 @@ export function OBStrengthPanel({ onSetWAAlert }: { onSetWAAlert?: (data: any) =
             style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: "6px 10px", color: "#fff", fontSize: "0.78rem", width: 110, fontFamily: "monospace" }} />
           <select value={tf} onChange={e => setTf(e.target.value)}
             style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: "6px 10px", color: "#fff", fontSize: "0.78rem" }}>
-            {["15m","1h","4h","1d"].map(t => <option key={t}>{t}</option>)}
+            {["5m","15m","1h","4h","1d"].map(t => <option key={t}>{t}</option>)}
           </select>
           <select value={htf} onChange={e => setHtf(e.target.value)}
             style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: "6px 10px", color: "#fff", fontSize: "0.78rem" }}>
-            {["4h","1d","1w"].map(t => <option key={t}>{t}</option>)}
+            {["15m","1h","4h","1d","1w"].map(t => <option key={t}>{t}</option>)}
           </select>
           <button onClick={() => fetch()} disabled={loading} style={{
             padding: "6px 16px", borderRadius: 8, background: "rgba(245,158,11,0.15)",
@@ -125,7 +145,7 @@ export function OBStrengthPanel({ onSetWAAlert }: { onSetWAAlert?: (data: any) =
       {!data ? (
         <div style={{ textAlign: "center", padding: "40px 0", color: "var(--text-muted)", fontSize: "0.82rem" }}>
           <div style={{ fontSize: "2.5rem", marginBottom: 10, opacity: 0.4 }}>🧱</div>
-          Select symbol and click Score OBs
+          {loading ? `Scoring order blocks ${sym}...` : "Select symbol and click Score OBs"}
         </div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
