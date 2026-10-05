@@ -272,7 +272,7 @@ function BreakerCard({ bb, price, expanded, onToggle }: { bb: BreakerBlock; pric
 /* ─────────────────────────────────────────────────────────
    Main Panel
 ───────────────────────────────────────────────────────── */
-export function FVGBreakerPanel() {
+export function FVGBreakerPanel({ onSetWAAlert }: { onSetWAAlert?: (data: any) => void } = {}) {
   const [sym,   setSym]    = useState("BTCUSDT");
   const [tf,    setTf]     = useState("1h");
   const [data,  setData]   = useState<FVGResult | null>(null);
@@ -326,6 +326,19 @@ export function FVGBreakerPanel() {
           {loading ? <><span style={{ display:"inline-block", animation:"spin .9s linear infinite" }}>⟳</span> Scanning...</> : "Scan FVG + Breakers"}
         </button>
         {scanMs > 0 && <span style={{ fontSize:"0.62rem", color:"var(--text-muted)" }}>{scanMs}ms</span>}
+        {/* WA Alert Button — shows when data has a valid entry zone */}
+        {onSetWAAlert && data && (data.nearest?.bullish_fvg?.entry_zone || data.nearest?.bearish_fvg?.entry_zone) && (
+          <button
+            onClick={() => {
+              const entry = data.nearest?.bullish_fvg?.entry_zone || data.nearest?.bearish_fvg?.entry_zone;
+              const bias = data.signals?.entry_bias;
+              onSetWAAlert({ symbol: sym, score: data.signals?.confluence_score, grade: data.ict_setup?.grade, entry, bias });
+            }}
+            style={{ padding:"8px 16px", borderRadius:8, background:"rgba(16,185,129,0.12)", border:"1px solid rgba(16,185,129,0.3)", color:"#10b981", fontWeight:800, fontSize:"0.75rem", cursor:"pointer", display:"flex", alignItems:"center", gap:6 }}
+          >
+            📱 Set WA Alert
+          </button>
+        )}
 
         {/* Filter */}
         <div style={{ marginLeft:"auto", display:"flex", gap:4 }}>

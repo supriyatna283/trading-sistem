@@ -56,7 +56,7 @@ function ScoreBar({ value, max = 30, color }: { value: number; max?: number; col
   );
 }
 
-export function OBStrengthPanel() {
+export function OBStrengthPanel({ onSetWAAlert }: { onSetWAAlert?: (data: any) => void } = {}) {
   const [data, setData]       = useState<OBStrengthData | null>(null);
   const [loading, setLoading] = useState(false);
   const [sym, setSym]         = useState("BTCUSDT");
@@ -103,13 +103,22 @@ export function OBStrengthPanel() {
             style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: "6px 10px", color: "#fff", fontSize: "0.78rem" }}>
             {["4h","1d","1w"].map(t => <option key={t}>{t}</option>)}
           </select>
-          <button onClick={fetch} disabled={loading} style={{
+          <button onClick={() => fetch()} disabled={loading} style={{
             padding: "6px 16px", borderRadius: 8, background: "rgba(245,158,11,0.15)",
             border: "1px solid rgba(245,158,11,0.3)", color: "#f59e0b", fontWeight: 800,
             fontSize: "0.75rem", cursor: "pointer",
           }}>
             {loading ? "⟳" : "Score OBs"}
           </button>
+          {/* WA Alert button — shows when best OB is A or A+ */}
+          {onSetWAAlert && data?.best_ob && (data.best_ob.grade === "A+" || data.best_ob.grade === "A") && (
+            <button
+              onClick={() => onSetWAAlert({ symbol: sym, grade: data.best_ob!.grade, score: data.best_ob!.score, ob: data.best_ob, bias: data.best_ob!.type })}
+              style={{ padding: "6px 14px", borderRadius: 8, background: "rgba(16,185,129,0.12)", border: "1px solid rgba(16,185,129,0.3)", color: "#10b981", fontWeight: 800, fontSize: "0.72rem", cursor: "pointer" }}
+            >
+              📱 WA Alert
+            </button>
+          )}
         </div>
       </div>
 

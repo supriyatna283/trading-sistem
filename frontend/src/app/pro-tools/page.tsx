@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import MainLayout from "@/components/layout/MainLayout";
 import { KillzoneTimer } from "@/components/pro/KillzoneTimer";
@@ -306,7 +306,7 @@ export default function ProToolsPage() {
           OB STRENGTH TAB
       ══════════════════════════════════════════════ */}
       {activeTab === "ob-strength" && (
-        <OBStrengthPanel />
+        <OBStrengthPanel onSetWAAlert={handleSetWAAlert} />
       )}
 
       {/* ══════════════════════════════════════════════
@@ -314,7 +314,7 @@ export default function ProToolsPage() {
       ══════════════════════════════════════════════ */}
       {activeTab === "fvg-breaker" && (
         <div style={{ display:"flex", flexDirection:"column", gap:20 }}>
-          <FVGBreakerPanel />
+          <FVGBreakerPanel onSetWAAlert={handleSetWAAlert} />
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 }}>
             <div style={{ padding:20, borderRadius:14, background:"rgba(99,102,241,0.05)", border:"1px solid rgba(99,102,241,0.15)" }}>
               <div style={{ fontWeight:800, fontSize:"0.85rem", marginBottom:10, color:"#6366f1" }}>⬜ Fair Value Gap (FVG)</div>

@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 /**
  * ICT Confluence Dashboard
@@ -24,6 +24,7 @@ interface ConfluenceState {
   fvg: any;
   ob: any;
   sweep: any;
+  pd: any;
   lastUpdated: string | null;
   error: string | null;
 }
@@ -69,14 +70,21 @@ function Section({ title, icon, color, children }: { title: string; icon: string
   );
 }
 
+const ZONE_COLOR: Record<string, string> = {
+  PREMIUM: "#ef4444", EQUILIBRIUM: "#f59e0b", DISCOUNT: "#10b981", UNKNOWN: "#64748b",
+};
+const ZONE_LABEL: Record<string, string> = {
+  PREMIUM: "🔴 PREMIUM — Sell Zone", EQUILIBRIUM: "🟡 EQUILIBRIUM — Wait", DISCOUNT: "🟢 DISCOUNT — Buy Zone", UNKNOWN: "⏳ Analyzing...",
+};
+
 export function ICTConfluenceDashboard({ symbol, timeframe, htfTimeframe, autoRefresh = true, refreshInterval = 30, onSetWAAlert }: ConfluenceProps) {
-  const [state, setState] = useState<ConfluenceState>({ loading: false, fvg: null, ob: null, sweep: null, lastUpdated: null, error: null });
+  const [state, setState] = useState<ConfluenceState>({ loading: false, fvg: null, ob: null, sweep: null, pd: null, lastUpdated: null, error: null });
   const [countdown, setCountdown] = useState(refreshInterval);
 
   const fetchAll = useCallback(async () => {
     setState(s => ({ ...s, loading: true, error: null }));
     try {
-      const [fvgRes, obRes, sweepRes] = await Promise.allSettled([
+      const [fvgRes, obRes, sweepRes, pdRes] = await Promise.allSettled([
         fetch(`${API_URL}/api/v1/pro/fvg-breaker`, {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ symbol, timeframe, limit: 100 }),
@@ -89,13 +97,18 @@ export function ICTConfluenceDashboard({ symbol, timeframe, htfTimeframe, autoRe
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ symbol, timeframe }),
         }).then(r => r.json()),
+        fetch(`${API_URL}/api/v1/pro/pd-zones`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ symbol, timeframe, htf: htfTimeframe }),
+        }).then(r => r.json()),
       ]);
 
       setState({
         loading: false,
-        fvg: fvgRes.status === "fulfilled" ? fvgRes.value : null,
-        ob: obRes.status === "fulfilled" ? obRes.value : null,
+        fvg:   fvgRes.status   === "fulfilled" ? fvgRes.value   : null,
+        ob:    obRes.status    === "fulfilled" ? obRes.value    : null,
         sweep: sweepRes.status === "fulfilled" ? sweepRes.value : null,
+        pd:    pdRes.status    === "fulfilled" ? pdRes.value?.pd_zone ?? pdRes.value : null,
         lastUpdated: new Date().toLocaleTimeString("id-ID"),
         error: null,
       });
@@ -123,15 +136,18 @@ export function ICTConfluenceDashboard({ symbol, timeframe, htfTimeframe, autoRe
   const fvg = state.fvg;
   const ob = state.ob;
   const sweep = state.sweep;
+  const pd = state.pd;
 
-  // Compute overall confluence score
+  // Compute overall confluence score (4 dimensions: FVG, OB, Sweep, PD Zone)
   const computeConfluence = () => {
     let score = 0;
     let signals: string[] = [];
-    if (fvg?.ict_setup?.total >= 2) { score += 30; signals.push("FVG+Breaker"); }
+    if (fvg?.ict_setup?.total >= 2) { score += 25; signals.push("FVG+Breaker"); }
     if (ob?.best_ob?.grade === "A+" || ob?.best_ob?.grade === "A") { score += 25; signals.push("OB A+"); }
-    if (sweep?.latest_sweep?.is_confirmed) { score += 25; signals.push("Sweep Confirmed"); }
-    if (sweep?.bias_from_sweep) { score += 20; signals.push("Sweep Bias"); }
+    if (sweep?.latest_sweep?.is_confirmed) { score += 20; signals.push("Sweep Confirmed"); }
+    if (sweep?.bias_from_sweep) { score += 10; signals.push("Sweep Bias"); }
+    if (pd?.trade_allowed) { score += 15; signals.push(`${pd.zone} Zone`); }
+    if (pd?.is_in_ote) { score += 5; signals.push("In OTE"); }
     return { score: Math.min(100, score), signals };
   };
 
@@ -338,6 +354,51 @@ export function ICTConfluenceDashboard({ symbol, timeframe, htfTimeframe, autoRe
                   </div>
                 ))}
               </div>
+            </>
+          )}
+        </Section>
+
+        {/* PD Zone Section */}
+        <Section title="P/D Zone + OTE" icon="📈" color="#3b82f6">
+          {!pd ? (
+            <div style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>Click Analyze to load PD Zone data</div>
+          ) : (
+            <>
+              {/* Zone Status */}
+              <div style={{ padding: "12px 14px", borderRadius: 10, background: `${ZONE_COLOR[pd.zone] || "#64748b"}10`, border: `1px solid ${ZONE_COLOR[pd.zone] || "#64748b"}30`, marginBottom: 10 }}>
+                <div style={{ fontWeight: 900, fontSize: "0.85rem", color: ZONE_COLOR[pd.zone] || "#64748b", marginBottom: 6 }}>
+                  {ZONE_LABEL[pd.zone] || pd.zone}
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <Pill label={pd.signal || "—"} color={BIAS_COLOR[pd.signal] || "#64748b"} size="xs" />
+                  {pd.is_in_ote && <Pill label="✨ In OTE Zone" color="#a78bfa" size="xs" />}
+                  {pd.trade_allowed ? <Pill label="✅ Trade Allowed" color="#10b981" size="xs" /> : <Pill label="⛔ Wait" color="#ef4444" size="xs" />}
+                </div>
+              </div>
+
+              {/* OTE & Levels */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 8 }}>
+                {[
+                  { label: "OTE Low",   val: pd.levels?.ote_low,             color: "#10b981" },
+                  { label: "OTE High",  val: pd.levels?.ote_high,            color: "#10b981" },
+                  { label: "Eq. Level", val: pd.levels?.equilibrium,         color: "#f59e0b" },
+                  { label: "Zone %",    val: pd.zone_pct ? `${pd.zone_pct.toFixed(1)}%` : "—", color: "#3b82f6", raw: true },
+                ].map(item => (
+                  <div key={item.label} style={{ padding: "7px 10px", borderRadius: 8, background: "rgba(255,255,255,0.03)", textAlign: "center" }}>
+                    <div style={{ fontSize: "0.48rem", color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 2 }}>{item.label}</div>
+                    <div style={{ fontSize: "0.68rem", fontWeight: 800, fontFamily: "monospace", color: item.color }}>
+                      {(item as any).raw ? item.val : (item.val as number)?.toLocaleString("en", { maximumFractionDigits: 2 }) || "—"}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* OTE distance */}
+              {pd.distance_to_ote_pct != null && !pd.is_in_ote && (
+                <div style={{ padding: "6px 10px", borderRadius: 7, background: "rgba(167,139,250,0.06)", border: "1px solid rgba(167,139,250,0.2)", fontSize: "0.62rem", color: "#a78bfa" }}>
+                  ★ OTE distance: <strong>{pd.distance_to_ote_pct.toFixed(2)}%</strong> away
+                </div>
+              )}
             </>
           )}
         </Section>
