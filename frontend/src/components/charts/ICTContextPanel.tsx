@@ -17,20 +17,20 @@ interface Props {
 }
 
 const KILL_ZONES = [
-  { name: "Asia",          start:  0, end:  3, color: "#f59e0b", emoji: "??" },
-  { name: "London",        start:  7, end: 10, color: "#60a5fa", emoji: "????" },
-  { name: "NY Open",       start: 12, end: 15, color: "#34d399", emoji: "??" },
-  { name: "NY Power Hour", start: 15, end: 17, color: "#a78bfa", emoji: "?" },
+  { name: "Asia",          start:  0, end:  3, color: "#f59e0b", emoji: "Asia" },
+  { name: "London",        start:  7, end: 10, color: "#60a5fa", emoji: "London" },
+  { name: "NY Open",       start: 12, end: 15, color: "#34d399", emoji: "NY Open" },
+  { name: "NY Power Hour", start: 15, end: 17, color: "#a78bfa", emoji: "NY PWR" },
 ] as const;
 
 const DOW_BIAS = [
-  { day: 0, name: "Sun", bias: "—",        color: "rgba(255,255,255,0.3)", note: "Closed" },
+  { day: 0, name: "Sun", bias: "--",       color: "rgba(255,255,255,0.3)", note: "Closed" },
   { day: 1, name: "Mon", bias: "Reversal", color: "#f59e0b",               note: "SMC range set / turtle soup" },
-  { day: 2, name: "Tue", bias: "Trend",    color: "#34d399",               note: "Expansion day — best entries" },
+  { day: 2, name: "Tue", bias: "Trend",    color: "#34d399",               note: "Expansion day -- best entries" },
   { day: 3, name: "Wed", bias: "Trend",    color: "#34d399",               note: "Continuation or mid-week reversal" },
   { day: 4, name: "Thu", bias: "Reversal", color: "#f87171",               note: "London sets high/low, NY reverses" },
   { day: 5, name: "Fri", bias: "Close",    color: "#a78bfa",               note: "Profit taking / position close" },
-  { day: 6, name: "Sat", bias: "—",        color: "rgba(255,255,255,0.3)", note: "Closed" },
+  { day: 6, name: "Sat", bias: "--",       color: "rgba(255,255,255,0.3)", note: "Closed" },
 ] as const;
 
 function getNowUTC() {
@@ -53,9 +53,9 @@ function getPremiumDiscount(currentPrice: number, fibData: FibData) {
   if (range <= 0) return { zone: "Equilibrium" as const, pct: 50, color: "#facc15" };
   const posFromLow = ((currentPrice - fibData.swingLow) / range) * 100;
   const pct = Math.max(0, Math.min(100, posFromLow));
-  if (pct > 55) return { zone: "Premium"      as const, pct, color: "#f87171" };
-  if (pct < 45) return { zone: "Discount"     as const, pct, color: "#34d399" };
-  return               { zone: "Equilibrium"  as const, pct, color: "#facc15" };
+  if (pct > 55) return { zone: "Premium"     as const, pct, color: "#f87171" };
+  if (pct < 45) return { zone: "Discount"    as const, pct, color: "#34d399" };
+  return               { zone: "Equilibrium" as const, pct, color: "#facc15" };
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -91,7 +91,7 @@ export default function ICTContextPanel({ symbol: _symbol, currentPrice, fibData
     }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <span style={{ fontWeight: 800, color: "var(--text-primary)", fontSize: "0.78rem" }}>
-          ?? ICT Context
+          ICT Context
         </span>
         <span style={{ color: "var(--text-muted)", fontSize: "0.62rem", fontFamily: "'JetBrains Mono', monospace" }}>
           {utcTimeStr}
@@ -110,7 +110,6 @@ export default function ICTContextPanel({ symbol: _symbol, currentPrice, fibData
                 border: isActive ? `1px solid ${kz.color}40` : "1px solid transparent",
               }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                  <span style={{ fontSize: "0.85rem" }}>{kz.emoji}</span>
                   <span style={{ color: isActive ? kz.color : "var(--text-muted)", fontWeight: isActive ? 800 : 400 }}>
                     {kz.name}
                   </span>
@@ -123,7 +122,7 @@ export default function ICTContextPanel({ symbol: _symbol, currentPrice, fibData
                   )}
                 </div>
                 <span style={{ color: "var(--text-muted)", fontSize: "0.6rem", fontFamily: "'JetBrains Mono', monospace" }}>
-                  {String(kz.start).padStart(2,"0")}–{String(kz.end).padStart(2,"0")} UTC
+                  {String(kz.start).padStart(2,"0")}-{String(kz.end).padStart(2,"0")} UTC
                 </span>
               </div>
             );
@@ -131,8 +130,8 @@ export default function ICTContextPanel({ symbol: _symbol, currentPrice, fibData
           {activeKZs.length === 0 && (
             <div style={{ color: "var(--text-muted)", fontSize: "0.63rem", textAlign: "center", marginTop: 2 }}>
               {nextKZ
-                ? <>Next: <span style={{ color: nextKZ.color }}>{nextKZ.emoji} {nextKZ.name}</span> @ {String(nextKZ.start).padStart(2,"0")}:00 UTC</>
-                : "No more Kill Zones today · Next: Asia 00:00 UTC"}
+                ? <>Next: <span style={{ color: nextKZ.color }}>{nextKZ.name}</span> @ {String(nextKZ.start).padStart(2,"0")}:00 UTC</>
+                : "No more Kill Zones today"}
             </div>
           )}
         </div>
@@ -147,9 +146,9 @@ export default function ICTContextPanel({ symbol: _symbol, currentPrice, fibData
                 background: `${pd.color}15`, border: `1px solid ${pd.color}40`,
                 borderRadius: 6, padding: "2px 10px",
               }}>
-                {pd.zone === "Premium" ? "?? Premium · Short Bias"
-                  : pd.zone === "Discount" ? "?? Discount · Long Bias"
-                  : "?? Equilibrium"}
+                {pd.zone === "Premium" ? "Premium - Short Bias"
+                  : pd.zone === "Discount" ? "Discount - Long Bias"
+                  : "Equilibrium"}
               </span>
               <span style={{ color: pd.color, fontFamily: "'JetBrains Mono', monospace", fontWeight: 700 }}>
                 {pd.pct.toFixed(1)}%
@@ -168,7 +167,7 @@ export default function ICTContextPanel({ symbol: _symbol, currentPrice, fibData
             <div style={{ color: "var(--text-muted)", fontSize: "0.62rem" }}>
               {pd.zone === "Premium" ? "Seek shorts from OB/FVG in premium. Avoid longs."
                 : pd.zone === "Discount" ? "Seek longs from OB/FVG in discount. Avoid shorts."
-                : "At equilibrium — wait for expansion or HTF bias."}
+                : "At equilibrium -- wait for expansion or HTF bias."}
             </div>
           </div>
         ) : (
@@ -185,7 +184,7 @@ export default function ICTContextPanel({ symbol: _symbol, currentPrice, fibData
               color: dowInfo.color, fontWeight: 800, fontSize: "0.77rem",
               background: `${dowInfo.color}15`, border: `1px solid ${dowInfo.color}35`,
               borderRadius: 6, padding: "2px 10px",
-            }}>{dowInfo.name} · {dowInfo.bias}</span>
+            }}>{dowInfo.name} - {dowInfo.bias}</span>
           </div>
           <div style={{ color: "var(--text-muted)", fontSize: "0.62rem" }}>{dowInfo.note}</div>
           <div style={{ display: "flex", gap: 3, marginTop: 3 }}>
