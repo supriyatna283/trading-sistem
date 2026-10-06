@@ -46,7 +46,9 @@ export function LiveTickerBar() {
 
       ws.onmessage = (evt) => {
         try {
-          const arr: Array<{ s: string; c: string; P: string }> = JSON.parse(evt.data);
+          // miniTicker@arr fields: s=symbol, c=close, o=open, h=high, l=low, v=baseVol, q=quoteVol
+          // NOTE: `P` (priceChangePercent) does NOT exist in miniTicker. Calculate from o and c.
+          const arr: Array<{ s: string; c: string; o: string }> = JSON.parse(evt.data);
           if (!Array.isArray(arr)) return;
 
           setTickers(prev => {
@@ -54,7 +56,11 @@ export function LiveTickerBar() {
             for (const t of arr) {
               if (!TICKER_SYMBOLS.includes(t.s)) continue;
               const newPrice  = parseFloat(t.c);
-              const newChange = parseFloat(t.P);
+              const openPrice = parseFloat(t.o);
+              // Calculate 24h change % from open price (miniTicker provides 24h rolling open)
+              const newChange = isFinite(openPrice) && openPrice > 0
+                ? ((newPrice - openPrice) / openPrice) * 100
+                : (prev[t.s]?.change ?? 0);
               if (!isFinite(newPrice) || newPrice <= 0) continue;
               const old = prev[t.s];
 

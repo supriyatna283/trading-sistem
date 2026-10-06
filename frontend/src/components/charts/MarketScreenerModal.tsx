@@ -18,19 +18,21 @@ export default function MarketScreenerModal({ onSelect, onClose }: Props) {
   const [data, setData] = useState<ScreenerItem[]>([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
 
   useEffect(() => {
     let active = true;
 
     const fetchTopPairs = async () => {
       try {
+        setError(false);
         const res = await fetch("https://api.binance.com/api/v3/ticker/24hr");
-        if (!res.ok) throw new Error("Failed to fetch");
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const json = await res.json();
         
         if (!active) return;
 
-        // Filter only USDT pairs, ignore stablecoins and leveraged tokens if possible
+        // Filter only USDT pairs, ignore stablecoins and leveraged tokens
         const usdtPairs = json.filter((t: any) => 
           t.symbol.endsWith("USDT") && 
           !t.symbol.includes("UPUSDT") && 
@@ -57,7 +59,7 @@ export default function MarketScreenerModal({ onSelect, onClose }: Props) {
         setLoading(false);
       } catch (err) {
         console.error("Screener fetch error:", err);
-        if (active) setLoading(false);
+        if (active) { setError(true); setLoading(false); }
       }
     };
 
@@ -190,17 +192,41 @@ export default function MarketScreenerModal({ onSelect, onClose }: Props) {
                     Scanning Market...
                   </td>
                 </tr>
+              ) : error ? (
+                <tr>
+                  <td colSpan={5} style={{ textAlign: "center", padding: "40px 0" }}>
+                    <div style={{ fontSize: "2rem", marginBottom: 8 }}>⚠️</div>
+                    <div style={{ color: "#f87171", fontSize: "0.85rem", marginBottom: 16, fontWeight: 600 }}>
+                      Gagal mengambil data market
+                    </div>
+                    <div style={{ color: "var(--text-muted)", fontSize: "0.75rem", marginBottom: 16 }}>
+                      Periksa koneksi atau coba lagi
+                    </div>
+                    <button
+                      onClick={() => { setLoading(true); setError(false); }}
+                      style={{
+                        background: "var(--accent-blue)", color: "#fff", border: "none",
+                        padding: "8px 20px", borderRadius: 8, fontSize: "0.8rem",
+                        fontWeight: 700, cursor: "pointer",
+                      }}
+                    >
+                      🔄 Coba Lagi
+                    </button>
+                  </td>
+                </tr>
               ) : filteredData.length === 0 ? (
                 <tr>
                   <td colSpan={5} style={{ textAlign: "center", padding: "40px 0", color: "var(--text-muted)", fontSize: "0.85rem" }}>
-                    No liquid pair found matching "{search}"
+                    Tidak ada pair yang cocok dengan &ldquo;{search}&rdquo;
                   </td>
                 </tr>
               ) : (
                 filteredData.map((item) => (
                   <tr 
                     key={item.symbol} 
-                    style={{ borderBottom: "1px solid rgba(255,255,255,0.02)", cursor: "pointer" }}
+                    style={{ borderBottom: "1px solid rgba(255,255,255,0.02)", cursor: "pointer", transition: "background 0.15s" }}
+                    onMouseOver={e => (e.currentTarget.style.background = "rgba(59,130,246,0.06)")}
+                    onMouseOut={e => (e.currentTarget.style.background = "transparent")}
                     onClick={() => onSelect(item.symbol)}
                   >
                     <td style={{ padding: "12px 8px" }}>

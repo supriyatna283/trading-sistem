@@ -27,9 +27,18 @@ function useCountdown(targetMs: number | null): string {
     const tick = () => {
       const diff = targetMs - Date.now();
       if (diff <= 0) { setRemaining("00:00"); return; }
-      const m = Math.floor(diff / 60000);
-      const s = Math.floor((diff % 60000) / 1000);
-      setRemaining(`${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`);
+      const totalSec = Math.floor(diff / 1000);
+      const h = Math.floor(totalSec / 3600);
+      const m = Math.floor((totalSec % 3600) / 60);
+      const s = totalSec % 60;
+      // Show "6j 44m" when more than 60 min remain, else "44m 50d"
+      if (h > 0) {
+        setRemaining(`${h}j ${String(m).padStart(2, "0")}m`);
+      } else if (m > 0) {
+        setRemaining(`${m}m ${String(s).padStart(2, "0")}d`);
+      } else {
+        setRemaining(`${String(s).padStart(2, "0")}d`);
+      }
     };
     tick();
     const id = setInterval(tick, 1000);

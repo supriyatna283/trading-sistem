@@ -6,6 +6,7 @@ import AIAnalysisPanel from "@/components/charts/AIAnalysisPanel";
 import MarketScreenerModal from "@/components/charts/MarketScreenerModal";
 import DerivativesBar from "@/components/charts/DerivativesBar";
 import SymbolNotesPanel from "@/components/charts/SymbolNotesPanel";
+import ICTContextPanel from "@/components/charts/ICTContextPanel";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
@@ -82,6 +83,7 @@ function ChartsPageContent() {
   const [showAIPanel, setShowAIPanel] = useState(initAi);
   const [showScreener, setShowScreener] = useState(!searchParams.get("symbol"));
   const [showNotes, setShowNotes] = useState(false);
+  const [showICT,   setShowICT]   = useState(false);  // ICT Context Panel
   // FIX #9: Live prices for watchlist
   const [watchlistPrices, setWatchlistPrices] = useState<Record<string, { price: number; chg: number }>>({});
   const pageRef = useRef<HTMLDivElement>(null);
@@ -341,6 +343,14 @@ function ChartsPageContent() {
             >
               <span style={{ fontSize: "0.8rem" }}>🤖</span> AI
             </button>
+            <button
+              onClick={() => setShowICT(v => !v)}
+              className={`icon-btn${showICT ? " icon-btn-active-yellow" : ""}`}
+              title="ICT Market Context — Kill Zones, Premium/Discount, Day-of-Week"
+              id="ict-toggle-btn"
+            >
+              <span style={{ fontSize: "0.8rem" }}>🧭</span> ICT
+            </button>
           </div>
         </div>
 
@@ -544,6 +554,21 @@ function ChartsPageContent() {
             />
           )}
 
+          {/* ICT Context Panel — collapsible right sidebar */}
+          {showICT && !isMTFGrid && (
+            <div style={{
+              width: 240, flexShrink: 0,
+              display: "flex", flexDirection: "column", gap: 8,
+              overflowY: "auto", padding: "0 0 8px",
+            }}>
+              <ICTContextPanel
+                symbol={selectedSymbol}
+                currentPrice={watchlistPrices[selectedSymbol]?.price ?? null}
+                fibData={null}  // fibData wired via ref in TradingViewChart when needed
+              />
+            </div>
+          )}
+
           {/* AI Analysis Panel */}
           <AIAnalysisPanel
             symbol={selectedSymbol}
@@ -628,6 +653,8 @@ function ChartsPageContent() {
           .icon-btn-active { background: rgba(59,130,246,0.12); border-color: rgba(59,130,246,0.35); color: var(--accent-blue); }
           .icon-btn-active-purple { background: rgba(139,92,246,0.12); border-color: rgba(139,92,246,0.35); color: #a78bfa; }
           .icon-btn-active-green { background: rgba(16,185,129,0.12); border-color: rgba(16,185,129,0.35); color: #10b981; }
+          .icon-btn-active-yellow { background: rgba(250,204,21,0.10); border-color: rgba(250,204,21,0.35); color: #facc15; }
+
 
           /* ── Search overlay ── */
           #search-overlay {

@@ -146,12 +146,18 @@ export function MultiTimeframeView({ symbol }: MTFProps) {
       const freshFVGs = (data.bullish_fvgs || []).filter((f: any) => f.status === "FRESH").length
         + (data.bearish_fvgs || []).filter((f: any) => f.status === "FRESH").length;
 
-      const nearestFVG = data.nearest?.bullish_fvg || data.nearest?.bearish_fvg;
+      const bias = data.signals?.entry_bias || "NEUTRAL";
+      let nearestFVG = null;
+      if (bias.includes("BUY")) {
+        nearestFVG = data.nearest?.bullish_fvg;
+      } else if (bias.includes("SELL")) {
+        nearestFVG = data.nearest?.bearish_fvg;
+      }
 
       setTFData(prev => prev.map(d =>
         d.tf === cfg.tf ? {
           ...d,
-          bias: data.signals?.entry_bias || "NEUTRAL",
+          bias: bias,
           grade: data.ict_setup?.grade || "D",
           score: data.signals?.confluence_score || 0,
           freshFVGs,

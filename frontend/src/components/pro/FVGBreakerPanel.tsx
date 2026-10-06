@@ -315,7 +315,7 @@ export function FVGBreakerPanel({ symbol, timeframe, autoLoad = true, onSetWAAle
     if (!autoLoad || sym.length < 5) return;
     const t = setTimeout(() => { scan(); }, 600);
     return () => clearTimeout(t);
-  }, [scan, autoLoad, sym]);
+  }, [scan, autoLoad, sym, tf]);
 
   const biasC: Record<string, string> = { STRONG_BUY:"#10b981", BUY:"#34d399", SELL:"#f87171", STRONG_SELL:"#ef4444", NEUTRAL:"#64748b" };
   const gradeC: Record<string, string> = { "A+":"#10b981", A:"#34d399", B:"#3b82f6", C:"#f59e0b", D:"#f97316", WAIT:"#64748b" };
@@ -345,18 +345,26 @@ export function FVGBreakerPanel({ symbol, timeframe, autoLoad = true, onSetWAAle
         </button>
         {scanMs > 0 && <span style={{ fontSize:"0.62rem", color:"var(--text-muted)" }}>{scanMs}ms</span>}
         {/* WA Alert Button — shows when data has a valid entry zone */}
-        {onSetWAAlert && data && (data.nearest?.bullish_fvg?.entry_zone || data.nearest?.bearish_fvg?.entry_zone) && (
-          <button
-            onClick={() => {
-              const entry = data.nearest?.bullish_fvg?.entry_zone || data.nearest?.bearish_fvg?.entry_zone;
-              const bias = data.signals?.entry_bias;
-              onSetWAAlert({ symbol: sym, score: data.signals?.confluence_score, grade: data.ict_setup?.grade, entry, bias });
-            }}
-            style={{ padding:"8px 16px", borderRadius:8, background:"rgba(16,185,129,0.12)", border:"1px solid rgba(16,185,129,0.3)", color:"#10b981", fontWeight:800, fontSize:"0.75rem", cursor:"pointer", display:"flex", alignItems:"center", gap:6 }}
-          >
-            📱 Set WA Alert
-          </button>
-        )}
+        {(() => {
+          if (!onSetWAAlert || !data) return null;
+          const bias = data.signals?.entry_bias;
+          let entry = null;
+          if (bias?.includes("BUY")) entry = data.nearest?.bullish_fvg?.entry_zone;
+          else if (bias?.includes("SELL")) entry = data.nearest?.bearish_fvg?.entry_zone;
+          
+          if (!entry) return null;
+
+          return (
+            <button
+              onClick={() => {
+                onSetWAAlert({ symbol: sym, score: data.signals?.confluence_score, grade: data.ict_setup?.grade, entry, bias });
+              }}
+              style={{ padding:"8px 16px", borderRadius:8, background:"rgba(16,185,129,0.12)", border:"1px solid rgba(16,185,129,0.3)", color:"#10b981", fontWeight:800, fontSize:"0.75rem", cursor:"pointer", display:"flex", alignItems:"center", gap:6 }}
+            >
+              📱 Set WA Alert
+            </button>
+          );
+        })()}
 
         {/* Filter */}
         <div style={{ marginLeft:"auto", display:"flex", gap:4 }}>

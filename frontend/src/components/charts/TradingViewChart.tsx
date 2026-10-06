@@ -370,8 +370,142 @@ function calculateFibonacciAuto(
   return { swingHigh, swingLow, swingHighTime: shNode.time, swingLowTime: slNode.time, direction, levels };
 }
 
-// ---------------------------------------------------------------
-// Component
+// ──────────────────────────────────────────────────────────────────────
+// Confluence Zone Engine
+//
+// Merges LTF Fib, HTF Fib, S/R, and EMA levels that are within
+// `threshold` (= 0.3×ATR) of each other into a single "confluence zone".
+// Each zone gets a score based on how many distinct sources overlap.
+// Zones are returned sorted by score (strongest first).
+//
+// Score weights:
+//   HTF key Fib (61.8, 50, 38.2) = 3 pts each
+//   LTF key Fib (61.8, 50, 38.2) = 2 pts each
+//   S/R level from backend        = 2 pts each
+//   Any non-key Fib level         = 1 pt each
+//   HTF extension Fib             = 1.5 pts each
+// ──────────────────────────────────────────────────────────────────────
+export interface ConfluenceLevel {
+  price: number;
+  label: string;
+  weight: number;
+  source: "ltf_fib_key" | "ltf_fib" | "htf_fib_key" | "htf_fib" | "support" | "resistance";
+}
+
+export interface ConfluenceZone {
+  priceCenter: number;
+  priceHigh: number;
+  priceLow: number;
+  score: number;
+  sources: string[];
+  label: string;          // e.g. "⚡ 3× Confluence"
+  color: string;          // zone fill color (rgba)
+  borderColor: string;    // upper/lower border color
+  isMajor: boolean;       // score >= 4
+}
+
+function buildConfluenceZones(
+  ltfFib: ReturnType<typeof calculateFibonacciAuto>,
+  htfFib: ReturnType<typeof calculateFibonacciAuto>,
+  srLevels: { supports: number[]; resistances: number[] },
+  atr: number,
+): ConfluenceZone[] {
+  const threshold = atr * 0.30;  // cluster radius
+  if (threshold <= 0) return [];
+
+  // ── Collect all candidate levels ──
+  const candidates: ConfluenceLevel[] = [];
+
+  ltfFib?.levels.forEach(l => {
+    if (!l.isExtension) {
+      candidates.push({
+        price: l.price,
+        label: `Fib ${l.label}`,
+        weight: l.isKey ? 2 : 1,
+        source: l.isKey ? "ltf_fib_key" : "ltf_fib",
+      });
+    }
+  });
+
+  htfFib?.levels
+    .filter(l => l.isKey)
+    .forEach(l => {
+      candidates.push({
+        price: l.price,
+        label: `HTF Fib ${l.label}`,
+        weight: l.isExtension ? 1.5 : 3,
+        source: l.isExtension ? "htf_fib" : "htf_fib_key",
+      });
+    });
+
+  srLevels.supports.slice(0, 5).forEach(p => {
+    candidates.push({ price: p, label: "Support", weight: 2, source: "support" });
+  });
+  srLevels.resistances.slice(0, 5).forEach(p => {
+    candidates.push({ price: p, label: "Resistance", weight: 2, source: "resistance" });
+  });
+
+  if (candidates.length === 0) return [];
+
+  // ── Greedy clustering: merge candidates within `threshold` ──
+  const sorted = [...candidates].sort((a, b) => a.price - b.price);
+  const clusters: ConfluenceLevel[][] = [];
+  let current: ConfluenceLevel[] = [sorted[0]];
+
+  for (let i = 1; i < sorted.length; i++) {
+    const last = current[current.length - 1];
+    if (sorted[i].price - last.price <= threshold) {
+      current.push(sorted[i]);
+    } else {
+      clusters.push(current);
+      current = [sorted[i]];
+    }
+  }
+  clusters.push(current);
+
+  // ── Build ConfluenceZone from each cluster ──
+  const zones: ConfluenceZone[] = clusters
+    .filter(c => c.length >= 2)           // single level = not a confluence zone
+    .map(c => {
+      const prices = c.map(l => l.price);
+      const priceCenter = prices.reduce((a, b) => a + b, 0) / prices.length;
+      const priceHigh = Math.max(...prices) + threshold * 0.25;
+      const priceLow  = Math.min(...prices) - threshold * 0.25;
+      const score = c.reduce((sum, l) => sum + l.weight, 0);
+      const uniqueSources = [...new Set(c.map(l => l.label))];
+      const isMajor = score >= 4;
+
+      // Color: gold for major zones, cyan for regular
+      const alpha = Math.min(0.18, 0.06 + score * 0.02);
+      const color = isMajor
+        ? `rgba(250,204,21,${alpha})`
+        : `rgba(99,179,237,${alpha})`;
+      const borderColor = isMajor
+        ? `rgba(250,204,21,${Math.min(0.75, 0.35 + score * 0.06)})`
+        : `rgba(99,179,237,${Math.min(0.6, 0.25 + score * 0.05)})`;
+
+      const emoji = isMajor ? "⚡" : "◈";
+      const label = `${emoji} ${c.length}× Confluence`;
+
+      return { priceCenter, priceHigh, priceLow, score, sources: uniqueSources, label, color, borderColor, isMajor };
+    })
+    .sort((a, b) => b.score - a.score);   // strongest first
+
+  return zones;
+}
+
+// ── Compute ATR (Average True Range) over last N bars ──
+function calculateATR(data: any[], period = 14): number {
+  if (data.length < period + 1) return 0;
+  const slice = data.slice(-period - 1);
+  const trs = slice.slice(1).map((d, i) => {
+    const prev = slice[i];
+    return Math.max(d.high - d.low, Math.abs(d.high - prev.close), Math.abs(d.low - prev.close));
+  });
+  return trs.reduce((a, b) => a + b, 0) / trs.length;
+}
+
+
 // ---------------------------------------------------------------
 export default function TradingViewChart({
   symbol = "BTCUSDT",
@@ -422,9 +556,25 @@ export default function TradingViewChart({
   const htfFibLinesRef = useRef<any[]>([]);
   const htfFibDataRef = useRef<ReturnType<typeof calculateFibonacciAuto>>(null);
   const [htfFibLoading, setHtfFibLoading] = useState(false);
+  // Confluence Zone Engine — price line handles for the zone borders
+  const confluenceLinesRef = useRef<any[]>([]);
+  const [confluenceZones, setConfluenceZones] = useState<ConfluenceZone[]>([]);
+
+  // ── ICT Canvas Overlay ───────────────────────────────────────────────────
+  // A transparent <canvas> overlaid on the chart (z-index 5, pointer-events none)
+  // that draws: OB boxes, FVG+CE boxes, Kill Zone shading, Sweep markers.
+  // All state values are mirrored to refs so the draw fn stays stable (empty deps).
+  const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  // Mirror mutable state to refs so redrawCanvasOverlay can read them without
+  // becoming a dependency and causing subscribeVisibleLogicalRangeChange to re-fire.
+  const effectiveOBsRef   = useRef<OrderBlockOverlay[]>([]);
+  const effectiveFVGsRef  = useRef<FVGOverlay[]>([]);
+  const indicatorsRef     = useRef<IndicatorState | null>(null);
+  const timeframeRef      = useRef<string>("1h");
 
   const wsRef = useRef<WebSocket | null>(null);
   const wsReconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const wsDestroyedRef = useRef(false);
   const priceLineRefs = useRef<any[]>([]);
   const chartDataRef = useRef<any[]>([]);
@@ -440,7 +590,8 @@ export default function TradingViewChart({
   chartStyleRef.current = chartStyle;
   const [indicators, setIndicators] = useState<IndicatorState>({
     ema20: false, ema50: false, ema200: true, volume: false,
-    smcZones: false, bollingerBands: false,
+    smcZones: true,  // ICT Overlay (OB, FVG, Sweep) — on by default
+    bollingerBands: false,
     rsi: true,   // RSI — signal generator, on by default
     macd: true,  // MACD — signal generator, on by default
     autoFib: true, // Auto Fibonacci — signal generator, on by default
@@ -525,6 +676,12 @@ export default function TradingViewChart({
   const effectiveOBs = orderBlocks.length > 0 ? orderBlocks : (smcData?.orderBlocks ?? []);
   const effectiveFVGs = fvgs.length > 0 ? fvgs : (smcData?.fvgs ?? []);
   const effectiveMarkers = structureMarkers.length > 0 ? structureMarkers : smcStructure;
+
+  // Keep refs in sync so redrawCanvasOverlay (stable callback, [] deps) sees fresh data
+  effectiveOBsRef.current  = effectiveOBs;
+  effectiveFVGsRef.current = effectiveFVGs;
+  indicatorsRef.current    = indicators;
+  timeframeRef.current     = timeframe;
 
   // ── Fetch SMC ──
   const fetchSMC = useCallback(async (sym: string, tf: string) => {
@@ -701,6 +858,237 @@ export default function TradingViewChart({
   }, [indicators.sessions, indicators.smcZones, indicators.autoFib, effectiveMarkers, timeframe]);
 
   useEffect(() => { drawAnnotations(indicators.smcZones); }, [drawAnnotations, indicators.smcZones]);
+
+  // ── ICT Canvas Overlay — redraws on every scroll/zoom and data change ─────
+  const redrawCanvasOverlay = useCallback(() => {
+    const canvas = overlayCanvasRef.current;
+    const chart  = chartRef.current;
+    const series = seriesRef.current || lineSeriesRef.current || areaSeriesRef.current;
+    if (!canvas || !chart || !series) return;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const W = canvas.width;
+    const H = canvas.height;
+    ctx.clearRect(0, 0, W, H);
+
+    const ts   = chart.timeScale();
+    const ind  = indicatorsRef.current;
+    const obs  = effectiveOBsRef.current;
+    const fvgs = effectiveFVGsRef.current;
+    const tf   = timeframeRef.current;
+    const data = chartDataRef.current;
+
+    // ── 1. Kill Zone vertical shading ──────────────────────────────────────
+    // Only draw on intraday TFs (skip 1d/1w/1M)
+    if (ind?.sessions && data.length > 0 && !tf.includes("d") && !tf.includes("w")) {
+      const KILL_ZONES = [
+        { start: 0,  end:  3, rgb: "245,158,11",  label: "Asia" },
+        { start: 7,  end: 10, rgb: "96,165,250",  label: "London" },
+        { start: 12, end: 15, rgb: "52,211,153",  label: "NY" },
+        { start: 15, end: 17, rgb: "167,139,250", label: "PWR" },
+      ];
+
+      // Build a map of unique days from visible candles
+      const visibleRange = ts.getVisibleLogicalRange();
+      if (visibleRange) {
+        const fromIdx = Math.max(0, Math.floor(visibleRange.from));
+        const toIdx   = Math.min(data.length - 1, Math.ceil(visibleRange.to));
+        const seenDays = new Set<number>();
+
+        for (let i = fromIdx; i <= toIdx; i++) {
+          const candle = data[i];
+          if (!candle) continue;
+          const d = new Date((candle.time as number) * 1000);
+          const dayStart = Math.floor(d.getTime() / 86400000) * 86400;
+          if (seenDays.has(dayStart)) continue;
+          seenDays.add(dayStart);
+
+          for (const kz of KILL_ZONES) {
+            const kzStartTs = dayStart + kz.start * 3600;
+            const kzEndTs   = dayStart + kz.end   * 3600;
+            const x1 = ts.timeToCoordinate(kzStartTs as Time);
+            const x2 = ts.timeToCoordinate(kzEndTs   as Time);
+            if (x1 === null || x2 === null) continue;
+            const left  = Math.min(x1, x2);
+            const width = Math.abs(x2 - x1);
+            if (width < 1) continue;
+
+            // Shaded band
+            ctx.fillStyle = `rgba(${kz.rgb},0.06)`;
+            ctx.fillRect(left, 0, width, H);
+
+            // Top border line
+            ctx.strokeStyle = `rgba(${kz.rgb},0.25)`;
+            ctx.lineWidth = 1;
+            ctx.setLineDash([3, 4]);
+            ctx.beginPath();
+            ctx.moveTo(left, 0);
+            ctx.lineTo(left, H);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // Label at top of the band
+            if (width > 30) {
+              ctx.fillStyle = `rgba(${kz.rgb},0.55)`;
+              ctx.font = "bold 9px 'Inter', sans-serif";
+              ctx.fillText(kz.label, left + 4, 14);
+            }
+          }
+        }
+      }
+    }
+
+    // ── 2. Order Block boxes ───────────────────────────────────────────────
+    if (ind?.smcZones && obs.length > 0) {
+      obs.slice(-10).forEach(ob => {
+        const yHi = series.priceToCoordinate(ob.high);
+        const yLo = series.priceToCoordinate(ob.low);
+        if (yHi === null || yLo === null) return;
+
+        const isBull    = ob.type === "BULLISH";
+        const mitigated = ob.mitigated ?? false;
+
+        // Strength coloring: unmitigated = solid fill, mitigated = ghost
+        const fillAlpha   = mitigated ? 0.04 : 0.12;
+        const borderAlpha = mitigated ? 0.18 : 0.60;
+        const rgb = isBull ? "16,185,129" : "239,68,68";
+
+        const y = Math.min(yHi, yLo);
+        const h = Math.max(Math.abs(yHi - yLo), 1);
+
+        // Gradient fill: fade L→R to simulate "zone energy"
+        const grad = ctx.createLinearGradient(0, 0, W, 0);
+        grad.addColorStop(0, `rgba(${rgb},${fillAlpha * 1.6})`);
+        grad.addColorStop(1, `rgba(${rgb},${fillAlpha * 0.3})`);
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, y, W, h);
+
+        // Border lines
+        ctx.strokeStyle = `rgba(${rgb},${borderAlpha})`;
+        ctx.lineWidth   = mitigated ? 0.75 : 1.5;
+        ctx.setLineDash(mitigated ? [5, 4] : []);
+        ctx.beginPath();
+        ctx.moveTo(0, y);     ctx.lineTo(W, y);
+        ctx.moveTo(0, y + h); ctx.lineTo(W, y + h);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Label (left side, only unmitigated)
+        if (!mitigated && h > 8) {
+          ctx.fillStyle = `rgba(${rgb},0.75)`;
+          ctx.font      = "bold 10px 'JetBrains Mono', monospace";
+          const label   = isBull ? "📦 Bull OB" : "📦 Bear OB";
+          ctx.fillText(label, 6, y + h / 2 + 4);
+        } else if (mitigated && h > 6) {
+          ctx.fillStyle = `rgba(${rgb},0.35)`;
+          ctx.font      = "9px 'JetBrains Mono', monospace";
+          ctx.fillText("mitigated", 6, y + h / 2 + 3);
+        }
+      });
+    }
+
+    // ── 3. FVG boxes with 50% CE line ─────────────────────────────────────
+    if (ind?.smcZones && fvgs.length > 0) {
+      fvgs.slice(-8).forEach(fvg => {
+        const yHi = series.priceToCoordinate(fvg.high);
+        const yLo = series.priceToCoordinate(fvg.low);
+        if (yHi === null || yLo === null) return;
+
+        const isBull = fvg.type === "BULLISH";
+        const rgb    = isBull ? "16,185,129" : "239,68,68";
+        const y      = Math.min(yHi, yLo);
+        const h      = Math.max(Math.abs(yHi - yLo), 1);
+        const yCE    = (yHi + yLo) / 2;
+
+        // Subtle fill
+        ctx.fillStyle = `rgba(${rgb},0.07)`;
+        ctx.fillRect(0, y, W, h);
+
+        // Dashed border (all sides)
+        ctx.strokeStyle = `rgba(${rgb},0.40)`;
+        ctx.lineWidth   = 1;
+        ctx.setLineDash([3, 4]);
+        ctx.strokeRect(0, y, W, h);
+        ctx.setLineDash([]);
+
+        // CE (50% midline) — the key ICT level inside the FVG
+        ctx.strokeStyle = `rgba(${rgb},0.75)`;
+        ctx.lineWidth   = 1;
+        ctx.setLineDash([6, 3]);
+        ctx.beginPath();
+        ctx.moveTo(0,  yCE);
+        ctx.lineTo(W, yCE);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // CE label
+        if (h > 10) {
+          ctx.fillStyle = `rgba(${rgb},0.65)`;
+          ctx.font      = "bold 9px 'JetBrains Mono', monospace";
+          ctx.fillText(`${isBull ? "▲" : "▼"} FVG`, 6, y + 11);
+          ctx.fillStyle = `rgba(${rgb},0.85)`;
+          ctx.fillText("CE", 6, yCE - 3);
+        }
+      });
+    }
+
+    // ── 4. Liquidity Sweep 💧 detection ───────────────────────────────────
+    // A sweep = wick breaks recent pivot but body closes back inside.
+    // Only show on intraday TFs.
+    if (ind?.smcZones && data.length > 20 && !tf.includes("1w") && !tf.includes("1M")) {
+      const lookback = 20;
+      const recent   = data.slice(-lookback);
+
+      for (let i = 5; i < recent.length - 1; i++) {
+        const candle = recent[i];
+        const prev5  = recent.slice(Math.max(0, i - 5), i);
+        if (prev5.length < 3) continue;
+
+        const pivotHigh = Math.max(...prev5.map((c: any) => c.high));
+        const pivotLow  = Math.min(...prev5.map((c: any) => c.low));
+
+        const sweepHigh = candle.high > pivotHigh && candle.close < pivotHigh;
+        const sweepLow  = candle.low  < pivotLow  && candle.close > pivotLow;
+
+        if (!sweepHigh && !sweepLow) continue;
+
+        const x = ts.timeToCoordinate(candle.time as Time);
+        if (x === null) continue;
+
+        const wickY = sweepHigh
+          ? series.priceToCoordinate(candle.high)
+          : series.priceToCoordinate(candle.low);
+        if (wickY === null) continue;
+
+        // Draw 💧 emoji near the wick tip
+        ctx.font      = "12px serif";
+        ctx.fillStyle = sweepHigh ? "rgba(96,165,250,0.9)" : "rgba(248,113,113,0.9)";
+        ctx.fillText("💧", x - 6, sweepHigh ? wickY - 4 : wickY + 14);
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // stable — reads everything from refs
+
+  // Subscribe to chart scroll/zoom to redraw overlay
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    chart.timeScale().subscribeVisibleLogicalRangeChange(redrawCanvasOverlay);
+    return () => {
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(redrawCanvasOverlay);
+    };
+  // Re-subscribe when chart is rebuilt (chartRef won't trigger, but isLoading will)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoading, redrawCanvasOverlay]);
+
+  // Redraw on indicator/data changes
+  useEffect(() => {
+    redrawCanvasOverlay();
+  }, [indicators.smcZones, indicators.sessions, effectiveOBs, effectiveFVGs, redrawCanvasOverlay]);
+
+
 
   const toggleIndicator = useCallback((key: keyof IndicatorState) => {
     setIndicators(prev => ({ ...prev, [key]: !prev[key] }));
@@ -1005,6 +1393,8 @@ export default function TradingViewChart({
     autoFibDataRef.current = null;
     htfFibLinesRef.current = [];
     htfFibDataRef.current = null;
+    confluenceLinesRef.current = [];
+    setConfluenceZones([]);
 
     const chart = createChart(mainContainerRef.current, chartOptions as any);
 
@@ -1318,6 +1708,74 @@ export default function TradingViewChart({
           } catch (_) {}
           finally { setHtfFibLoading(false); }
 
+          // ── Confluence Zone Engine ──────────────────────────────────────
+          // After both LTF + HTF Fib are computed, merge overlapping levels.
+          if (indicators.autoFib && candleSeries) {
+            // Clear old confluence lines
+            confluenceLinesRef.current.forEach(entry => {
+              try { candleSeries.removePriceLine(entry.pl); } catch (_) {}
+            });
+            confluenceLinesRef.current = [];
+
+            const atr = calculateATR(chartData, 14);
+            const zones = buildConfluenceZones(
+              autoFibDataRef.current,
+              htfFibDataRef.current,
+              srLevels,
+              atr,
+            );
+
+            if (zones.length > 0) {
+              zones.slice(0, 8).forEach(zone => {
+                // Draw upper border
+                const plHi = candleSeries.createPriceLine({
+                  price: zone.priceHigh,
+                  color: zone.borderColor,
+                  lineStyle: zone.isMajor ? LineStyle.Solid : LineStyle.Dashed,
+                  lineWidth: zone.isMajor ? 2 : 1,
+                  axisLabelVisible: true,
+                  title: zone.label,
+                });
+                // Draw lower border (invisible label — upper already labels the zone)
+                const plLo = candleSeries.createPriceLine({
+                  price: zone.priceLow,
+                  color: zone.borderColor,
+                  lineStyle: zone.isMajor ? LineStyle.Solid : LineStyle.Dashed,
+                  lineWidth: 1,
+                  axisLabelVisible: false,
+                  title: "",
+                });
+                confluenceLinesRef.current.push({ pl: plHi, zone });
+                confluenceLinesRef.current.push({ pl: plLo, zone });
+
+                // Suppress individual Fib lines that fall inside this major zone
+                // (keeps chart clean — zone label replaces individual labels)
+                if (zone.isMajor) {
+                  autoFibLinesRef.current.forEach(entry => {
+                    if (entry.price >= zone.priceLow && entry.price <= zone.priceHigh) {
+                      try {
+                        entry.pl.applyOptions({ axisLabelVisible: false, title: "" });
+                      } catch (_) {}
+                    }
+                  });
+                  htfFibLinesRef.current.forEach(entry => {
+                    if (entry.price >= zone.priceLow && entry.price <= zone.priceHigh) {
+                      try {
+                        entry.pl.applyOptions({ axisLabelVisible: false, title: "" });
+                      } catch (_) {}
+                    }
+                  });
+                }
+              });
+
+              setConfluenceZones(zones.slice(0, 8));
+            } else {
+              setConfluenceZones([]);
+            }
+          }
+          // ────────────────────────────────────────────────────────────────
+
+
           // ── Restore persistent drawings ──
           const savedDrawings = loadSavedDrawings(symbol);
           savedDrawings.forEach(d => {
@@ -1341,7 +1799,16 @@ export default function TradingViewChart({
         rsiChart?.timeScale().fitContent();
         macdChart?.timeScale().fitContent();
         drawAnnotations(indicators.smcZones);
+
+        // Resize canvas to container + initial draw of ICT overlay
+        if (overlayCanvasRef.current && mainContainerRef.current) {
+          overlayCanvasRef.current.width  = mainContainerRef.current.clientWidth;
+          overlayCanvasRef.current.height = mainContainerRef.current.clientHeight;
+        }
+        redrawCanvasOverlay();
+
       } catch (error) {
+
         console.error("Error loading chart:", error);
         if (!isCancelled) setHasError(true);
       } finally {
@@ -1358,6 +1825,12 @@ export default function TradingViewChart({
       if (mainContainerRef.current) chart.applyOptions({ width: mainContainerRef.current.clientWidth });
       if (rsiContainerRef.current && rsiChart) rsiChart.applyOptions({ width: rsiContainerRef.current.clientWidth });
       if (macdContainerRef.current && macdChart) macdChart.applyOptions({ width: macdContainerRef.current.clientWidth });
+      // Resize ICT overlay canvas to match container
+      if (overlayCanvasRef.current && mainContainerRef.current) {
+        overlayCanvasRef.current.width  = mainContainerRef.current.clientWidth;
+        overlayCanvasRef.current.height = mainContainerRef.current.clientHeight;
+        redrawCanvasOverlay();
+      }
     };
     window.addEventListener("resize", handleResize);
     handleResize();
@@ -1427,6 +1900,8 @@ export default function TradingViewChart({
       autoFibLinesRef.current = [];
       autoFibDataRef.current = null;
       htfFibLinesRef.current = [];
+      confluenceLinesRef.current = [];
+
       htfFibDataRef.current = null;
       setDrawingsCount(0);
       setFibAnchor(null);
@@ -1779,8 +2254,24 @@ export default function TradingViewChart({
 
       {/* ── Main Chart Canvas ── */}
       <div ref={mainContainerRef} style={{ flexGrow: 1, width: "100%", position: "relative", minHeight: 300 }}>
+        {/* ICT Overlay Canvas — draws OB/FVG boxes, Kill Zones, Sweep markers */}
+        <canvas
+          ref={el => {
+            overlayCanvasRef.current = el;
+            if (el && mainContainerRef.current) {
+              // Set pixel dimensions on first mount
+              el.width  = mainContainerRef.current.clientWidth;
+              el.height = mainContainerRef.current.clientHeight;
+            }
+          }}
+          style={{
+            position: "absolute", inset: 0, pointerEvents: "none",
+            zIndex: 5, width: "100%", height: "100%",
+          }}
+        />
         {/* OHLCV Tooltip */}
         {tooltip && (
+
           <div style={{
             position: "absolute", top: 8, left: 8, zIndex: 15,
             background: "rgba(10,14,23,0.92)", backdropFilter: "blur(12px)",
@@ -1839,8 +2330,130 @@ export default function TradingViewChart({
           )}
         </div>
 
+        {/* Confluence Zone Legend — top-right, below drawing mode indicator */}
+        {indicators.autoFib && confluenceZones.length > 0 && (
+          <div style={{
+            position: "absolute", top: 8, right: 8, zIndex: 14,
+            display: "flex", flexDirection: "column", gap: 3,
+            pointerEvents: "none",
+          }}>
+            {confluenceZones.slice(0, 3).map((z, i) => (
+              <div key={i} style={{
+                display: "flex", alignItems: "center", gap: 6,
+                background: "rgba(10,14,23,0.82)", backdropFilter: "blur(8px)",
+                border: `1px solid ${z.borderColor}`,
+                borderRadius: 6, padding: "3px 8px",
+                fontFamily: "'JetBrains Mono', monospace", fontSize: "0.65rem",
+              }}>
+                <span style={{ color: z.borderColor, fontWeight: 800 }}>{z.label}</span>
+                <span style={{ color: "rgba(255,255,255,0.35)", fontSize: "0.55rem" }}>│</span>
+                <span style={{ color: "var(--text-secondary)" }}>
+                  {z.priceCenter.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                </span>
+                <span style={{
+                  background: z.isMajor ? "rgba(250,204,21,0.15)" : "rgba(99,179,237,0.1)",
+                  color: z.borderColor, borderRadius: 4, padding: "0 4px", fontSize: "0.58rem", fontWeight: 800,
+                }}>
+                  {z.score.toFixed(1)}pt
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* ── On-Chart Trade Plan (I3) — bottom-left, shown when setup is active ── */}
+        {setup && !compactToolbar && (() => {
+          const s = setup;
+          const entry    = (s.entry_low + s.entry_high) / 2;
+          const slDist   = Math.abs(entry - s.stop_loss);
+          const isBuy    = s.direction === "BUY";
+          const dirColor = isBuy ? "#22c55e" : "#ef4444";
+          const dirEmoji = isBuy ? "📈" : "📉";
+
+          // R:R for each TP (risk = entry→SL, reward = entry→TP)
+          const tps = [s.take_profit_1, s.take_profit_2, s.take_profit_3]
+            .filter(Boolean)
+            .map((tp, i) => {
+              const reward = Math.abs((tp as number) - entry);
+              const rr = slDist > 0 ? reward / slDist : 0;
+              return { tp: tp as number, rr, label: `TP${i + 1}` };
+            });
+
+          // Risk % of account (default 1%)
+          const riskPct = 1.0;
+
+          return (
+            <div style={{
+              position: "absolute", bottom: 36, left: 8, zIndex: 14,
+              background: "rgba(10,14,23,0.88)", backdropFilter: "blur(12px)",
+              border: `1px solid ${dirColor}30`,
+              borderLeft: `3px solid ${dirColor}`,
+              borderRadius: 8, padding: "8px 12px",
+              fontFamily: "'JetBrains Mono', monospace", fontSize: "0.68rem",
+              pointerEvents: "none", display: "flex", flexDirection: "column", gap: 5,
+              minWidth: 200, maxWidth: 260,
+            }}>
+              {/* Header */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 2 }}>
+                <span style={{ color: dirColor, fontWeight: 800, fontSize: "0.72rem" }}>
+                  {dirEmoji} {s.direction} Plan
+                </span>
+                <span style={{ color: "rgba(255,255,255,0.25)", fontSize: "0.55rem" }}>
+                  {riskPct}% risk
+                </span>
+              </div>
+
+              {/* Entry Zone */}
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                <span style={{ color: "var(--text-muted)" }}>Entry</span>
+                <span style={{ color: "#f59e0b", fontWeight: 700 }}>
+                  {formatPrice(s.entry_low)} – {formatPrice(s.entry_high)}
+                </span>
+              </div>
+
+              {/* SL */}
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                <span style={{ color: "var(--text-muted)" }}>SL</span>
+                <span style={{ color: "#f87171", fontWeight: 700 }}>
+                  {formatPrice(s.stop_loss)}
+                  <span style={{ color: "rgba(248,113,113,0.6)", fontSize: "0.6rem", marginLeft: 4 }}>
+                    ({slDist > 0 ? ((slDist / entry) * 100).toFixed(2) : "—"}%)
+                  </span>
+                </span>
+              </div>
+
+              {/* Separator */}
+              <div style={{ height: 1, background: "rgba(255,255,255,0.06)" }} />
+
+              {/* TPs with R:R */}
+              {tps.map(({ tp, rr, label }) => (
+                <div key={label} style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                  <span style={{ color: "var(--text-muted)" }}>{label}</span>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <span style={{ color: "#34d399", fontWeight: 700 }}>{formatPrice(tp)}</span>
+                    <span style={{
+                      background: rr >= 2 ? "rgba(34,197,94,0.15)" : rr >= 1 ? "rgba(245,158,11,0.15)" : "rgba(239,68,68,0.12)",
+                      color: rr >= 2 ? "#34d399" : rr >= 1 ? "#f59e0b" : "#f87171",
+                      border: `1px solid ${rr >= 2 ? "rgba(34,197,94,0.3)" : rr >= 1 ? "rgba(245,158,11,0.3)" : "rgba(239,68,68,0.25)"}`,
+                      borderRadius: 4, padding: "0 5px", fontSize: "0.62rem", fontWeight: 800,
+                    }}>
+                      {rr.toFixed(1)}R
+                    </span>
+                  </div>
+                </div>
+              ))}
+
+              {tps.length === 0 && (
+                <span style={{ color: "var(--text-muted)", fontSize: "0.63rem" }}>No TP levels set</span>
+              )}
+            </div>
+          );
+        })()}
+
         {/* Drawing mode indicator */}
         {drawingMode !== "none" && (
+
+
           <div style={{
             position: "absolute", top: 8, right: 8, zIndex: 20,
             background: drawingMode === "fibonacci" ? "rgba(245,158,11,0.15)" : "rgba(129,140,248,0.15)",

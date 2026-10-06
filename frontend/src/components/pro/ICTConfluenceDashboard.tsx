@@ -164,9 +164,14 @@ export function ICTConfluenceDashboard({ symbol, timeframe, htfTimeframe, autoRe
 
   // Build trade plan from available data
   const buildTradePlan = () => {
-    const entry = fvg?.nearest?.bullish_fvg?.entry_zone || fvg?.nearest?.bearish_fvg?.entry_zone;
     const bias = fvg?.signals?.entry_bias;
-    if (!entry || !bias) return null;
+    if (!bias || bias === "NEUTRAL") return null;
+    let entry = null;
+    if (bias.includes("BUY")) {
+      entry = fvg?.nearest?.bullish_fvg?.entry_zone;
+    } else if (bias.includes("SELL")) {
+      entry = fvg?.nearest?.bearish_fvg?.entry_zone;
+    }
     return { entry, bias, fvgSignal: fvg?.signals?.fvg_signal, breakerSignal: fvg?.signals?.breaker_signal };
   };
   const plan = buildTradePlan();
@@ -428,34 +433,42 @@ export function ICTConfluenceDashboard({ symbol, timeframe, htfTimeframe, autoRe
             <span>📋 Auto Trade Plan</span>
             <Pill label={plan.bias} color={BIAS_COLOR[plan.bias] || "#64748b"} />
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 8 }}>
-            {[
-              { label: "ENTRY", val: plan.entry.entry, color: "#6366f1" },
-              { label: "STOP LOSS", val: plan.entry.stop_loss, color: "#ef4444" },
-              { label: "TP1", val: plan.entry.tp1, color: "#10b981" },
-              { label: "TP2", val: plan.entry.tp2, color: "#10b981" },
-              { label: "TP3", val: plan.entry.tp3, color: "#a78bfa" },
-            ].map(item => (
-              <div key={item.label} style={{ padding: "10px 12px", borderRadius: 10, background: `${item.color}08`, border: `1px solid ${item.color}20`, textAlign: "center" }}>
-                <div style={{ fontSize: "0.5rem", color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 4 }}>{item.label}</div>
-                <div style={{ fontSize: "0.72rem", fontWeight: 900, fontFamily: "monospace", color: item.color }}>
-                  {item.val?.toLocaleString("en", { maximumFractionDigits: 2 }) || "—"}
-                </div>
+          {!plan.entry ? (
+             <div style={{ fontSize: "0.7rem", color: "var(--text-muted)", padding: "10px", background: "rgba(255,255,255,0.03)", borderRadius: 8, border: "1px dashed rgba(255,255,255,0.1)" }}>
+               ⚠️ Tidak ada area {plan.bias.includes("BUY") ? "Bullish" : "Bearish"} FVG/Breaker yang ditemukan untuk entry.
+             </div>
+          ) : (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 8 }}>
+                {[
+                  { label: "ENTRY", val: plan.entry.entry, color: "#6366f1" },
+                  { label: "STOP LOSS", val: plan.entry.stop_loss, color: "#ef4444" },
+                  { label: "TP1", val: plan.entry.tp1, color: "#10b981" },
+                  { label: "TP2", val: plan.entry.tp2, color: "#10b981" },
+                  { label: "TP3", val: plan.entry.tp3, color: "#a78bfa" },
+                ].map(item => (
+                  <div key={item.label} style={{ padding: "10px 12px", borderRadius: 10, background: `${item.color}08`, border: `1px solid ${item.color}20`, textAlign: "center" }}>
+                    <div style={{ fontSize: "0.5rem", color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 4 }}>{item.label}</div>
+                    <div style={{ fontSize: "0.72rem", fontWeight: 900, fontFamily: "monospace", color: item.color }}>
+                      {item.val?.toLocaleString("en", { maximumFractionDigits: 2 }) || "—"}
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-          <div style={{ marginTop: 10, display: "flex", gap: 12, fontSize: "0.65rem", color: "var(--text-muted)" }}>
-            <span>R:R TP1 <strong style={{ color: "#f59e0b" }}>1:{plan.entry.rr_tp1}</strong></span>
-            <span>R:R TP2 <strong style={{ color: "#10b981" }}>1:{plan.entry.rr_tp2}</strong></span>
-            <span>Risk <strong style={{ color: "#ef4444" }}>{plan.entry.risk_pct?.toFixed(3)}%</strong></span>
-          </div>
-          {onSetWAAlert && (
-            <button
-              onClick={() => onSetWAAlert({ symbol, score: confluenceScore, grade: confluenceGrade, entry: plan.entry, bias: plan.bias })}
-              style={{ marginTop: 12, padding: "8px 16px", borderRadius: 8, background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.25)", color: "#10b981", fontSize: "0.72rem", fontWeight: 800, cursor: "pointer" }}
-            >
-              📱 Kirim ke WhatsApp
-            </button>
+              <div style={{ marginTop: 10, display: "flex", gap: 12, fontSize: "0.65rem", color: "var(--text-muted)" }}>
+                <span>R:R TP1 <strong style={{ color: "#f59e0b" }}>1:{plan.entry.rr_tp1}</strong></span>
+                <span>R:R TP2 <strong style={{ color: "#10b981" }}>1:{plan.entry.rr_tp2}</strong></span>
+                <span>Risk <strong style={{ color: "#ef4444" }}>{plan.entry.risk_pct?.toFixed(3)}%</strong></span>
+              </div>
+              {onSetWAAlert && (
+                <button
+                  onClick={() => onSetWAAlert({ symbol, score: confluenceScore, grade: confluenceGrade, entry: plan.entry, bias: plan.bias })}
+                  style={{ marginTop: 12, padding: "8px 16px", borderRadius: 8, background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.25)", color: "#10b981", fontSize: "0.72rem", fontWeight: 800, cursor: "pointer" }}
+                >
+                  📱 Kirim ke WhatsApp
+                </button>
+              )}
+            </>
           )}
         </div>
       )}

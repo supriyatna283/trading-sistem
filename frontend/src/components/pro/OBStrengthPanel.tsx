@@ -98,7 +98,7 @@ export function OBStrengthPanel({ symbol, timeframe, htfTimeframe, autoLoad = tr
     if (!autoLoad || sym.length < 5) return;
     const t = setTimeout(() => { fetch(); }, 600);
     return () => clearTimeout(t);
-  }, [fetch, autoLoad, sym]);
+  }, [fetch, autoLoad, sym, tf, htf]);
 
   return (
     <div style={{ padding: 24, borderRadius: 16, background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)" }}>
