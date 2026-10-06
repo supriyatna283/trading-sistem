@@ -39,6 +39,14 @@ class ConfigRequest(BaseModel):
     leverage:   Optional[int]   = Field(None, example=10,   description="Futures leverage")
     margin_usd: Optional[float] = Field(None, example=20.0, description="USDT margin per trade")
     enabled:    Optional[bool]  = Field(None, example=True,  description="Global kill-switch")
+    auto_entry: Optional[bool]  = Field(None, example=True, description="Enable automated trading entries")
+    min_score:  Optional[float] = Field(None, example=18.0, description="Min confluence score to trade")
+    min_rr:     Optional[float] = Field(None, example=1.8, description="Min Risk/Reward ratio")
+    max_positions: Optional[int] = Field(None, example=3, description="Max concurrent open positions")
+    cooldown_min: Optional[int] = Field(None, example=120, description="Cooldown per symbol after exit")
+    max_setup_age_h: Optional[float] = Field(None, example=6.0, description="Max age of setup in hours")
+    max_daily_loss: Optional[float] = Field(None, example=10.0, description="Max allowed loss per day before pausing")
+    timeframes: Optional[list[str]] = Field(None, example=["1h", "4h"], description="Allowed timeframes")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -143,6 +151,14 @@ async def update_config(req: ConfigRequest, bot: AutoBotManager = Depends(requir
         leverage   = req.leverage,
         margin_usd = req.margin_usd,
         enabled    = req.enabled,
+        auto_entry = req.auto_entry,
+        min_score  = req.min_score,
+        min_rr     = req.min_rr,
+        max_positions = req.max_positions,
+        cooldown_min = req.cooldown_min,
+        max_setup_age_h = req.max_setup_age_h,
+        max_daily_loss = req.max_daily_loss,
+        timeframes = req.timeframes,
     )
     return {"status": "updated", **result}
 

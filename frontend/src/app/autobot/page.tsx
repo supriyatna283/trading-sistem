@@ -20,6 +20,24 @@ interface BotStatus {
   sl_usd: number;
   leverage: number;
   margin_usd: number;
+  auto_entry?: boolean;
+  min_score?: number;
+  min_rr?: number;
+  max_positions?: number;
+  cooldown_min?: number;
+  max_setup_age_h?: number;
+  max_daily_loss?: number;
+  timeframes?: string[];
+  daily_pnl?: number;
+  auto_state?: {
+    last_scan_at: string | null;
+    setups_in_cache: number;
+    candidates: number;
+    watchlist: any[];
+    last_action: any;
+    paused_reason: string | null;
+    total_auto_entries: number;
+  };
 }
 
 interface TradeLog {
@@ -116,6 +134,11 @@ export default function AutoBotPage() {
   const [cfgSl, setCfgSl] = useState(3);
   const [cfgLev, setCfgLev] = useState(10);
   const [cfgMargin, setCfgMargin] = useState(20);
+  const [cfgAutoEntry, setCfgAutoEntry] = useState(true);
+  const [cfgMinScore, setCfgMinScore] = useState(18);
+  const [cfgMinRr, setCfgMinRr] = useState(1.8);
+  const [cfgMaxPos, setCfgMaxPos] = useState(3);
+  const [cfgMaxLoss, setCfgMaxLoss] = useState(10);
   const [cfgLoading, setCfgLoading] = useState(false);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -132,6 +155,11 @@ export default function AutoBotPage() {
       const data: BotStatus = await r.json();
       setStatus(data);
       setCfgTp(data.tp_usd); setCfgSl(data.sl_usd); setCfgLev(data.leverage); setCfgMargin(data.margin_usd);
+      if (data.auto_entry !== undefined) setCfgAutoEntry(data.auto_entry);
+      if (data.min_score !== undefined) setCfgMinScore(data.min_score);
+      if (data.min_rr !== undefined) setCfgMinRr(data.min_rr);
+      if (data.max_positions !== undefined) setCfgMaxPos(data.max_positions);
+      if (data.max_daily_loss !== undefined) setCfgMaxLoss(data.max_daily_loss);
       setError(null);
     } catch (e: any) { setError(e.message || "Cannot reach backend"); }
     finally { setLoading(false); }
@@ -203,7 +231,15 @@ export default function AutoBotPage() {
   };
   const handleConfig = async () => {
     setCfgLoading(true);
-    try { await doPost("/api/v1/autobot/config", { tp_usd: cfgTp, sl_usd: cfgSl, leverage: cfgLev, margin_usd: cfgMargin }); notify("ok", "✅ Config updated"); await fetchStatus(); }
+    try {
+      await doPost("/api/v1/autobot/config", {
+        tp_usd: cfgTp, sl_usd: cfgSl, leverage: cfgLev, margin_usd: cfgMargin,
+        auto_entry: cfgAutoEntry, min_score: cfgMinScore, min_rr: cfgMinRr,
+        max_positions: cfgMaxPos, max_daily_loss: cfgMaxLoss
+      });
+      notify("ok", "✅ Config updated");
+      await fetchStatus();
+    }
     catch (e: any) { notify("err", `❌ ${e.message}`); }
     finally { setCfgLoading(false); }
   };
@@ -266,6 +302,7 @@ export default function AutoBotPage() {
         <StatCard label="Open Positions" value={String(status?.open_positions.length ?? 0)} sub="active trades" />
         <StatCard label="Unrealised PnL" value={totalPnl >= 0 ? `+$${fmt(totalPnl)}` : `-$${fmt(Math.abs(totalPnl))}`} color={totalPnl >= 0 ? "#34d399" : "#f87171"} sub="across all open" />
         <StatCard label="Realised PnL" value={totalRealised >= 0 ? `+$${fmt(totalRealised)}` : `-$${fmt(Math.abs(totalRealised))}`} color={totalRealised >= 0 ? "#34d399" : "#f87171"} sub={`${completedTrades.length} closed`} />
+        <StatCard label="Today's Auto PnL" value={status?.daily_pnl !== undefined ? (status.daily_pnl >= 0 ? `+$${fmt(status.daily_pnl)}` : `-$${fmt(Math.abs(status.daily_pnl))}`) : "—"} color={status?.daily_pnl !== undefined && status.daily_pnl >= 0 ? "#34d399" : "#f87171"} sub="since 00:00 UTC" />
         <StatCard label="Win Rate" value={`${winRate}%`} sub={`${completedTrades.filter(t => (t.pnl_usd ?? 0) > 0).length}W / ${completedTrades.filter(t => (t.pnl_usd ?? 0) <= 0).length}L`} color={winRate >= 50 ? "#34d399" : "#f87171"} />
         <StatCard label="TP / SL" value={`$${status?.tp_usd} / $${status?.sl_usd}`} color="#facc15" sub="trailing at 30% pullback" />
         <StatCard label="Leverage" value={`${status?.leverage ?? 10}×`} sub={`Margin $${status?.margin_usd}/trade`} />
@@ -369,6 +406,40 @@ export default function AutoBotPage() {
             <p style={{ margin: 0, fontSize: "0.62rem", color: "rgba(255,255,255,0.25)" }}>
               Trailing: closes when PnL drops 30% from peak (after 50% TP reached)
             </p>
+          </div>
+
+          {/* Auto Entry Config */}
+          <div style={cardStyle}>
+            <div style={{ ...cardTitle, display: "flex", justifyContent: "space-between" }}>
+              <span>⚡ Auto-Entry Config</span>
+              <span style={{ color: status?.auto_entry ? "#34d399" : "#f87171", fontSize: "0.7rem", fontWeight: 700 }}>
+                {status?.auto_entry ? "🟢 ENABLED" : "🔴 DISABLED"}
+              </span>
+            </div>
+            {status?.auto_state?.paused_reason && (
+              <div style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 6, padding: "8px 10px", fontSize: "0.7rem", color: "#f87171", display: "flex", gap: 6, alignItems: "center" }}>
+                <span>⚠️</span> <span>Paused: {status.auto_state.paused_reason}</span>
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 6 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: "0.8rem", color: "var(--text-primary)" }}>
+                <input type="checkbox" checked={cfgAutoEntry} onChange={e => setCfgAutoEntry(e.target.checked)} style={{ width: 16, height: 16, accentColor: "#60a5fa" }} />
+                Enable Automated SMC Setup Trading
+              </label>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div><label style={labelSt}>Min Score (0-30)</label><input id="cfg-score" type="number" value={cfgMinScore} onChange={e => setCfgMinScore(Number(e.target.value))} style={inputStyle} min={10} max={30} step={0.5} /></div>
+              <div><label style={labelSt}>Min R/R</label><input id="cfg-rr" type="number" value={cfgMinRr} onChange={e => setCfgMinRr(Number(e.target.value))} style={inputStyle} min={1} max={10} step={0.1} /></div>
+              <div><label style={labelSt}>Max Concurrent Pos</label><input id="cfg-max-pos" type="number" value={cfgMaxPos} onChange={e => setCfgMaxPos(Number(e.target.value))} style={inputStyle} min={1} max={10} /></div>
+              <div><label style={labelSt}>Max Daily Loss ($)</label><input id="cfg-max-loss" type="number" value={cfgMaxLoss} onChange={e => setCfgMaxLoss(Number(e.target.value))} style={inputStyle} min={1} /></div>
+            </div>
+            <button id="cfg-auto-save-btn" onClick={handleConfig} disabled={cfgLoading} style={{ ...btnStyle("#34d399"), marginTop: 4, width: "100%", justifyContent: "center" as const }}>
+              {cfgLoading ? "Saving..." : "💾 Update Auto-Entry"}
+            </button>
+            <div style={{ fontSize: "0.62rem", color: "rgba(255,255,255,0.3)", display: "flex", justifyContent: "space-between" }}>
+              <span>Scans every 20s. 120m cooldown per pair.</span>
+              <span>Total auto-entries: {status?.auto_state?.total_auto_entries ?? 0}</span>
+            </div>
           </div>
         </div>
       </div>
