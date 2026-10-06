@@ -59,7 +59,7 @@ const SESSION_LABELS: Record<string, string> = {
 /* ─── Helpers ── */
 function fmt(price: number): string {
   if (!isFinite(price) || price <= 0) return "--";
-  if (price >= 1000)    return price.toLocaleString("en", { maximumFractionDigits: 2 });
+  if (price >= 1000)    return price.toLocaleString("en", { maximumFractionDigits: 5 });
   if (price >= 1)       return price.toFixed(4);
   if (price >= 0.001)   return price.toFixed(5);
   return price.toExponential(3);

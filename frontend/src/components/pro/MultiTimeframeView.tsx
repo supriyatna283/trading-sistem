@@ -106,7 +106,7 @@ function TFCard({ data, price }: { data: TFData; price?: number }) {
               </div>
               <div style={{ padding: "8px 10px", borderRadius: 8, background: "rgba(255,255,255,0.03)", textAlign: "center" }}>
                 <div style={{ fontSize: "0.72rem", fontWeight: 900, color: "#f59e0b", fontFamily: "monospace" }}>
-                  {data.nearestEntry ? data.nearestEntry.toLocaleString("en", { maximumFractionDigits: 2 }) : "—"}
+                  {data.nearestEntry ? data.nearestEntry.toLocaleString("en", { maximumFractionDigits: 5 }) : "—"}
                 </div>
                 <div style={{ fontSize: "0.5rem", color: "var(--text-muted)" }}>Nearest Entry</div>
               </div>

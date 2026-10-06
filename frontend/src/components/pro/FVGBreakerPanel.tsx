@@ -119,7 +119,7 @@ function EntryCard({ ez, direction, price }: { ez: EntryZone; direction: "BUY" |
           <div key={lbl as string} style={{ textAlign: "center", padding: "5px 4px", borderRadius: 6, background: "rgba(255,255,255,0.03)" }}>
             <div style={{ fontSize: "0.48rem", color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 2 }}>{lbl}</div>
             <div style={{ fontSize: "0.62rem", fontFamily: "monospace", fontWeight: 700, color: col as string }}>
-              {(val as number).toLocaleString("en", { maximumFractionDigits: 2 })}
+              {(val as number).toLocaleString("en", { maximumFractionDigits: 5 })}
             </div>
           </div>
         ))}
@@ -150,7 +150,7 @@ function FVGCard({ fvg, price, expanded, onToggle }: { fvg: FVG; price: number; 
       <div onClick={onToggle} style={{ padding: "12px 14px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
           <span style={{ fontFamily: "monospace", fontWeight: 900, fontSize: "0.72rem", color: c }}>
-            {fvg.gap_low.toLocaleString("en",{maximumFractionDigits:2})} – {fvg.gap_high.toLocaleString("en",{maximumFractionDigits:2})}
+            {fvg.gap_low.toLocaleString("en",{maximumFractionDigits: 5})} – {fvg.gap_high.toLocaleString("en",{maximumFractionDigits: 5})}
           </span>
           <Badge label={fvg.type === "BULLISH" ? "BULL FVG" : "BEAR FVG"} color={c} />
           <Badge label={fvg.status} color={statC[fvg.status] ?? "#64748b"} />
@@ -175,7 +175,7 @@ function FVGCard({ fvg, price, expanded, onToggle }: { fvg: FVG; price: number; 
           {/* Stats grid */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 6, marginBottom: 10 }}>
             {[
-              ["CE Level", fvg.ce_level.toLocaleString("en",{maximumFractionDigits:2}), "#f59e0b"],
+              ["CE Level", fvg.ce_level.toLocaleString("en",{maximumFractionDigits: 5}), "#f59e0b"],
               ["ATR Mult", `${fvg.size_atr_mult}x`, "var(--text-secondary)"],
               ["Vol Ratio", `${fvg.vol_ratio}x`, fvg.vol_ratio > 1.5 ? "#10b981" : "var(--text-muted)"],
               ["Fill%", `${fvg.fill_pct.toFixed(0)}%`, fvg.fill_pct > 0 ? "#f59e0b" : "var(--text-muted)"],
@@ -222,7 +222,7 @@ function BreakerCard({ bb, price, expanded, onToggle }: { bb: BreakerBlock; pric
       <div onClick={onToggle} style={{ padding: "12px 14px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
           <span style={{ fontFamily: "monospace", fontWeight: 900, fontSize: "0.72rem", color: c }}>
-            {bb.midpoint.toLocaleString("en",{maximumFractionDigits:2})}
+            {bb.midpoint.toLocaleString("en",{maximumFractionDigits: 5})}
           </span>
           <Badge label={bb.type.replace("_", " ")} color={c} />
           <Badge label={bb.status} color={bb.status === "ACTIVE" ? "#f59e0b" : "#64748b"} />
@@ -243,9 +243,9 @@ function BreakerCard({ bb, price, expanded, onToggle }: { bb: BreakerBlock; pric
         <div style={{ padding: "0 14px 14px" }}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 6, marginBottom: 10 }}>
             {[
-              ["Zone High", bb.ob_high.toLocaleString("en",{maximumFractionDigits:2}), "#ef4444"],
-              ["OTE Entry", bb.ote_entry.toLocaleString("en",{maximumFractionDigits:2}), c],
-              ["Zone Low",  bb.ob_low.toLocaleString("en",{maximumFractionDigits:2}), "#10b981"],
+              ["Zone High", bb.ob_high.toLocaleString("en",{maximumFractionDigits: 5}), "#ef4444"],
+              ["OTE Entry", bb.ote_entry.toLocaleString("en",{maximumFractionDigits: 5}), c],
+              ["Zone Low",  bb.ob_low.toLocaleString("en",{maximumFractionDigits: 5}), "#10b981"],
               ["Break Str", `${bb.break_strength}x`, "#f59e0b"],
             ].map(([l,v,col]) => (
               <div key={l as string} style={{ padding:"7px 8px", borderRadius:7, background:"rgba(255,255,255,0.02)", textAlign:"center" }}>
@@ -478,8 +478,8 @@ export function FVGBreakerPanel({ symbol, timeframe, autoLoad = true, onSetWAAle
                   return (
                     <div style={{ flex:1, minWidth:160, padding:"10px 12px", borderRadius:10, background:"rgba(16,185,129,0.07)", border:"1px solid rgba(16,185,129,0.2)" }}>
                       <div style={{ fontSize:"0.6rem", color:"#10b981", fontWeight:700, marginBottom:4 }}>Nearest Bullish FVG</div>
-                      <div style={{ fontFamily:"monospace", fontSize:"0.78rem", fontWeight:700 }}>CE: {f.ce_level.toLocaleString("en",{maximumFractionDigits:2})}</div>
-                      <div style={{ fontSize:"0.6rem", color:"var(--text-muted)", marginTop:2 }}>{f.gap_low.toLocaleString("en",{maximumFractionDigits:2})} – {f.gap_high.toLocaleString("en",{maximumFractionDigits:2})}</div>
+                      <div style={{ fontFamily:"monospace", fontSize:"0.78rem", fontWeight:700 }}>CE: {f.ce_level.toLocaleString("en",{maximumFractionDigits: 5})}</div>
+                      <div style={{ fontSize:"0.6rem", color:"var(--text-muted)", marginTop:2 }}>{f.gap_low.toLocaleString("en",{maximumFractionDigits: 5})} – {f.gap_high.toLocaleString("en",{maximumFractionDigits: 5})}</div>
                       <div style={{ fontSize:"0.6rem", color:"#10b981", marginTop:2 }}>{d}% below · str {f.strength}</div>
                     </div>
                   );
@@ -490,8 +490,8 @@ export function FVGBreakerPanel({ symbol, timeframe, autoLoad = true, onSetWAAle
                   return (
                     <div style={{ flex:1, minWidth:160, padding:"10px 12px", borderRadius:10, background:"rgba(239,68,68,0.07)", border:"1px solid rgba(239,68,68,0.2)" }}>
                       <div style={{ fontSize:"0.6rem", color:"#ef4444", fontWeight:700, marginBottom:4 }}>Nearest Bearish FVG</div>
-                      <div style={{ fontFamily:"monospace", fontSize:"0.78rem", fontWeight:700 }}>CE: {f.ce_level.toLocaleString("en",{maximumFractionDigits:2})}</div>
-                      <div style={{ fontSize:"0.6rem", color:"var(--text-muted)", marginTop:2 }}>{f.gap_low.toLocaleString("en",{maximumFractionDigits:2})} – {f.gap_high.toLocaleString("en",{maximumFractionDigits:2})}</div>
+                      <div style={{ fontFamily:"monospace", fontSize:"0.78rem", fontWeight:700 }}>CE: {f.ce_level.toLocaleString("en",{maximumFractionDigits: 5})}</div>
+                      <div style={{ fontSize:"0.6rem", color:"var(--text-muted)", marginTop:2 }}>{f.gap_low.toLocaleString("en",{maximumFractionDigits: 5})} – {f.gap_high.toLocaleString("en",{maximumFractionDigits: 5})}</div>
                       <div style={{ fontSize:"0.6rem", color:"#ef4444", marginTop:2 }}>{d}% above · str {f.strength}</div>
                     </div>
                   );
@@ -503,7 +503,7 @@ export function FVGBreakerPanel({ symbol, timeframe, autoLoad = true, onSetWAAle
                   return (
                     <div style={{ flex:1, minWidth:160, padding:"10px 12px", borderRadius:10, background:`${c}08`, border:`1px solid ${c}25` }}>
                       <div style={{ fontSize:"0.6rem", color:c, fontWeight:700, marginBottom:4 }}>Nearest Breaker</div>
-                      <div style={{ fontFamily:"monospace", fontSize:"0.78rem", fontWeight:700 }}>{b.midpoint.toLocaleString("en",{maximumFractionDigits:2})}</div>
+                      <div style={{ fontFamily:"monospace", fontSize:"0.78rem", fontWeight:700 }}>{b.midpoint.toLocaleString("en",{maximumFractionDigits: 5})}</div>
                       <div style={{ fontSize:"0.6rem", color:"var(--text-muted)", marginTop:2 }}>{b.type.replace("_BREAKER"," Breaker")}</div>
                       <div style={{ fontSize:"0.6rem", color:c, marginTop:2 }}>{Number(d) > 0 ? "+" : ""}{d}% · {b.status}</div>
                     </div>
@@ -577,7 +577,7 @@ export function FVGBreakerPanel({ symbol, timeframe, autoLoad = true, onSetWAAle
                     <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8 }}>
                       <div style={{ padding:"7px 10px", borderRadius:8, background:"rgba(255,255,255,0.02)", textAlign:"center" }}>
                         <div style={{ fontSize:"0.52rem", color:"var(--text-muted)", marginBottom:2 }}>ZONE HIGH</div>
-                        <div style={{ fontSize:"0.72rem", fontFamily:"monospace", fontWeight:700, color:"#ef4444" }}>{s.zone_high.toLocaleString("en",{maximumFractionDigits:2})}</div>
+                        <div style={{ fontSize:"0.72rem", fontFamily:"monospace", fontWeight:700, color:"#ef4444" }}>{s.zone_high.toLocaleString("en",{maximumFractionDigits: 5})}</div>
                       </div>
                       <div style={{ padding:"7px 10px", borderRadius:8, background:"rgba(255,255,255,0.02)", textAlign:"center" }}>
                         <div style={{ fontSize:"0.52rem", color:"var(--text-muted)", marginBottom:2 }}>SIZE</div>
@@ -585,7 +585,7 @@ export function FVGBreakerPanel({ symbol, timeframe, autoLoad = true, onSetWAAle
                       </div>
                       <div style={{ padding:"7px 10px", borderRadius:8, background:"rgba(255,255,255,0.02)", textAlign:"center" }}>
                         <div style={{ fontSize:"0.52rem", color:"var(--text-muted)", marginBottom:2 }}>ZONE LOW</div>
-                        <div style={{ fontSize:"0.72rem", fontFamily:"monospace", fontWeight:700, color:"#10b981" }}>{s.zone_low.toLocaleString("en",{maximumFractionDigits:2})}</div>
+                        <div style={{ fontSize:"0.72rem", fontFamily:"monospace", fontWeight:700, color:"#10b981" }}>{s.zone_low.toLocaleString("en",{maximumFractionDigits: 5})}</div>
                       </div>
                     </div>
                     <div style={{ marginTop:8 }}>
@@ -614,7 +614,7 @@ export function FVGBreakerPanel({ symbol, timeframe, autoLoad = true, onSetWAAle
                     <div style={{ display:"flex", alignItems:"center", gap:8 }}>
                       <Badge label={r.type.replace("_RB"," RB")} color={c} />
                       <div style={{ fontFamily:"monospace", fontSize:"0.72rem" }}>
-                        {r.zone_low.toLocaleString("en",{maximumFractionDigits:2})} – {r.zone_high.toLocaleString("en",{maximumFractionDigits:2})}
+                        {r.zone_low.toLocaleString("en",{maximumFractionDigits: 5})} – {r.zone_high.toLocaleString("en",{maximumFractionDigits: 5})}
                       </div>
                       <Badge label={`Wick ${r.wick_pct.toFixed(0)}%`} color="#94a3b8" size="xs" />
                     </div>

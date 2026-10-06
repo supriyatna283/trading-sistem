@@ -294,8 +294,8 @@ export function ICTConfluenceDashboard({ symbol, timeframe, htfTimeframe, autoRe
                 <div style={{ padding: "8px 10px", borderRadius: 8, background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.2)", marginBottom: 6, fontSize: "0.65rem" }}>
                   <div style={{ fontWeight: 700, color: "#10b981", marginBottom: 4 }}>📍 Nearest Bull FVG</div>
                   <div style={{ display: "flex", gap: 10, color: "var(--text-muted)" }}>
-                    <span>Zone: <strong style={{ color: "#fff" }}>{fvg.nearest.bullish_fvg.gap_low?.toLocaleString("en", { maximumFractionDigits: 2 })} – {fvg.nearest.bullish_fvg.gap_high?.toLocaleString("en", { maximumFractionDigits: 2 })}</strong></span>
-                    <span>CE: <strong style={{ color: "#f59e0b" }}>{fvg.nearest.bullish_fvg.ce_level?.toLocaleString("en", { maximumFractionDigits: 2 })}</strong></span>
+                    <span>Zone: <strong style={{ color: "#fff" }}>{fvg.nearest.bullish_fvg.gap_low?.toLocaleString("en", { maximumFractionDigits: 5 })} – {fvg.nearest.bullish_fvg.gap_high?.toLocaleString("en", { maximumFractionDigits: 5 })}</strong></span>
+                    <span>CE: <strong style={{ color: "#f59e0b" }}>{fvg.nearest.bullish_fvg.ce_level?.toLocaleString("en", { maximumFractionDigits: 5 })}</strong></span>
                   </div>
                 </div>
               )}
@@ -303,8 +303,8 @@ export function ICTConfluenceDashboard({ symbol, timeframe, htfTimeframe, autoRe
                 <div style={{ padding: "8px 10px", borderRadius: 8, background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.2)", fontSize: "0.65rem" }}>
                   <div style={{ fontWeight: 700, color: "#ef4444", marginBottom: 4 }}>📍 Nearest Bear FVG</div>
                   <div style={{ display: "flex", gap: 10, color: "var(--text-muted)" }}>
-                    <span>Zone: <strong style={{ color: "#fff" }}>{fvg.nearest.bearish_fvg.gap_low?.toLocaleString("en", { maximumFractionDigits: 2 })} – {fvg.nearest.bearish_fvg.gap_high?.toLocaleString("en", { maximumFractionDigits: 2 })}</strong></span>
-                    <span>CE: <strong style={{ color: "#f59e0b" }}>{fvg.nearest.bearish_fvg.ce_level?.toLocaleString("en", { maximumFractionDigits: 2 })}</strong></span>
+                    <span>Zone: <strong style={{ color: "#fff" }}>{fvg.nearest.bearish_fvg.gap_low?.toLocaleString("en", { maximumFractionDigits: 5 })} – {fvg.nearest.bearish_fvg.gap_high?.toLocaleString("en", { maximumFractionDigits: 5 })}</strong></span>
+                    <span>CE: <strong style={{ color: "#f59e0b" }}>{fvg.nearest.bearish_fvg.ce_level?.toLocaleString("en", { maximumFractionDigits: 5 })}</strong></span>
                   </div>
                 </div>
               )}
@@ -329,7 +329,7 @@ export function ICTConfluenceDashboard({ symbol, timeframe, htfTimeframe, autoRe
                     <Pill label={ob.best_ob.grade} color={GRADE_COLOR[ob.best_ob.grade]} size="lg" />
                   </div>
                   <div style={{ display: "flex", gap: 12, fontSize: "0.65rem", color: "var(--text-muted)", marginBottom: 6 }}>
-                    <span>Zone: <strong style={{ color: "#fff" }}>{ob.best_ob.low?.toLocaleString("en", { maximumFractionDigits: 2 })} – {ob.best_ob.high?.toLocaleString("en", { maximumFractionDigits: 2 })}</strong></span>
+                    <span>Zone: <strong style={{ color: "#fff" }}>{ob.best_ob.low?.toLocaleString("en", { maximumFractionDigits: 5 })} – {ob.best_ob.high?.toLocaleString("en", { maximumFractionDigits: 5 })}</strong></span>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <MiniBar v={ob.best_ob.score} color={GRADE_COLOR[ob.best_ob.grade] || "#64748b"} />
@@ -371,7 +371,7 @@ export function ICTConfluenceDashboard({ symbol, timeframe, htfTimeframe, autoRe
                 {(sweep.pools || []).slice(0, 4).map((p: any, i: number) => (
                   <div key={i} style={{ padding: "4px 8px", borderRadius: 6, background: p.swept ? "rgba(239,68,68,0.1)" : "rgba(255,255,255,0.04)", border: `1px solid ${p.swept ? "rgba(239,68,68,0.25)" : "rgba(255,255,255,0.07)"}`, fontSize: "0.58rem" }}>
                     <div style={{ color: "var(--text-muted)" }}>{p.type}</div>
-                    <div style={{ fontWeight: 700, fontFamily: "monospace" }}>{p.price?.toLocaleString("en", { maximumFractionDigits: 2 })}</div>
+                    <div style={{ fontWeight: 700, fontFamily: "monospace" }}>{p.price?.toLocaleString("en", { maximumFractionDigits: 5 })}</div>
                     {p.swept && <div style={{ color: "#ef4444", fontSize: "0.52rem" }}>SWEPT</div>}
                   </div>
                 ))}
@@ -409,7 +409,7 @@ export function ICTConfluenceDashboard({ symbol, timeframe, htfTimeframe, autoRe
                   <div key={item.label} style={{ padding: "7px 10px", borderRadius: 8, background: "rgba(255,255,255,0.03)", textAlign: "center" }}>
                     <div style={{ fontSize: "0.48rem", color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 2 }}>{item.label}</div>
                     <div style={{ fontSize: "0.68rem", fontWeight: 800, fontFamily: "monospace", color: item.color }}>
-                      {(item as any).raw ? item.val : (item.val as number)?.toLocaleString("en", { maximumFractionDigits: 2 }) || "—"}
+                      {(item as any).raw ? item.val : (item.val as number)?.toLocaleString("en", { maximumFractionDigits: 5 }) || "—"}
                     </div>
                   </div>
                 ))}
@@ -450,7 +450,7 @@ export function ICTConfluenceDashboard({ symbol, timeframe, htfTimeframe, autoRe
                   <div key={item.label} style={{ padding: "10px 12px", borderRadius: 10, background: `${item.color}08`, border: `1px solid ${item.color}20`, textAlign: "center" }}>
                     <div style={{ fontSize: "0.5rem", color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 4 }}>{item.label}</div>
                     <div style={{ fontSize: "0.72rem", fontWeight: 900, fontFamily: "monospace", color: item.color }}>
-                      {item.val?.toLocaleString("en", { maximumFractionDigits: 2 }) || "—"}
+                      {item.val?.toLocaleString("en", { maximumFractionDigits: 5 }) || "—"}
                     </div>
                   </div>
                 ))}

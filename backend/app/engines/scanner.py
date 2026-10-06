@@ -58,31 +58,22 @@ class MarketScanner:
             symbols = [s["symbol"] for s in all_syms]
 
         # --- PERPETUAL LIQUIDITY FILTER ---
-        # Only scan pairs that meet minimum liquidity requirements.
-        # This prevents false signals from illiquid markets.
+        # Curated Top 50 Most Liquid Binance Futures Pairs
         PRIORITY_PERPETUALS = [
-            # Major & L1s
-            "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "TONUSDT",
-            # Large Cap & Old Guards
-            "ADAUSDT", "AVAXUSDT", "DOGEUSDT", "DOTUSDT", "LINKUSDT",
-            "POLUSDT", "UNIUSDT", "AAVEUSDT", "ATOMUSDT", "LTCUSDT",
-            "NEARUSDT", "FILUSDT",
-            # New L1s/L2s
-            "APTUSDT", "ARBUSDT", "OPUSDT", "SUIUSDT", "SEIUSDT", "STRKUSDT",
-            # Ecosystem & Alts
-            "INJUSDT", "TIAUSDT", "JUPUSDT", "PYTHUSDT", "JTOUSDT", "ONDOUSDT",
-            # AI & Compute
-            "FETUSDT", "RENDERUSDT", "TAOUSDT",
-            # Memecoins
-            "WIFUSDT", "1000PEPEUSDT", "1000SHIBUSDT", "1000BONKUSDT",
-            # User Requested
-            "ZECUSDT", "ASTERUSDT", "HYPEUSDT"
+            "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", 
+            "ADAUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT", "TRXUSDT", "1000SHIBUSDT", 
+            "TONUSDT", "NEARUSDT", "UNIUSDT", "LTCUSDT", "BCHUSDT", "APTUSDT", 
+            "ARBUSDT", "OPUSDT", "SUIUSDT", "SEIUSDT", "TIAUSDT", "INJUSDT", 
+            "FETUSDT", "RENDERUSDT", "TAOUSDT", "WIFUSDT", "1000PEPEUSDT", "1000BONKUSDT", 
+            "1000FLOKIUSDT", "POLUSDT", "MATICUSDT", "AAVEUSDT", "ATOMUSDT", "STXUSDT", 
+            "IMXUSDT", "HBARUSDT", "XLMUSDT", "VETUSDT", "FILUSDT", "MKRUSDT", 
+            "GRTUSDT", "ONDOUSDT", "PYTHUSDT", "JUPUSDT", "ENAUSDT", "PENDLEUSDT", 
+            "STRKUSDT", "FTMUSDT"
         ]
         # Intersect: keep only pairs that are both in the fetched list AND in our priority list
-        # If the list is smaller than priority list (e.g. new pairs), allow it through
         fetched_set = set(symbols)
         filtered = [s for s in PRIORITY_PERPETUALS if s in fetched_set]
-        # If filter yields nothing (API returned different symbols), use the raw list capped at 50
+        # If filter yields nothing, use the raw list capped at 50
         symbols = filtered if filtered else symbols[:50]
 
         # Fetch macro context once for all symbols (shared data)

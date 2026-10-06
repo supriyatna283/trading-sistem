@@ -10,6 +10,7 @@ import { FVGBreakerPanel } from "@/components/pro/FVGBreakerPanel";
 import { SessionPairsWidget } from "@/components/pro/SessionPairsWidget";
 import { ICTConfluenceDashboard } from "@/components/pro/ICTConfluenceDashboard";
 import { MultiTimeframeView } from "@/components/pro/MultiTimeframeView";
+import { ProScannerPanel } from "@/components/pro/ProScannerPanel";
 import { useState, useCallback } from "react";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://ucilkecil387-trading-api.hf.space";
@@ -20,9 +21,10 @@ const TIMEFRAMES = ["5m","15m","1h","4h","1d"];
 const HTF_MAP: Record<string, string> = { "5m":"15m","15m":"1h","1h":"4h","4h":"1d","1d":"1d" };
 
 // ── Tabs ─────────────────────────────────────────────────────────────────────
-type Tab = "confluence"|"mtf"|"killzone"|"pd-zones"|"sweep"|"ob-strength"|"fvg-breaker"|"position";
+type Tab = "confluence"|"mtf"|"killzone"|"pd-zones"|"sweep"|"ob-strength"|"fvg-breaker"|"position"|"scanner";
 
 const TABS: { id: Tab; label: string; icon: string; desc: string; color: string; badge?: string }[] = [
+  { id:"scanner",     label:"Live Scanner",    icon:"📡", desc:"Scan pairs ready to trade",         color:"#e879f9", badge:"PRO" },
   { id:"confluence",  label:"ICT Confluence", icon:"🧠", desc:"All signals in one view",           color:"#10b981", badge:"NEW" },
   { id:"mtf",         label:"Multi-TF",        icon:"📊", desc:"4H + 1H + 15M alignment",          color:"#3b82f6", badge:"NEW" },
   { id:"killzone",    label:"Killzone",        icon:"🎯", desc:"ICT session tracker",               color:"#f59e0b" },
@@ -51,7 +53,7 @@ function WAToast({ msg, onClose }: { msg: string; onClose: () => void }) {
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function ProToolsPage() {
-  const [activeTab, setActiveTab] = useState<Tab>("confluence");
+  const [activeTab, setActiveTab] = useState<Tab>("scanner");
   const [symbol, setSymbol] = useState("BTCUSDT");
   const [timeframe, setTimeframe] = useState("1h");
   const [toast, setToast] = useState<string | null>(null);
@@ -66,10 +68,10 @@ export default function ProToolsPage() {
       const msg = `🚨 *ICT Alert — ${data.symbol}*\n\n` +
         `📊 Grade: *${data.grade}* | Score: ${data.score}/100\n` +
         `📈 Bias: *${data.bias || data.signals?.join(", ")}*\n` +
-        (data.entry ? `\n🎯 Entry: ${data.entry.entry?.toLocaleString("en", { maximumFractionDigits: 2 })}\n` +
-          `🛑 SL: ${data.entry.stop_loss?.toLocaleString("en", { maximumFractionDigits: 2 })}\n` +
-          `✅ TP1: ${data.entry.tp1?.toLocaleString("en", { maximumFractionDigits: 2 })}\n` +
-          `✅ TP2: ${data.entry.tp2?.toLocaleString("en", { maximumFractionDigits: 2 })}\n` +
+        (data.entry ? `\n🎯 Entry: ${data.entry.entry?.toLocaleString("en", { maximumFractionDigits: 5 })}\n` +
+          `🛑 SL: ${data.entry.stop_loss?.toLocaleString("en", { maximumFractionDigits: 5 })}\n` +
+          `✅ TP1: ${data.entry.tp1?.toLocaleString("en", { maximumFractionDigits: 5 })}\n` +
+          `✅ TP2: ${data.entry.tp2?.toLocaleString("en", { maximumFractionDigits: 5 })}\n` +
           `📐 R:R = 1:${data.entry.rr_tp2}` : "") +
         `\n\n_Sent from Pro Tools ICT Dashboard_`;
 
@@ -200,6 +202,13 @@ export default function ProToolsPage() {
           <div style={{ marginLeft:"auto", fontSize:"0.65rem", color:"#10b981" }}>📱 Sending WA...</div>
         )}
       </div>
+
+      {/* ══════════════════════════════════════════════
+          LIVE SCANNER TAB (NEW)
+      ══════════════════════════════════════════════ */}
+      {activeTab === "scanner" && (
+        <ProScannerPanel defaultTf={timeframe} onSetWAAlert={handleSetWAAlert} />
+      )}
 
       {/* ══════════════════════════════════════════════
           CONFLUENCE TAB (NEW)

@@ -197,10 +197,10 @@ export function PDZoneWidget({
         {/* Labels: High / Low */}
         <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
           <span style={{ fontSize: "0.6rem", color: "var(--text-muted)", fontFamily: "'JetBrains Mono', monospace" }}>
-            L: {levels?.range_low?.toLocaleString("en", { maximumFractionDigits: 2 })}
+            L: {levels?.range_low?.toLocaleString("en", { maximumFractionDigits: 5 })}
           </span>
           <span style={{ fontSize: "0.6rem", color: "var(--text-muted)", fontFamily: "'JetBrains Mono', monospace" }}>
-            H: {levels?.range_high?.toLocaleString("en", { maximumFractionDigits: 2 })}
+            H: {levels?.range_high?.toLocaleString("en", { maximumFractionDigits: 5 })}
           </span>
         </div>
       </div>
@@ -216,7 +216,7 @@ export function PDZoneWidget({
           <div key={l.label} style={{ background: "rgba(255,255,255,0.02)", borderRadius: 8, padding: "8px 10px" }}>
             <div style={{ fontSize: "0.55rem", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 2 }}>{l.label}</div>
             <div style={{ fontSize: "0.72rem", fontWeight: 700, color: l.color, fontFamily: "'JetBrains Mono', monospace" }}>
-              {l.value?.toLocaleString("en", { maximumFractionDigits: 2 })}
+              {l.value?.toLocaleString("en", { maximumFractionDigits: 5 })}
             </div>
           </div>
         ))}
