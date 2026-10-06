@@ -15,12 +15,15 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 import httpx
-from binance import AsyncClient, BinanceAPIException
-from binance.enums import (
-    SIDE_BUY, SIDE_SELL,
-    ORDER_TYPE_MARKET,
-    FUTURE_ORDER_TYPE_MARKET,
-)
+
+try:
+    from binance.client import AsyncClient
+    from binance.exceptions import BinanceAPIException
+    BINANCE_AVAILABLE = True
+except ImportError:
+    AsyncClient = None  # type: ignore
+    BinanceAPIException = Exception  # type: ignore
+    BINANCE_AVAILABLE = False
 
 logger = logging.getLogger("autobot")
 
@@ -112,6 +115,8 @@ class AutoBotManager:
         """Initialize Binance client and start monitor loop."""
         if self._running:
             return
+        if not BINANCE_AVAILABLE or AsyncClient is None:
+            raise RuntimeError("python-binance not available")
         self._client = await AsyncClient.create(self.api_key, self.api_secret)
         self._running = True
         self.enabled = True
@@ -154,9 +159,11 @@ class AutoBotManager:
             return {"error": f"Already in position for {symbol}"}
 
         margin = margin_usd or self.margin_usd
-        side   = SIDE_BUY if direction.upper() == "BUY" else SIDE_SELL
+        side   = "BUY" if direction.upper() == "BUY" else "SELL"
 
         try:
+            if not BINANCE_AVAILABLE:
+                return {"error": "python-binance not properly installed"}
             # 1. Set leverage
             await self._client.futures_change_leverage(
                 symbol=symbol, leverage=self.leverage
@@ -172,10 +179,10 @@ class AutoBotManager:
 
             # 3. Place MARKET order
             order = await self._client.futures_create_order(
-                symbol    = symbol,
-                side      = side,
-                type      = FUTURE_ORDER_TYPE_MARKET,
-                quantity  = qty,
+                symbol   = symbol,
+                side     = side,
+                type     = "MARKET",
+                quantity = qty,
             )
 
             entry_price = float(order.get("avgPrice") or mark)
@@ -228,15 +235,15 @@ class AutoBotManager:
         if not state:
             return {"error": f"No open position for {symbol}"}
 
-        close_side = SIDE_SELL if state.side == "LONG" else SIDE_BUY
+        close_side = "SELL" if state.side == "LONG" else "BUY"
 
         try:
             order = await self._client.futures_create_order(
-                symbol    = symbol,
-                side      = close_side,
-                type      = FUTURE_ORDER_TYPE_MARKET,
-                quantity  = state.qty,
-                reduceOnly= True,
+                symbol     = symbol,
+                side       = close_side,
+                type       = "MARKET",
+                quantity   = state.qty,
+                reduceOnly = True,
             )
             close_price = float(order.get("avgPrice") or 0)
             pnl         = state.calc_pnl(close_price) if close_price else None
