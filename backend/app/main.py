@@ -43,6 +43,8 @@ from app.routers import (
 )
 from app.services.auto_scheduler import run_scheduler, stop_scheduler, scheduler_state
 from app.services.whale_detector import start_whale_pollers, stop_whale_pollers
+from app.services.autobot import init_bot, get_bot
+from app.routers import autobot as autobot_router
 from app.security import require_api_key
 from fastapi import Depends
 
@@ -144,6 +146,27 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"❌ Live Alert Scanner failed to start: {e}")
 
+    # 10. Initialize AutoBot (Binance Futures auto-trader)
+    try:
+        if cfg.BINANCE_API_KEY and cfg.BINANCE_API_SECRET:
+            bot = init_bot(
+                api_key=cfg.BINANCE_API_KEY,
+                api_secret=cfg.BINANCE_API_SECRET,
+                telegram_token=getattr(cfg, "TELEGRAM_BOT_TOKEN", ""),
+                telegram_chat_id=getattr(cfg, "TELEGRAM_CHAT_ID", ""),
+                tp_usd=10.0,
+                sl_usd=3.0,
+                leverage=10,
+                margin_usd=20.0,
+            )
+            # Auto-start monitor loop
+            await bot.start()
+            logger.info("✅ AutoBot initialized & monitor started (TP=$10, SL=$3, Lev=10x)")
+        else:
+            logger.warning("⚠️ AutoBot skipped: BINANCE_API_KEY/SECRET not set")
+    except Exception as e:
+        logger.error(f"❌ AutoBot failed to initialize: {e}")
+
     yield
 
     # Shutdown
@@ -176,6 +199,15 @@ async def lifespan(app: FastAPI):
 
     stop_whale_pollers()
     logger.info("🛑 Whale pollers stopped")
+
+    # Stop AutoBot
+    try:
+        bot = get_bot()
+        if bot:
+            await bot.stop()
+            logger.info("🛑 AutoBot stopped")
+    except Exception:
+        pass
 
 
 settings = get_settings()
@@ -232,6 +264,7 @@ app.include_router(notes.router)
 app.include_router(whale_scoring.router)
 app.include_router(pro_tools.router)
 app.include_router(advanced_tools.router)
+app.include_router(autobot_router.router)
 
 
 @app.get("/")
