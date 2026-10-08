@@ -47,7 +47,7 @@ BASE_PRICES = {
     "SOLUSDT": 145, "XRPUSDT": 0.62, "ADAUSDT": 0.45,
     "DOGEUSDT": 0.12, "AVAXUSDT": 35, "DOTUSDT": 7.5,
     "LINKUSDT": 15, "EURUSD": 1.08, "GBPUSD": 1.26,
-    "USDJPY": 149.5, "XAUUSD": 2340, "GIGGLEUSDT": 36.43,
+    "USDJPY": 149.5, "XAUUSD": 2650, "XAUUSDT": 2650, "GIGGLEUSDT": 36.43,
 }
 
 
@@ -176,8 +176,11 @@ class MarketDataEngine:
             "1h": "1H", "4h": "4H", "1d": "1D",
         }
         
+        # Map XAUUSDT to PAXGUSDT for real gold data
+        fetch_symbol = "PAXGUSDT" if symbol.upper() == "XAUUSDT" else symbol.upper()
+        
         # OKX format is instId=BTC-USDT
-        okx_symbol = symbol.replace("USDT", "-USDT")
+        okx_symbol = fetch_symbol.replace("USDT", "-USDT")
         bar = okx_interval_map.get(interval, "1H")
         
         url = f"{self.OKX_BASE}/market/candles"
@@ -233,6 +236,9 @@ class MarketDataEngine:
             "1h": "1h", "4h": "4h", "1d": "1d",
         }
         
+        # Map XAUUSDT to PAXGUSDT for real gold data
+        fetch_symbol = "PAXGUSDT" if symbol.upper() == "XAUUSDT" else symbol.upper()
+        
         bi = binance_interval_map.get(interval, "1h")
         
         async def _fetch(baseUrl: str):
@@ -244,7 +250,7 @@ class MarketDataEngine:
             while remaining > 0:
                 batch_size = min(remaining, 1000)
                 params = {
-                    "symbol": symbol.upper(),
+                    "symbol": fetch_symbol,
                     "interval": bi,
                     "limit": batch_size,
                 }
@@ -410,8 +416,9 @@ class MarketDataEngine:
         """Get fallback base price for sample data generation by fetching dynamic ticker."""
         # 1. Try Binance ticker
         try:
+            fetch_symbol = "PAXGUSDT" if symbol.upper() == "XAUUSDT" else symbol.upper()
             url = f"{self.BINANCE_BASE}/ticker/price"
-            resp = await self.client.get(url, params={"symbol": symbol.upper()})
+            resp = await self.client.get(url, params={"symbol": fetch_symbol})
             if resp.status_code == 200:
                 data = resp.json()
                 if "price" in data:
@@ -421,12 +428,15 @@ class MarketDataEngine:
 
         # 2. Try OKX ticker
         try:
+            # Map XAUUSDT to PAXGUSDT for real gold data
+            fetch_symbol = "PAXGUSDT" if symbol.upper() == "XAUUSDT" else symbol.upper()
+
             # Convert BTCUSDT -> BTC-USDT
-            if symbol.upper().endswith("USDT") and len(symbol) > 4:
-                base_asset = symbol[:-4].upper()
+            if fetch_symbol.endswith("USDT") and len(fetch_symbol) > 4:
+                base_asset = fetch_symbol[:-4]
                 inst_id = f"{base_asset}-USDT"
             else:
-                inst_id = symbol.upper()
+                inst_id = fetch_symbol
                 
             url = f"{self.OKX_BASE}/market/ticker"
             resp = await self.client.get(url, params={"instId": inst_id})
