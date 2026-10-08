@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { API_URL } from "@/lib/utils";
 
 interface PDZoneData {
@@ -72,8 +72,10 @@ export function PDZoneWidget({
     }
   }, [timeframe, htf]);
 
-  // Auto-fetch when symbol provided
-  useState(() => { if (symbol) fetch(symbol); });
+  // Auto-fetch when symbol/timeframe changes
+  useEffect(() => {
+    if (symbol) fetch(symbol);
+  }, [symbol, timeframe, htf, fetch]);
 
   if (loading) return (
     <div style={{ padding: 20, borderRadius: 16, background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)" }}>
