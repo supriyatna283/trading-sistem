@@ -596,6 +596,20 @@ async def get_market_structure(req: MarketStructureRequest):
         engine = _ms_engine if req.swing_lookback == 5 else MarketStructureAnalyzer(swing_lookback=req.swing_lookback)
         result = engine.analyze(df, symbol=req.symbol, timeframe=req.timeframe)
         
+        # Combine labels for the same index (e.g. HH and BOS are emitted separately in market_structure.py)
+        processed_labels = {}
+        for l in result.structure_labels:
+            if l.index not in processed_labels:
+                processed_labels[l.index] = {"index": l.index, "label": "Unknown", "is_break": False, "break_type": None}
+            
+            if l.label in ["BOS", "CHOCH"]:
+                processed_labels[l.index]["is_break"] = True
+                processed_labels[l.index]["break_type"] = l.label
+            else:
+                processed_labels[l.index]["label"] = l.label
+                
+        final_labels = list(processed_labels.values())
+
         return {
             "symbol": result.symbol,
             "timeframe": result.timeframe,
@@ -608,14 +622,7 @@ async def get_market_structure(req: MarketStructureRequest):
                     "time": str(s.time) if s.time else None
                 } for s in result.swing_points[-20:] # Return last 20 swings
             ],
-            "structure_labels": [
-                {
-                    "index": l.index,
-                    "label": l.label,
-                    "is_break": l.is_break,
-                    "break_type": l.break_type
-                } for l in result.structure_labels[-10:] # Return last 10 structure events
-            ]
+            "structure_labels": final_labels[-10:] # Return last 10 structure events
         }
     except HTTPException:
         raise
