@@ -30,17 +30,17 @@ const HTF_MAP: Record<string, string> = { "5m":"15m","15m":"1h","1h":"4h","4h":"
 // ── Tabs ─────────────────────────────────────────────────────────────────────
 type Tab = "confluence"|"mtf"|"market-structure"|"killzone"|"pd-zones"|"sweep"|"ob-strength"|"fvg-breaker"|"position"|"scanner";
 
-const TABS: { id: Tab; label: string; icon: string; desc: string; color: string; badge?: string }[] = [
-  { id:"scanner",     label:"Live Scanner",    icon:"📡", desc:"Scan pairs ready to trade",         color:"#e879f9", badge:"PRO" },
-  { id:"confluence",  label:"ICT Confluence", icon:"🧠", desc:"All signals in one view",           color:"#10b981", badge:"NEW" },
-  { id:"mtf",         label:"Multi-TF",        icon:"📊", desc:"4H + 1H + 15M alignment",          color:"#3b82f6", badge:"NEW" },
-  { id:"market-structure", label:"Market Structure", icon:"📈", desc:"MSS, CHoCH, and BOS",            color:"#ec4899", badge:"NEW" },
-  { id:"killzone",    label:"Killzone",        icon:"🎯", desc:"ICT session tracker",               color:"#f59e0b" },
-  { id:"pd-zones",    label:"P/D Zones",       icon:"📉", desc:"Premium & Discount arrays",         color:"#6366f1" },
-  { id:"sweep",       label:"Sweep",           icon:"🌊", desc:"Liquidity sweep detector",          color:"#ef4444" },
-  { id:"ob-strength", label:"OB Strength",     icon:"🧱", desc:"Order block quality scoring",       color:"#f59e0b" },
-  { id:"fvg-breaker", label:"FVG+Breaker",     icon:"⬜", desc:"Fair Value Gap & Breaker Block",    color:"#6366f1" },
-  { id:"position",    label:"Position",        icon:"⚖️", desc:"Kelly criterion calculator",        color:"#a78bfa" },
+const TABS: { id: Tab; label: string; desc: string; color: string; badge?: string }[] = [
+  { id:"scanner",     label:"Live Scanner",    desc:"Scan pairs ready to trade",         color:"#e879f9", badge:"PRO" },
+  { id:"confluence",  label:"ICT Confluence",  desc:"All signals in one view",           color:"#10b981", badge:"NEW" },
+  { id:"mtf",         label:"Multi-TF",        desc:"4H + 1H + 15M alignment",          color:"#3b82f6", badge:"NEW" },
+  { id:"market-structure", label:"Market Structure", desc:"MSS, CHoCH, and BOS",            color:"#ec4899", badge:"NEW" },
+  { id:"killzone",    label:"Killzone",        desc:"ICT session tracker",               color:"#f59e0b" },
+  { id:"pd-zones",    label:"P/D Zones",       desc:"Premium & Discount arrays",         color:"#6366f1" },
+  { id:"sweep",       label:"Sweep",           desc:"Liquidity sweep detector",          color:"#ef4444" },
+  { id:"ob-strength", label:"OB Strength",     desc:"Order block quality scoring",       color:"#f59e0b" },
+  { id:"fvg-breaker", label:"FVG+Breaker",     desc:"Fair Value Gap & Breaker Block",    color:"#6366f1" },
+  { id:"position",    label:"Position",        desc:"Kelly criterion calculator",        color:"#a78bfa" },
 ];
 
 // ── WA Alert Toast ────────────────────────────────────────────────────────────
@@ -153,9 +153,6 @@ export default function ProToolsPage() {
       {/* ── Header ── */}
       <div style={{ marginBottom: 24 }}>
         <div style={{ display:"flex", alignItems:"center", gap:14, marginBottom:16, flexWrap:"wrap" }}>
-          <div style={{ width:42, height:42, borderRadius:12, background:"linear-gradient(135deg,#ef4444,#f59e0b)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:"1.2rem", boxShadow:"0 0 20px rgba(239,68,68,0.3)", border:"1px solid rgba(255,255,255,0.1)" }}>
-            ⚡
-          </div>
           <div style={{ flex:1 }}>
             <h1 style={{ fontFamily:"'Outfit',sans-serif", fontSize:"1.6rem", fontWeight:900, letterSpacing:"-0.04em", margin:0, background:"linear-gradient(135deg,#fff 30%,#94a3b8)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent" }}>
               Pro Trading Tools
@@ -163,17 +160,17 @@ export default function ProToolsPage() {
             <p style={{ color:"var(--text-muted)", fontSize:"0.7rem", margin:0, marginTop:2 }}>
               <span style={{ color:"#ef4444", fontWeight:700 }}>ICT Framework</span>
               {" "}·{" "}
-              <span>Confluence · MTF · FVG · OB · Sweep · P/D Zones · WA Alerts</span>
+              <span>Confluence · MTF · FVG · OB · Sweep · P/D Zones · Alerts</span>
             </p>
           </div>
           <a href="/guide-pro" style={{ display:"flex", alignItems:"center", gap:6, padding:"8px 14px", borderRadius:10, background:"rgba(99,102,241,0.1)", border:"1px solid rgba(99,102,241,0.25)", color:"#6366f1", fontSize:"0.72rem", fontWeight:800, textDecoration:"none" }}>
-            📚 Guide
+            Guide
           </a>
         </div>
 
         {/* ── GLOBAL SYMBOL + TF SELECTOR ── */}
         <div style={{ padding:"14px 18px", borderRadius:14, background:"rgba(255,255,255,0.03)", border:"1px solid rgba(255,255,255,0.08)", display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
-          <span style={{ fontSize:"0.7rem", fontWeight:700, color:"var(--text-muted)", whiteSpace:"nowrap" }}>🎯 Global Symbol:</span>
+          <span style={{ fontSize:"0.7rem", fontWeight:700, color:"var(--text-muted)", whiteSpace:"nowrap" }}>Global Symbol:</span>
 
           {/* Symbol quick-pick & search */}
           <div style={{ display:"flex", gap:6, flexWrap:"wrap", alignItems: "center" }}>
@@ -193,7 +190,7 @@ export default function ProToolsPage() {
           <div style={{ width:1, height:28, background:"rgba(255,255,255,0.08)", margin:"0 4px" }} />
 
           {/* TF quick-pick */}
-          <span style={{ fontSize:"0.7rem", fontWeight:700, color:"var(--text-muted)", whiteSpace:"nowrap" }}>📅 TF:</span>
+          <span style={{ fontSize:"0.7rem", fontWeight:700, color:"var(--text-muted)", whiteSpace:"nowrap" }}>Timeframe:</span>
           <div style={{ display:"flex", gap:5 }}>
             {TIMEFRAMES.map(t => (
               <button key={t} onClick={() => setTimeframe(t)}
@@ -226,7 +223,6 @@ export default function ProToolsPage() {
                 boxShadow: isActive ? `0 0 14px ${tab.color}15` : "none",
                 position: "relative",
               }}>
-              <span style={{ fontSize:"0.95rem" }}>{tab.icon}</span>
               <span>{tab.label}</span>
               {tab.badge && (
                 <span style={{ padding:"1px 5px", borderRadius:4, fontSize:"0.48rem", fontWeight:900, background:`${tab.color}25`, color:tab.color, border:`1px solid ${tab.color}50` }}>
@@ -241,13 +237,12 @@ export default function ProToolsPage() {
 
       {/* ── Active Tab Info ── */}
       <div style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 14px", borderRadius:10, background:`${active.color}08`, border:`1px solid ${active.color}20`, marginBottom:20 }}>
-        <span style={{ fontSize:"1rem" }}>{active.icon}</span>
         <div>
           <div style={{ fontWeight:700, fontSize:"0.8rem", color:active.color }}>{active.label}</div>
           <div style={{ fontSize:"0.62rem", color:"var(--text-muted)" }}>{active.desc} · {symbol} · {timeframe}</div>
         </div>
         {sendingWA && (
-          <div style={{ marginLeft:"auto", fontSize:"0.65rem", color:"#10b981" }}>📱 Sending WA...</div>
+          <div style={{ marginLeft:"auto", fontSize:"0.65rem", color:"#10b981" }}>Sending WA...</div>
         )}
       </div>
 
