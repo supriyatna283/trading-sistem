@@ -17,9 +17,9 @@ import { useState, useCallback } from "react";
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://ucilkecil387-trading-api.hf.space";
 
 // ── Symbols & Search ──────────────────────────────────────────────────────────
-const TOP_SYMBOLS = ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT","DOGEUSDT","AVAXUSDT","LINKUSDT","ADAUSDT","MATICUSDT"];
+const TOP_SYMBOLS = ["BTCUSDT","ETHUSDT","XAUUSDT","SOLUSDT","BNBUSDT","XRPUSDT","DOGEUSDT","AVAXUSDT","LINKUSDT","ADAUSDT"];
 const ALL_SYMBOLS = [
-  ...TOP_SYMBOLS, "DOTUSDT", "LTCUSDT", "SHIBUSDT", "TRXUSDT", "UNIUSDT", "ATOMUSDT",
+  ...TOP_SYMBOLS, "MATICUSDT", "DOTUSDT", "LTCUSDT", "SHIBUSDT", "TRXUSDT", "UNIUSDT", "ATOMUSDT",
   "XLMUSDT", "NEARUSDT", "APTUSDT", "INJUSDT", "OPUSDT", "ARBUSDT", "RNDRUSDT", "SUIUSDT",
   "TIAUSDT", "SEIUSDT", "FTMUSDT", "PEPEUSDT", "WIFUSDT", "JUPUSDT"
 ].sort();
