@@ -1,55 +1,131 @@
 "use client";
 
 /**
- * ICT Confluence Dashboard
- * ========================
- * Shows ALL ICT signals for a symbol in one unified view:
- * FVG + Breaker + OB + Liquidity Sweep + PD Zone status + Trade Plan
+ * ICT Confluence Dashboard — v2
+ * ==============================
+ * Refactored to use single /full-analysis endpoint (Bug #1).
+ * Scoring now synced to backend 16-scale normalized to % (Bug #2).
+ * WA Alert includes full entry/SL/TP (Bug #10).
+ * Auto Trade Plan panel added (Feature #4).
  */
 
 import { useState, useEffect, useCallback } from "react";
 import { API_URL } from "@/lib/utils";
 
-/** Adaptive precision: more decimals for low-priced coins */
+/** Adaptive precision for price display */
 const fmtPrice = (v?: number | null) => {
-  if (v === undefined || v === null || isNaN(v)) return "-";
+  if (v === undefined || v === null || isNaN(v)) return "—";
   const a = Math.abs(v);
   const d = a >= 1000 ? 2 : a >= 1 ? 4 : a >= 0.01 ? 5 : 8;
   return v.toLocaleString("en", { maximumFractionDigits: d });
 };
+
+const fmtPct = (v?: number | null) =>
+  v != null && !isNaN(v) ? `${v.toFixed(2)}%` : "—";
 
 interface ConfluenceProps {
   symbol: string;
   timeframe: string;
   htfTimeframe: string;
   autoRefresh?: boolean;
-  refreshInterval?: number; // seconds
+  refreshInterval?: number;
   onSetWAAlert?: (data: any) => void;
 }
 
-interface ConfluenceState {
-  loading: boolean;
-  fvg: any;
-  ob: any;
-  sweep: any;
-  pd: any;
-  lastUpdated: string | null;
-  error: string | null;
+// ── Unified response shape from /full-analysis ──────────────────────────
+interface FullAnalysisData {
+  symbol: string;
+  timeframe: string;
+  htf: string;
+  current_price: number;
+  pd_zone: {
+    zone: string;
+    zone_pct: number;
+    zone_color: string;
+    signal: string;
+    htf_bias: string;
+    trade_allowed: boolean;
+    is_in_ote: boolean;
+    distance_to_ote_pct: number;
+    levels: Record<string, number>;
+    score: number;
+  };
+  liquidity_sweep: {
+    latest_sweep: any;
+    bias_from_sweep: string | null;
+    confirmed_count: number;
+    total_pools: number;
+    pools: any[];
+    score: number;
+  };
+  ob_strength: {
+    total_obs: number;
+    a_plus_count: number;
+    best_ob: any;
+    top_obs: any[];
+    score: number;
+  };
+  killzone: {
+    current_session: string;
+    is_killzone_active: boolean;
+    is_high_volume_kz: boolean;
+    time_to_next: string;
+    trade_advice: string;
+    score: number;
+  };
+  fvg: {
+    summary: any;
+    nearest: { bullish_fvg: any; bearish_fvg: any; breaker: any };
+    ict_setup: { total: number; grade: string; description: string };
+    signals: { fvg_signal: string; breaker_signal: string; entry_bias: string; confluence_score: number; messages: string[]; warnings: string[] };
+    bullish_fvgs: any[];
+    bearish_fvgs: any[];
+  };
+  trade_plan: {
+    bias: string;
+    entry: number;
+    stop_loss: number;
+    tp1: number;
+    tp2: number;
+    tp3: number;
+    rr_tp1: number;
+    rr_tp2: number;
+    risk_pct: number;
+    quality: string;
+    pd_zone: string;
+    killzone: string;
+    is_killzone: boolean;
+    in_ote: boolean;
+    confidence: number;
+  } | null;
+  confluence: {
+    total_score: number;
+    max_score: number;
+    score_pct: number;
+    grade: string;
+    bias: string;
+    signal: string;
+    breakdown: { pd_zone: number; sweep: number; ob: number; killzone: number };
+  };
 }
 
+// ── Color maps ────────────────────────────────────────────────────────────
 const GRADE_COLOR: Record<string, string> = {
-  "A+": "#10b981", "A": "#34d399", "B": "#3b82f6",
-  "C": "#f59e0b", "D": "#f97316", "WAIT": "#64748b",
+  "A+": "#10b981", A: "#34d399", B: "#3b82f6",
+  C: "#f59e0b", D: "#f97316", WEAK: "#64748b", WAIT: "#64748b",
 };
-
 const BIAS_COLOR: Record<string, string> = {
   STRONG_BUY: "#10b981", BUY: "#34d399",
   STRONG_SELL: "#ef4444", SELL: "#f87171",
   NEUTRAL: "#64748b",
 };
+const ZONE_COLOR: Record<string, string> = {
+  PREMIUM: "#ef4444", EQUILIBRIUM: "#f59e0b", DISCOUNT: "#10b981", UNKNOWN: "#64748b",
+};
 
+// ── Small reusable components ────────────────────────────────────────────
 function Pill({ label, color, size = "sm" }: { label: string; color: string; size?: "xs" | "sm" | "lg" }) {
-  const sizes = { xs: { p: "1px 5px", fs: "0.52rem" }, sm: { p: "2px 8px", fs: "0.62rem" }, lg: { p: "4px 12px", fs: "0.75rem" } };
+  const sizes = { xs: { p: "1px 5px", fs: "0.52rem" }, sm: { p: "2px 8px", fs: "0.62rem" }, lg: { p: "5px 14px", fs: "0.75rem" } };
   const s = sizes[size];
   return (
     <span style={{ padding: s.p, borderRadius: 5, fontSize: s.fs, fontWeight: 800, background: `${color}20`, color, border: `1px solid ${color}40`, whiteSpace: "nowrap" }}>
@@ -78,55 +154,155 @@ function Section({ title, icon, color, children }: { title: string; icon: string
   );
 }
 
-const ZONE_COLOR: Record<string, string> = {
-  PREMIUM: "#ef4444", EQUILIBRIUM: "#f59e0b", DISCOUNT: "#10b981", UNKNOWN: "#64748b",
-};
-const ZONE_LABEL: Record<string, string> = {
-  PREMIUM: "🔴 PREMIUM — Sell Zone", EQUILIBRIUM: "🟡 EQUILIBRIUM — Wait", DISCOUNT: "🟢 DISCOUNT — Buy Zone", UNKNOWN: "⏳ Analyzing...",
-};
+// ── Score breakdown bar ───────────────────────────────────────────────────
+function ScoreBreakdown({ breakdown, maxPer }: { breakdown: Record<string, number>; maxPer: Record<string, number> }) {
+  const labels: Record<string, string> = { pd_zone: "P/D Zone", sweep: "Sweep", ob: "OB", killzone: "Killzone" };
+  const colors: Record<string, string> = { pd_zone: "#6366f1", sweep: "#ef4444", ob: "#f59e0b", killzone: "#10b981" };
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      {Object.entries(breakdown).map(([k, v]) => {
+        const max = maxPer[k] || 4;
+        const pct = Math.min(100, (v / max) * 100);
+        const clr = colors[k] || "#64748b";
+        return (
+          <div key={k} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: "0.58rem", color: "var(--text-muted)", width: 60, flexShrink: 0 }}>{labels[k] || k}</span>
+            <div style={{ flex: 1, height: 5, borderRadius: 99, background: "rgba(255,255,255,0.05)", overflow: "hidden" }}>
+              <div style={{ height: "100%", width: `${pct}%`, background: clr, borderRadius: 99, transition: "width .6s" }} />
+            </div>
+            <span style={{ fontSize: "0.58rem", color: clr, fontWeight: 800, width: 28, textAlign: "right", flexShrink: 0 }}>{v}/{max}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
-export function ICTConfluenceDashboard({ symbol, timeframe, htfTimeframe, autoRefresh = true, refreshInterval = 30, onSetWAAlert }: ConfluenceProps) {
-  const [state, setState] = useState<ConfluenceState>({ loading: false, fvg: null, ob: null, sweep: null, pd: null, lastUpdated: null, error: null });
+// ── Trade Plan Card (Feature #4) ─────────────────────────────────────────
+function TradePlanCard({ plan, symbol, onWA }: { plan: NonNullable<FullAnalysisData["trade_plan"]>; symbol: string; onWA?: () => void }) {
+  const isBuy = plan.bias.includes("BUY");
+  const accentColor = isBuy ? "#10b981" : "#ef4444";
+  const qualityColors: Record<string, string> = { IDEAL: "#10b981", GOOD: "#3b82f6", VALID: "#f59e0b" };
+  const qColor = qualityColors[plan.quality] || "#64748b";
+
+  return (
+    <div style={{
+      borderRadius: 16, overflow: "hidden",
+      border: `1px solid ${accentColor}35`,
+      background: `${accentColor}06`,
+      boxShadow: `0 4px 24px ${accentColor}10`,
+    }}>
+      {/* Header */}
+      <div style={{ padding: "12px 18px", background: `${accentColor}12`, borderBottom: `1px solid ${accentColor}20`, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: "1.1rem" }}>{isBuy ? "📋" : "📋"}</span>
+          <div>
+            <div style={{ fontWeight: 900, fontSize: "0.9rem", color: accentColor }}>Auto Trade Plan</div>
+            <div style={{ fontSize: "0.58rem", color: "var(--text-muted)", marginTop: 1 }}>
+              {symbol} · {plan.pd_zone} Zone · {plan.killzone?.replace(/_/g, " ")}
+              {plan.in_ote && " · ✨ In OTE"}
+              {plan.is_killzone && " · 🔥 Killzone Active"}
+            </div>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <Pill label={plan.bias} color={BIAS_COLOR[plan.bias] || accentColor} />
+          <Pill label={plan.quality || "VALID"} color={qColor} size="xs" />
+          <Pill label={`${plan.confidence}% conf.`} color={plan.confidence >= 60 ? "#10b981" : plan.confidence >= 40 ? "#f59e0b" : "#ef4444"} size="xs" />
+        </div>
+      </div>
+
+      {/* Entry / SL / TP Grid */}
+      <div style={{ padding: "16px 18px" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr 1fr", gap: 8, marginBottom: 14 }}>
+          {[
+            { label: "ENTRY",     val: plan.entry,     color: "#6366f1", icon: "🎯" },
+            { label: "STOP LOSS", val: plan.stop_loss,  color: "#ef4444", icon: "🛑" },
+            { label: "TP1",       val: plan.tp1,        color: "#10b981", icon: "✅" },
+            { label: "TP2",       val: plan.tp2,        color: "#10b981", icon: "✅" },
+            { label: "TP3",       val: plan.tp3,        color: "#a78bfa", icon: "🏆" },
+          ].map(item => (
+            <div key={item.label} style={{ padding: "10px 12px", borderRadius: 10, background: `${item.color}08`, border: `1px solid ${item.color}25`, textAlign: "center" }}>
+              <div style={{ fontSize: "0.5rem", color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 3, letterSpacing: "0.06em" }}>{item.icon} {item.label}</div>
+              <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "0.7rem", fontWeight: 900, color: item.color }}>
+                {fmtPrice(item.val)}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* R:R + Risk row */}
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+          {[
+            { label: "R:R TP1", val: plan.rr_tp1 ? `1:${plan.rr_tp1}` : "—", color: "#f59e0b" },
+            { label: "R:R TP2", val: plan.rr_tp2 ? `1:${plan.rr_tp2}` : "—", color: "#10b981" },
+            { label: "Risk %",  val: fmtPct(plan.risk_pct),                  color: "#ef4444" },
+          ].map(f => (
+            <div key={f.label} style={{ flex: 1, padding: "8px 12px", borderRadius: 8, background: "rgba(255,255,255,0.03)", border: "1px solid var(--border)", textAlign: "center", minWidth: 70 }}>
+              <div style={{ fontSize: "0.5rem", color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 3 }}>{f.label}</div>
+              <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "0.78rem", fontWeight: 800, color: f.color }}>{f.val}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* WA Button */}
+        {onWA && (
+          <button onClick={onWA} style={{
+            width: "100%", padding: "10px", borderRadius: 10, cursor: "pointer",
+            background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.3)",
+            color: "#10b981", fontSize: "0.78rem", fontWeight: 800, letterSpacing: "0.03em",
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+            transition: "all 0.2s",
+          }}
+            onMouseEnter={e => (e.currentTarget.style.background = "rgba(16,185,129,0.2)")}
+            onMouseLeave={e => (e.currentTarget.style.background = "rgba(16,185,129,0.1)")}
+          >
+            📱 Kirim Trade Plan ke WhatsApp
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+// ── Main component ────────────────────────────────────────────────────────
+export function ICTConfluenceDashboard({
+  symbol, timeframe, htfTimeframe,
+  autoRefresh = true, refreshInterval = 30,
+  onSetWAAlert,
+}: ConfluenceProps) {
+  const [data, setData] = useState<FullAnalysisData | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [countdown, setCountdown] = useState(refreshInterval);
 
+  // Bug #1 fix: single /full-analysis call instead of 4 parallel calls
   const fetchAll = useCallback(async () => {
-    setState(s => ({ ...s, loading: true, error: null }));
+    setLoading(true);
+    setError(null);
     try {
-      const [fvgRes, obRes, sweepRes, pdRes] = await Promise.allSettled([
-        fetch(`${API_URL}/api/v1/pro/fvg-breaker`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ symbol, timeframe, limit: 100 }),
-        }).then(r => r.json()),
-        fetch(`${API_URL}/api/v1/pro/ob-strength`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ symbol, timeframe, htf: htfTimeframe }),
-        }).then(r => r.json()),
-        fetch(`${API_URL}/api/v1/pro/liquidity-sweep`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ symbol, timeframe }),
-        }).then(r => r.json()),
-        fetch(`${API_URL}/api/v1/pro/pd-zones`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ symbol, timeframe, htf: htfTimeframe }),
-        }).then(r => r.json()),
-      ]);
-
-      setState({
-        loading: false,
-        fvg:   fvgRes.status   === "fulfilled" ? fvgRes.value   : null,
-        ob:    obRes.status    === "fulfilled" ? obRes.value    : null,
-        sweep: sweepRes.status === "fulfilled" ? sweepRes.value : null,
-        pd:    pdRes.status    === "fulfilled" ? pdRes.value?.pd_zone ?? pdRes.value : null,
-        lastUpdated: new Date().toLocaleTimeString("id-ID"),
-        error: null,
+      const res = await fetch(`${API_URL}/api/v1/pro/full-analysis`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol, timeframe, htf: htfTimeframe }),
       });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      const json: FullAnalysisData = await res.json();
+      setData(json);
+      setLastUpdated(new Date().toLocaleTimeString("id-ID"));
       setCountdown(refreshInterval);
     } catch (e: any) {
-      setState(s => ({ ...s, loading: false, error: e.message }));
+      setError(e.message);
+    } finally {
+      setLoading(false);
     }
   }, [symbol, timeframe, htfTimeframe, refreshInterval]);
 
-  // Auto-fetch on symbol/TF change
   useEffect(() => { fetchAll(); }, [symbol, timeframe, htfTimeframe]);
 
   // Auto-refresh countdown
@@ -141,56 +317,48 @@ export function ICTConfluenceDashboard({ symbol, timeframe, htfTimeframe, autoRe
     return () => clearInterval(iv);
   }, [autoRefresh, refreshInterval, fetchAll]);
 
-  const fvg = state.fvg;
-  const ob = state.ob;
-  const sweep = state.sweep;
-  const pd = state.pd;
+  // Bug #10 fix: WA Alert now includes full trade plan
+  const handleWAAlert = useCallback(() => {
+    if (!onSetWAAlert || !data) return;
+    const plan = data.trade_plan;
+    onSetWAAlert({
+      symbol: data.symbol,
+      score: data.confluence.score_pct,
+      grade: data.confluence.grade,
+      signals: [data.confluence.signal, data.confluence.bias],
+      bias: data.confluence.bias,
+      // Include full entry plan so page.tsx WA formatter has the data
+      entry: plan ? {
+        entry: plan.entry,
+        stop_loss: plan.stop_loss,
+        tp1: plan.tp1,
+        tp2: plan.tp2,
+        tp3: plan.tp3,
+        rr_tp1: plan.rr_tp1,
+        rr_tp2: plan.rr_tp2,
+        risk_pct: plan.risk_pct,
+      } : undefined,
+    });
+  }, [onSetWAAlert, data]);
 
-  // Compute overall confluence score (4 dimensions: FVG, OB, Sweep, PD Zone)
-  const computeConfluence = () => {
-    let score = 0;
-    let signals: string[] = [];
-    if (fvg?.ict_setup?.total >= 2) { score += 25; signals.push("FVG+Breaker"); }
-    if (ob?.best_ob?.grade === "A+" || ob?.best_ob?.grade === "A") { score += 25; signals.push("OB A+"); }
-    if (sweep?.latest_sweep?.is_confirmed) { score += 20; signals.push("Sweep Confirmed"); }
-    if (sweep?.bias_from_sweep) { score += 10; signals.push("Sweep Bias"); }
-    if (pd?.trade_allowed) { score += 15; signals.push(`${pd.zone} Zone`); }
-    if (pd?.is_in_ote) { score += 5; signals.push("In OTE"); }
-    return { score: Math.min(100, score), signals };
-  };
+  // Bug #2 fix: use backend score_pct (already normalized from 16-scale to 0–100%)
+  const score = data?.confluence.score_pct ?? 0;
+  const grade = data?.confluence.grade ?? "WAIT";
+  const gradeColor = GRADE_COLOR[grade] || "#64748b";
 
-  const { score: confluenceScore, signals: activeSignals } = computeConfluence();
-  const confluenceGrade = confluenceScore >= 80 ? "A+" : confluenceScore >= 65 ? "A" : confluenceScore >= 50 ? "B" : confluenceScore >= 35 ? "C" : "D";
-
-  // Build trade plan from available data
-  const buildTradePlan = () => {
-    const bias = fvg?.signals?.entry_bias;
-    if (!bias || bias === "NEUTRAL") return null;
-    let entry = null;
-    if (bias.includes("BUY")) {
-      entry = fvg?.nearest?.bullish_fvg?.entry_zone;
-    } else if (bias.includes("SELL")) {
-      entry = fvg?.nearest?.bearish_fvg?.entry_zone;
-    }
-    return { entry, bias, fvgSignal: fvg?.signals?.fvg_signal, breakerSignal: fvg?.signals?.breaker_signal };
-  };
-  const plan = buildTradePlan();
-
-  const freshFVGs = (fvg?.bullish_fvgs || []).filter((f: any) => f.status === "FRESH").length
-    + (fvg?.bearish_fvgs || []).filter((f: any) => f.status === "FRESH").length;
-  const activeOBs = ob?.order_blocks?.filter((o: any) => o.is_fresh && o.is_tradeable).length || 0;
-  const confirmedSweeps = sweep?.confirmed_count || 0;
+  const freshFVGs = data
+    ? (data.fvg.bullish_fvgs?.filter((f: any) => f.status === "FRESH").length || 0)
+      + (data.fvg.bearish_fvgs?.filter((f: any) => f.status === "FRESH").length || 0)
+    : 0;
 
   return (
     <div>
       {/* ── Header ── */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <div>
-            <div style={{ fontWeight: 900, fontSize: "0.95rem" }}>🧠 ICT Confluence</div>
-            <div style={{ fontSize: "0.6rem", color: "var(--text-muted)" }}>
-              {symbol} · {timeframe} · {state.lastUpdated ? `Updated ${state.lastUpdated}` : "Loading..."}
-            </div>
+        <div>
+          <div style={{ fontWeight: 900, fontSize: "0.95rem" }}>🧠 ICT Confluence Dashboard</div>
+          <div style={{ fontSize: "0.6rem", color: "var(--text-muted)" }}>
+            {symbol} · {timeframe}/{htfTimeframe} · {lastUpdated ? `Updated ${lastUpdated}` : "Loading..."}
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -199,89 +367,112 @@ export function ICTConfluenceDashboard({ symbol, timeframe, htfTimeframe, autoRe
               🔄 {countdown}s
             </div>
           )}
-          <button onClick={fetchAll} disabled={state.loading} style={{ padding: "6px 14px", borderRadius: 8, background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.3)", color: "#6366f1", fontSize: "0.7rem", fontWeight: 800, cursor: "pointer" }}>
-            {state.loading ? "⟳ Analyzing..." : "⚡ Analyze"}
+          <button onClick={fetchAll} disabled={loading} style={{ padding: "6px 14px", borderRadius: 8, background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.3)", color: "#6366f1", fontSize: "0.7rem", fontWeight: 800, cursor: loading ? "not-allowed" : "pointer" }}>
+            {loading ? "⟳ Analyzing..." : "⚡ Analyze"}
           </button>
         </div>
       </div>
 
-      {/* ── Confluence Score Card ── */}
-      <div style={{ padding: "16px 20px", borderRadius: 14, background: `${GRADE_COLOR[confluenceGrade]}08`, border: `1px solid ${GRADE_COLOR[confluenceGrade]}30`, marginBottom: 16, display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap" }}>
-        {/* Score Ring */}
-        <div style={{ position: "relative", width: 90, height: 90, flexShrink: 0 }}>
-          <svg width={90} height={90} viewBox="0 0 90 90">
-            <circle cx={45} cy={45} r={32} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={7} />
-            <circle cx={45} cy={45} r={32} fill="none" stroke={GRADE_COLOR[confluenceGrade]} strokeWidth={7}
-              strokeDasharray={`${(confluenceScore / 100) * (2 * Math.PI * 32)} ${2 * Math.PI * 32}`}
-              strokeLinecap="round" transform="rotate(-90 45 45)"
-              style={{ transition: "stroke-dasharray .8s ease", filter: `drop-shadow(0 0 6px ${GRADE_COLOR[confluenceGrade]}60)` }} />
-          </svg>
-          <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 1 }}>
-            <div style={{ fontSize: "1.6rem", fontWeight: 900, color: GRADE_COLOR[confluenceGrade], lineHeight: 1, letterSpacing: "-0.05em", textShadow: `0 0 12px ${GRADE_COLOR[confluenceGrade]}80` }}>
-              {confluenceGrade}
-            </div>
-            <div style={{ fontSize: "0.5rem", color: "rgba(255,255,255,0.45)", fontWeight: 700 }}>{confluenceScore}/100</div>
-          </div>
+      {/* ── Error Banner ── */}
+      {error && (
+        <div style={{ padding: "10px 16px", borderRadius: 10, background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.25)", color: "#ef4444", fontSize: "0.72rem", marginBottom: 14 }}>
+          ⚠️ {error}
         </div>
+      )}
 
-        <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: 900, fontSize: "0.9rem", marginBottom: 8 }}>
-            Overall ICT Confluence — {symbol}
+      {/* ── Confluence Score Card (Bug #2 fixed: uses backend score_pct) ── */}
+      {data && (
+        <div style={{ padding: "16px 20px", borderRadius: 14, background: `${gradeColor}08`, border: `1px solid ${gradeColor}30`, marginBottom: 16, display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap" }}>
+          {/* Score Ring */}
+          <div style={{ position: "relative", width: 90, height: 90, flexShrink: 0 }}>
+            <svg width={90} height={90} viewBox="0 0 90 90">
+              <circle cx={45} cy={45} r={32} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={7} />
+              <circle cx={45} cy={45} r={32} fill="none" stroke={gradeColor} strokeWidth={7}
+                strokeDasharray={`${(score / 100) * (2 * Math.PI * 32)} ${2 * Math.PI * 32}`}
+                strokeLinecap="round" transform="rotate(-90 45 45)"
+                style={{ transition: "stroke-dasharray .8s ease", filter: `drop-shadow(0 0 6px ${gradeColor}60)` }} />
+            </svg>
+            <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 1 }}>
+              <div style={{ fontSize: "1.6rem", fontWeight: 900, color: gradeColor, lineHeight: 1, letterSpacing: "-0.05em", textShadow: `0 0 12px ${gradeColor}80` }}>
+                {grade}
+              </div>
+              <div style={{ fontSize: "0.5rem", color: "rgba(255,255,255,0.45)", fontWeight: 700 }}>{score.toFixed(0)}%</div>
+            </div>
           </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
-            {activeSignals.map(s => <Pill key={s} label={s} color="#10b981" size="xs" />)}
-            {activeSignals.length === 0 && <span style={{ fontSize: "0.65rem", color: "var(--text-muted)" }}>Belum ada sinyal terkonfirmasi</span>}
+
+          <div style={{ flex: 1, minWidth: 180 }}>
+            <div style={{ fontWeight: 900, fontSize: "0.9rem", marginBottom: 6 }}>
+              {data.confluence.signal} — {symbol}
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 10 }}>
+              <Pill label={data.confluence.bias} color={BIAS_COLOR[data.confluence.bias] || "#64748b"} size="xs" />
+              <Pill label={data.pd_zone.zone} color={ZONE_COLOR[data.pd_zone.zone] || "#64748b"} size="xs" />
+              {data.pd_zone.is_in_ote && <Pill label="✨ In OTE" color="#a78bfa" size="xs" />}
+              {data.killzone.is_killzone_active && <Pill label="🔥 Killzone Active" color="#f59e0b" size="xs" />}
+            </div>
+            {/* Score breakdown bars */}
+            <ScoreBreakdown
+              breakdown={data.confluence.breakdown}
+              maxPer={{ pd_zone: 4, sweep: 5, ob: 5, killzone: 3 }}
+            />
           </div>
-          <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+
+          {/* Stats */}
+          <div style={{ display: "flex", gap: 14 }}>
             {[
-              { label: "Fresh FVGs",    val: freshFVGs,       color: "#6366f1" },
-              { label: "Tradeable OBs", val: activeOBs,       color: "#f59e0b" },
-              { label: "Sweeps",        val: confirmedSweeps, color: "#ef4444" },
-              { label: "PD Zone",       val: pd?.zone || "—", color: pd?.trade_allowed ? "#10b981" : "#64748b", isStr: true },
+              { label: "Fresh FVGs",  val: freshFVGs,                        color: "#6366f1" },
+              { label: "A+ OBs",      val: data.ob_strength.a_plus_count,    color: "#f59e0b" },
+              { label: "Sweeps",      val: data.liquidity_sweep.confirmed_count, color: "#ef4444" },
             ].map(item => (
-              <div key={item.label} style={{ textAlign: "center", minWidth: 48 }}>
-                <div style={{ fontSize: (item as any).isStr ? "0.72rem" : "1.1rem", fontWeight: 900, color: item.color }}>{item.val}</div>
-                <div style={{ fontSize: "0.52rem", color: "var(--text-muted)" }}>{item.label}</div>
+              <div key={item.label} style={{ textAlign: "center", minWidth: 44 }}>
+                <div style={{ fontSize: "1.2rem", fontWeight: 900, color: item.color, lineHeight: 1 }}>{item.val}</div>
+                <div style={{ fontSize: "0.5rem", color: "var(--text-muted)", marginTop: 2 }}>{item.label}</div>
               </div>
             ))}
           </div>
-        </div>
 
-        {/* WA Alert button — show always after analysis */}
-        {onSetWAAlert && confluenceScore > 0 && (
-          <button
-            onClick={() => onSetWAAlert({ symbol, score: confluenceScore, grade: confluenceGrade, signals: activeSignals })}
-            style={{
-              padding: "10px 16px", borderRadius: 10, cursor: "pointer", whiteSpace: "nowrap",
-              background: confluenceScore >= 50 ? "rgba(16,185,129,0.15)" : "rgba(100,116,139,0.15)",
-              border: `1px solid ${confluenceScore >= 50 ? "rgba(16,185,129,0.4)" : "rgba(100,116,139,0.3)"}`,
-              color: confluenceScore >= 50 ? "#10b981" : "#94a3b8",
-              fontSize: "0.72rem", fontWeight: 800,
-            }}
-          >
-            📱 {confluenceScore >= 50 ? "Set WA Alert" : "WA (Low Score)"}
-          </button>
-        )}
-      </div>
+          {/* WA Alert button (Bug #10 fix: sends full entry data) */}
+          {onSetWAAlert && (
+            <button
+              onClick={handleWAAlert}
+              style={{
+                padding: "10px 16px", borderRadius: 10, cursor: "pointer", whiteSpace: "nowrap",
+                background: score >= 50 ? "rgba(16,185,129,0.15)" : "rgba(100,116,139,0.15)",
+                border: `1px solid ${score >= 50 ? "rgba(16,185,129,0.4)" : "rgba(100,116,139,0.3)"}`,
+                color: score >= 50 ? "#10b981" : "#94a3b8",
+                fontSize: "0.72rem", fontWeight: 800,
+              }}
+            >
+              📱 {score >= 50 ? "Set WA Alert" : "WA (Low Score)"}
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* ── Loading skeleton ── */}
+      {loading && !data && (
+        <div style={{ padding: "60px 0", textAlign: "center" }}>
+          <div style={{ width: 40, height: 40, border: "3px solid rgba(99,102,241,0.2)", borderTopColor: "#6366f1", borderRadius: "50%", animation: "spin 1s linear infinite", margin: "0 auto" }} />
+          <div style={{ marginTop: 14, fontSize: "0.82rem", color: "#6366f1", fontWeight: 700 }}>Analyzing all ICT signals...</div>
+        </div>
+      )}
 
       {/* ── Signal Grid ── */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 14, marginBottom: 14 }}>
+      {data && (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 14, marginBottom: 14 }}>
 
-        {/* FVG Section */}
-        <Section title="Fair Value Gaps" icon="⬜" color="#6366f1">
-          {!fvg ? (
-            <div style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>Click Analyze to load FVG data</div>
-          ) : (
-            <>
+            {/* FVG Section */}
+            <Section title="Fair Value Gaps" icon="⬜" color="#6366f1">
               <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
-                <Pill label={fvg.signals?.entry_bias || "—"} color={BIAS_COLOR[fvg.signals?.entry_bias] || "#64748b"} />
-                <Pill label={`Score ${fvg.signals?.confluence_score || 0}/100`} color={GRADE_COLOR[fvg.ict_setup?.grade] || "#64748b"} size="xs" />
+                <Pill label={data.fvg.signals.entry_bias || "—"} color={BIAS_COLOR[data.fvg.signals.entry_bias] || "#64748b"} />
+                <Pill label={`Score ${data.fvg.signals.confluence_score || 0}/100`} color={GRADE_COLOR[data.fvg.ict_setup?.grade] || "#64748b"} size="xs" />
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 10 }}>
                 {[
-                  { label: "Fresh FVG", val: fvg.summary?.fresh_fvgs, color: "#10b981" },
-                  { label: "Inverted", val: fvg.summary?.inverted_fvgs, color: "#a78bfa" },
-                  { label: "Institutional", val: fvg.summary?.institutional_fvgs, color: "#6366f1" },
+                  { label: "Fresh FVG",     val: data.fvg.summary?.fresh_fvgs,       color: "#10b981" },
+                  { label: "Inverted",      val: data.fvg.summary?.inverted_fvgs,    color: "#a78bfa" },
+                  { label: "Institutional", val: data.fvg.summary?.institutional_fvgs, color: "#6366f1" },
                 ].map(i => (
                   <div key={i.label} style={{ padding: "8px", borderRadius: 8, background: "rgba(255,255,255,0.03)", textAlign: "center" }}>
                     <div style={{ fontSize: "1rem", fontWeight: 900, color: i.color }}>{i.val ?? 0}</div>
@@ -289,204 +480,153 @@ export function ICTConfluenceDashboard({ symbol, timeframe, htfTimeframe, autoRe
                   </div>
                 ))}
               </div>
-              {/* Nearest FVG */}
-              {fvg.nearest?.bullish_fvg && (
+              {data.fvg.nearest?.bullish_fvg && (
                 <div style={{ padding: "8px 10px", borderRadius: 8, background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.2)", marginBottom: 6, fontSize: "0.65rem" }}>
                   <div style={{ fontWeight: 700, color: "#10b981", marginBottom: 4 }}>📍 Nearest Bull FVG</div>
-                  <div style={{ display: "flex", gap: 10, color: "var(--text-muted)" }}>
-                    <span>Zone: <strong style={{ color: "#fff" }}>{fvg.nearest.bullish_fvg.gap_low?.toLocaleString("en", { maximumFractionDigits: 5 })} – {fvg.nearest.bullish_fvg.gap_high?.toLocaleString("en", { maximumFractionDigits: 5 })}</strong></span>
-                    <span>CE: <strong style={{ color: "#f59e0b" }}>{fvg.nearest.bullish_fvg.ce_level?.toLocaleString("en", { maximumFractionDigits: 5 })}</strong></span>
+                  <div style={{ display: "flex", gap: 10, color: "var(--text-muted)", flexWrap: "wrap" }}>
+                    <span>Zone: <strong style={{ color: "#fff" }}>{fmtPrice(data.fvg.nearest.bullish_fvg.gap_low)} – {fmtPrice(data.fvg.nearest.bullish_fvg.gap_high)}</strong></span>
+                    <span>CE: <strong style={{ color: "#f59e0b" }}>{fmtPrice(data.fvg.nearest.bullish_fvg.ce_level)}</strong></span>
                   </div>
                 </div>
               )}
-              {fvg.nearest?.bearish_fvg && (
+              {data.fvg.nearest?.bearish_fvg && (
                 <div style={{ padding: "8px 10px", borderRadius: 8, background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.2)", fontSize: "0.65rem" }}>
                   <div style={{ fontWeight: 700, color: "#ef4444", marginBottom: 4 }}>📍 Nearest Bear FVG</div>
-                  <div style={{ display: "flex", gap: 10, color: "var(--text-muted)" }}>
-                    <span>Zone: <strong style={{ color: "#fff" }}>{fvg.nearest.bearish_fvg.gap_low?.toLocaleString("en", { maximumFractionDigits: 5 })} – {fvg.nearest.bearish_fvg.gap_high?.toLocaleString("en", { maximumFractionDigits: 5 })}</strong></span>
-                    <span>CE: <strong style={{ color: "#f59e0b" }}>{fvg.nearest.bearish_fvg.ce_level?.toLocaleString("en", { maximumFractionDigits: 5 })}</strong></span>
+                  <div style={{ display: "flex", gap: 10, color: "var(--text-muted)", flexWrap: "wrap" }}>
+                    <span>Zone: <strong style={{ color: "#fff" }}>{fmtPrice(data.fvg.nearest.bearish_fvg.gap_low)} – {fmtPrice(data.fvg.nearest.bearish_fvg.gap_high)}</strong></span>
+                    <span>CE: <strong style={{ color: "#f59e0b" }}>{fmtPrice(data.fvg.nearest.bearish_fvg.ce_level)}</strong></span>
                   </div>
                 </div>
               )}
-            </>
-          )}
-        </Section>
+            </Section>
 
-        {/* OB Section */}
-        <Section title="Order Blocks" icon="🧱" color="#f59e0b">
-          {!ob ? (
-            <div style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>Click Analyze to load OB data</div>
-          ) : (
-            <>
+            {/* OB Section */}
+            <Section title="Order Blocks" icon="🧱" color="#f59e0b">
               <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-                <Pill label={`${ob.a_plus_count} A+ OB`} color="#f59e0b" />
-                <Pill label={`${ob.total_obs} total`} color="#64748b" size="xs" />
+                <Pill label={`${data.ob_strength.a_plus_count} A+ OB`} color="#f59e0b" />
+                <Pill label={`${data.ob_strength.total_obs} total`} color="#64748b" size="xs" />
               </div>
-              {ob.best_ob ? (
-                <div style={{ padding: "10px 12px", borderRadius: 10, background: `${GRADE_COLOR[ob.best_ob.grade] || "#64748b"}08`, border: `1px solid ${GRADE_COLOR[ob.best_ob.grade] || "#64748b"}25` }}>
+              {data.ob_strength.best_ob ? (
+                <div style={{ padding: "10px 12px", borderRadius: 10, background: `${GRADE_COLOR[data.ob_strength.best_ob.grade] || "#64748b"}08`, border: `1px solid ${GRADE_COLOR[data.ob_strength.best_ob.grade] || "#64748b"}25` }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                    <Pill label={`Best OB: ${ob.best_ob.type}`} color={ob.best_ob.type === "BULLISH" ? "#10b981" : "#ef4444"} />
-                    <Pill label={ob.best_ob.grade} color={GRADE_COLOR[ob.best_ob.grade]} size="lg" />
+                    <Pill label={`Best: ${data.ob_strength.best_ob.type}`} color={data.ob_strength.best_ob.type === "BULLISH" ? "#10b981" : "#ef4444"} />
+                    <Pill label={data.ob_strength.best_ob.grade} color={GRADE_COLOR[data.ob_strength.best_ob.grade]} size="lg" />
                   </div>
-                  <div style={{ display: "flex", gap: 12, fontSize: "0.65rem", color: "var(--text-muted)", marginBottom: 6 }}>
-                    <span>Zone: <strong style={{ color: "#fff" }}>{ob.best_ob.low?.toLocaleString("en", { maximumFractionDigits: 5 })} – {ob.best_ob.high?.toLocaleString("en", { maximumFractionDigits: 5 })}</strong></span>
+                  <div style={{ fontSize: "0.65rem", color: "var(--text-muted)", marginBottom: 6 }}>
+                    Zone: <strong style={{ color: "#fff" }}>{fmtPrice(data.ob_strength.best_ob.low)} – {fmtPrice(data.ob_strength.best_ob.high)}</strong>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <MiniBar v={ob.best_ob.score} color={GRADE_COLOR[ob.best_ob.grade] || "#64748b"} />
-                    <span style={{ fontSize: "0.6rem", color: "var(--text-muted)", whiteSpace: "nowrap" }}>{ob.best_ob.score}/30</span>
+                    <MiniBar v={data.ob_strength.best_ob.score} color={GRADE_COLOR[data.ob_strength.best_ob.grade] || "#64748b"} />
+                    <span style={{ fontSize: "0.6rem", color: "var(--text-muted)", whiteSpace: "nowrap" }}>{data.ob_strength.best_ob.score}/30</span>
                   </div>
                 </div>
               ) : (
                 <div style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>No tradeable OBs found</div>
               )}
-            </>
-          )}
-        </Section>
+            </Section>
 
-        {/* Sweep Section */}
-        <Section title="Liquidity Sweep" icon="🌊" color="#ef4444">
-          {!sweep ? (
-            <div style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>Click Analyze to load sweep data</div>
-          ) : (
-            <>
+            {/* Sweep Section */}
+            <Section title="Liquidity Sweep" icon="🌊" color="#ef4444">
               <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
-                {sweep.bias_from_sweep && <Pill label={sweep.bias_from_sweep} color={BIAS_COLOR[sweep.bias_from_sweep] || "#64748b"} />}
-                <Pill label={`Score ${sweep.score}`} color={sweep.score >= 70 ? "#10b981" : sweep.score >= 40 ? "#f59e0b" : "#ef4444"} size="xs" />
+                {data.liquidity_sweep.bias_from_sweep && <Pill label={data.liquidity_sweep.bias_from_sweep} color={BIAS_COLOR[data.liquidity_sweep.bias_from_sweep] || "#64748b"} />}
+                <Pill label={`${data.liquidity_sweep.confirmed_count} confirmed`} color={data.liquidity_sweep.confirmed_count > 0 ? "#10b981" : "#64748b"} size="xs" />
+                <Pill label={`Score ${data.liquidity_sweep.score}`} color={data.liquidity_sweep.score >= 3 ? "#10b981" : "#64748b"} size="xs" />
               </div>
-              {sweep.latest_sweep ? (
-                <div style={{ padding: "10px 12px", borderRadius: 10, background: sweep.latest_sweep.is_confirmed ? "rgba(16,185,129,0.06)" : "rgba(239,68,68,0.05)", border: `1px solid ${sweep.latest_sweep.is_confirmed ? "rgba(16,185,129,0.2)" : "rgba(239,68,68,0.15)"}` }}>
+              {data.liquidity_sweep.latest_sweep ? (
+                <div style={{ padding: "10px 12px", borderRadius: 10, background: data.liquidity_sweep.latest_sweep.is_confirmed ? "rgba(16,185,129,0.06)" : "rgba(239,68,68,0.05)", border: `1px solid ${data.liquidity_sweep.latest_sweep.is_confirmed ? "rgba(16,185,129,0.2)" : "rgba(239,68,68,0.15)"}` }}>
                   <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
-                    <Pill label={sweep.latest_sweep.sweep_type} color="#ef4444" size="xs" />
-                    <Pill label={sweep.latest_sweep.signal_grade} color={sweep.latest_sweep.is_confirmed ? "#10b981" : "#64748b"} size="xs" />
-                    {sweep.latest_sweep.has_displacement && <Pill label="Displaced" color="#6366f1" size="xs" />}
+                    <Pill label={data.liquidity_sweep.latest_sweep.sweep_type} color="#ef4444" size="xs" />
+                    <Pill label={data.liquidity_sweep.latest_sweep.signal_grade} color={data.liquidity_sweep.latest_sweep.is_confirmed ? "#10b981" : "#64748b"} size="xs" />
+                    {data.liquidity_sweep.latest_sweep.has_displacement && <Pill label="Displaced" color="#6366f1" size="xs" />}
                   </div>
                   <div style={{ fontSize: "0.63rem", color: "var(--text-muted)" }}>
-                    Entry zone: <strong style={{ color: "#fff" }}>{fmtPrice(Math.min(sweep.latest_sweep.entry_zone_low, sweep.latest_sweep.entry_zone_high))} – {fmtPrice(Math.max(sweep.latest_sweep.entry_zone_low, sweep.latest_sweep.entry_zone_high))}</strong>
+                    Entry: <strong style={{ color: "#fff" }}>
+                      {fmtPrice(Math.min(data.liquidity_sweep.latest_sweep.entry_zone_low, data.liquidity_sweep.latest_sweep.entry_zone_high))} – {fmtPrice(Math.max(data.liquidity_sweep.latest_sweep.entry_zone_low, data.liquidity_sweep.latest_sweep.entry_zone_high))}
+                    </strong>
                   </div>
                 </div>
               ) : (
                 <div style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>No recent sweeps detected</div>
               )}
-              <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-                {(sweep.pools || []).slice(0, 4).map((p: any, i: number) => (
+              <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+                {(data.liquidity_sweep.pools || []).slice(0, 4).map((p: any, i: number) => (
                   <div key={i} style={{ padding: "4px 8px", borderRadius: 6, background: p.swept ? "rgba(239,68,68,0.1)" : "rgba(255,255,255,0.04)", border: `1px solid ${p.swept ? "rgba(239,68,68,0.25)" : "rgba(255,255,255,0.07)"}`, fontSize: "0.58rem" }}>
                     <div style={{ color: "var(--text-muted)" }}>{p.type}</div>
-                    <div style={{ fontWeight: 700, fontFamily: "monospace" }}>{p.price?.toLocaleString("en", { maximumFractionDigits: 5 })}</div>
+                    <div style={{ fontWeight: 700, fontFamily: "monospace" }}>{fmtPrice(p.price)}</div>
                     {p.swept && <div style={{ color: "#ef4444", fontSize: "0.52rem" }}>SWEPT</div>}
                   </div>
                 ))}
               </div>
-            </>
-          )}
-        </Section>
+            </Section>
 
-        {/* PD Zone Section */}
-        <Section title="P/D Zone + OTE" icon="📈" color="#3b82f6">
-          {!pd ? (
-            <div style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>Click Analyze to load PD Zone data</div>
-          ) : (
-            <>
-              {/* Zone Status */}
-              <div style={{ padding: "12px 14px", borderRadius: 10, background: `${ZONE_COLOR[pd.zone] || "#64748b"}10`, border: `1px solid ${ZONE_COLOR[pd.zone] || "#64748b"}30`, marginBottom: 10 }}>
-                <div style={{ fontWeight: 900, fontSize: "0.85rem", color: ZONE_COLOR[pd.zone] || "#64748b", marginBottom: 6 }}>
-                  {ZONE_LABEL[pd.zone] || pd.zone}
+            {/* PD Zone Section */}
+            <Section title="P/D Zone + OTE" icon="📈" color="#3b82f6">
+              <div style={{ padding: "12px 14px", borderRadius: 10, background: `${ZONE_COLOR[data.pd_zone.zone] || "#64748b"}10`, border: `1px solid ${ZONE_COLOR[data.pd_zone.zone] || "#64748b"}30`, marginBottom: 10 }}>
+                <div style={{ fontWeight: 900, fontSize: "0.85rem", color: ZONE_COLOR[data.pd_zone.zone] || "#64748b", marginBottom: 6 }}>
+                  {data.pd_zone.zone === "PREMIUM" ? "🔴 PREMIUM — Sell Zone" :
+                   data.pd_zone.zone === "DISCOUNT" ? "🟢 DISCOUNT — Buy Zone" :
+                   data.pd_zone.zone === "EQUILIBRIUM" ? "🟡 EQUILIBRIUM — Wait" : "⏳ Analyzing..."}
                 </div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  <Pill label={pd.signal || "—"} color={BIAS_COLOR[pd.signal] || "#64748b"} size="xs" />
-                  {pd.is_in_ote && <Pill label="✨ In OTE Zone" color="#a78bfa" size="xs" />}
-                  {pd.trade_allowed ? <Pill label="✅ Trade Allowed" color="#10b981" size="xs" /> : <Pill label="⛔ Wait" color="#ef4444" size="xs" />}
+                  <Pill label={data.pd_zone.signal || "—"} color={BIAS_COLOR[data.pd_zone.signal] || "#64748b"} size="xs" />
+                  {data.pd_zone.is_in_ote && <Pill label="✨ In OTE Zone" color="#a78bfa" size="xs" />}
+                  {data.pd_zone.trade_allowed ? <Pill label="✅ Trade OK" color="#10b981" size="xs" /> : <Pill label="⛔ Wait" color="#ef4444" size="xs" />}
                 </div>
               </div>
-
-              {/* OTE & Levels */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 8 }}>
                 {[
-                  { label: "OTE Low",   val: pd.levels?.ote_low,             color: "#10b981" },
-                  { label: "OTE High",  val: pd.levels?.ote_high,            color: "#10b981" },
-                  { label: "Eq. Level", val: pd.levels?.equilibrium,         color: "#f59e0b" },
-                  { label: "Zone %",    val: pd.zone_pct ? `${pd.zone_pct.toFixed(1)}%` : "—", color: "#3b82f6", raw: true },
+                  { label: "OTE Low",   val: data.pd_zone.levels?.ote_low,    color: "#10b981" },
+                  { label: "OTE High",  val: data.pd_zone.levels?.ote_high,   color: "#10b981" },
+                  { label: "Eq. Level", val: data.pd_zone.levels?.equilibrium, color: "#f59e0b" },
+                  { label: "Zone %",    val: `${data.pd_zone.zone_pct?.toFixed(1)}%`, color: "#3b82f6", raw: true },
                 ].map(item => (
                   <div key={item.label} style={{ padding: "7px 10px", borderRadius: 8, background: "rgba(255,255,255,0.03)", textAlign: "center" }}>
                     <div style={{ fontSize: "0.48rem", color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 2 }}>{item.label}</div>
                     <div style={{ fontSize: "0.68rem", fontWeight: 800, fontFamily: "monospace", color: item.color }}>
-                      {(item as any).raw ? item.val : (item.val as number)?.toLocaleString("en", { maximumFractionDigits: 5 }) || "—"}
+                      {(item as any).raw ? item.val : fmtPrice(item.val as number)}
                     </div>
                   </div>
                 ))}
               </div>
-
-              {/* OTE distance */}
-              {pd.distance_to_ote_pct != null && !pd.is_in_ote && (
+              {data.pd_zone.distance_to_ote_pct != null && !data.pd_zone.is_in_ote && (
                 <div style={{ padding: "6px 10px", borderRadius: 7, background: "rgba(167,139,250,0.06)", border: "1px solid rgba(167,139,250,0.2)", fontSize: "0.62rem", color: "#a78bfa" }}>
-                  ★ OTE distance: <strong>{pd.distance_to_ote_pct.toFixed(2)}%</strong> away
+                  ★ OTE distance: <strong>{data.pd_zone.distance_to_ote_pct.toFixed(2)}%</strong> away
                 </div>
               )}
-            </>
-          )}
-        </Section>
-      </div>
-
-      {/* ── Trade Plan ── */}
-      {plan && (
-        <div style={{ padding: "16px 20px", borderRadius: 14, background: "rgba(99,102,241,0.06)", border: "1px solid rgba(99,102,241,0.2)", marginBottom: 14 }}>
-          <div style={{ fontWeight: 800, fontSize: "0.85rem", marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
-            <span>📋 Auto Trade Plan</span>
-            <Pill label={plan.bias} color={BIAS_COLOR[plan.bias] || "#64748b"} />
+            </Section>
           </div>
-          {!plan.entry ? (
-             <div style={{ fontSize: "0.7rem", color: "var(--text-muted)", padding: "10px", background: "rgba(255,255,255,0.03)", borderRadius: 8, border: "1px dashed rgba(255,255,255,0.1)" }}>
-               ⚠️ Tidak ada area {plan.bias.includes("BUY") ? "Bullish" : "Bearish"} FVG/Breaker yang ditemukan untuk entry.
-             </div>
-          ) : (
-            <>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 8 }}>
-                {[
-                  { label: "ENTRY", val: plan.entry.entry, color: "#6366f1" },
-                  { label: "STOP LOSS", val: plan.entry.stop_loss, color: "#ef4444" },
-                  { label: "TP1", val: plan.entry.tp1, color: "#10b981" },
-                  { label: "TP2", val: plan.entry.tp2, color: "#10b981" },
-                  { label: "TP3", val: plan.entry.tp3, color: "#a78bfa" },
-                ].map(item => (
-                  <div key={item.label} style={{ padding: "10px 12px", borderRadius: 10, background: `${item.color}08`, border: `1px solid ${item.color}20`, textAlign: "center" }}>
-                    <div style={{ fontSize: "0.5rem", color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 4 }}>{item.label}</div>
-                    <div style={{ fontSize: "0.72rem", fontWeight: 900, fontFamily: "monospace", color: item.color }}>
-                      {item.val?.toLocaleString("en", { maximumFractionDigits: 5 }) || "—"}
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div style={{ marginTop: 10, display: "flex", gap: 12, fontSize: "0.65rem", color: "var(--text-muted)" }}>
-                <span>R:R TP1 <strong style={{ color: "#f59e0b" }}>1:{plan.entry.rr_tp1}</strong></span>
-                <span>R:R TP2 <strong style={{ color: "#10b981" }}>1:{plan.entry.rr_tp2}</strong></span>
-                <span>Risk <strong style={{ color: "#ef4444" }}>{plan.entry.risk_pct?.toFixed(3)}%</strong></span>
-              </div>
-              {onSetWAAlert && (
-                <button
-                  onClick={() => onSetWAAlert({ symbol, score: confluenceScore, grade: confluenceGrade, entry: plan.entry, bias: plan.bias })}
-                  style={{ marginTop: 12, padding: "8px 16px", borderRadius: 8, background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.25)", color: "#10b981", fontSize: "0.72rem", fontWeight: 800, cursor: "pointer" }}
-                >
-                  📱 Kirim ke WhatsApp
-                </button>
-              )}
-            </>
-          )}
-        </div>
-      )}
 
-      {/* Signals list */}
-      {fvg?.signals?.messages?.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          {fvg.signals.messages.map((m: string, i: number) => (
-            <div key={i} style={{ padding: "6px 12px", borderRadius: 6, background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.15)", fontSize: "0.65rem", color: "#10b981" }}>
-              ✅ {m}
+          {/* ── Auto Trade Plan (Feature #4) ── */}
+          {data.trade_plan ? (
+            <div style={{ marginBottom: 14 }}>
+              <TradePlanCard
+                plan={data.trade_plan}
+                symbol={symbol}
+                onWA={onSetWAAlert ? handleWAAlert : undefined}
+              />
             </div>
-          ))}
-          {fvg.signals.warnings.map((w: string, i: number) => (
-            <div key={`w${i}`} style={{ padding: "6px 12px", borderRadius: 6, background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.15)", fontSize: "0.65rem", color: "#f59e0b" }}>
-              ⚠️ {w}
+          ) : (
+            <div style={{ padding: "16px 20px", borderRadius: 14, background: "rgba(255,255,255,0.02)", border: "1px dashed rgba(255,255,255,0.1)", marginBottom: 14, textAlign: "center", fontSize: "0.72rem", color: "var(--text-muted)" }}>
+              ⚠️ Tidak ada FVG/Breaker yang tersedia untuk generate trade plan. Tunggu setup yang lebih jelas.
             </div>
-          ))}
-        </div>
+          )}
+
+          {/* ── Signal messages ── */}
+          {data.fvg?.signals?.messages?.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {data.fvg.signals.messages.map((m: string, i: number) => (
+                <div key={i} style={{ padding: "6px 12px", borderRadius: 6, background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.15)", fontSize: "0.65rem", color: "#10b981" }}>
+                  ✅ {m}
+                </div>
+              ))}
+              {data.fvg.signals.warnings?.map((w: string, i: number) => (
+                <div key={`w${i}`} style={{ padding: "6px 12px", borderRadius: 6, background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.15)", fontSize: "0.65rem", color: "#f59e0b" }}>
+                  ⚠️ {w}
+                </div>
+              ))}
+            </div>
+          )}
+        </>
       )}
     </div>
   );

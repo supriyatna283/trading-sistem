@@ -7,7 +7,7 @@
  * Each TF shows FVG bias + entry zone for that timeframe.
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { API_URL } from "@/lib/utils";
 
 interface MTFProps {
@@ -178,7 +178,21 @@ export function MultiTimeframeView({ symbol }: MTFProps) {
     TF_CONFIG.forEach(cfg => fetchTF(cfg));
   }, [fetchTF]);
 
-  useEffect(() => { fetchAll(); }, [symbol]);
+  // Bug #4 Fix: Debounce the API calls
+  const debounceRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    setTFData(prev => prev.map(d => ({ ...d, loading: true, error: undefined })));
+    
+    debounceRef.current = setTimeout(() => {
+      TF_CONFIG.forEach(cfg => fetchTF(cfg));
+    }, 400); // 400ms debounce
+    
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [symbol, fetchTF]);
 
   // Compute alignment
   useEffect(() => {

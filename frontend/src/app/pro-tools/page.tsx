@@ -11,24 +11,32 @@ import { SessionPairsWidget } from "@/components/pro/SessionPairsWidget";
 import { ICTConfluenceDashboard } from "@/components/pro/ICTConfluenceDashboard";
 import { MultiTimeframeView } from "@/components/pro/MultiTimeframeView";
 import { ProScannerPanel } from "@/components/pro/ProScannerPanel";
+import { MarketStructurePanel } from "@/components/pro/MarketStructurePanel";
 import { useState, useCallback } from "react";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://ucilkecil387-trading-api.hf.space";
 
-// ── Symbols ──────────────────────────────────────────────────────────────────
-const SYMBOLS = ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT","DOGEUSDT","AVAXUSDT","LINKUSDT","ADAUSDT","MATICUSDT"];
+// ── Symbols & Search ──────────────────────────────────────────────────────────
+const TOP_SYMBOLS = ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT","DOGEUSDT","AVAXUSDT","LINKUSDT","ADAUSDT","MATICUSDT"];
+const ALL_SYMBOLS = [
+  ...TOP_SYMBOLS, "DOTUSDT", "LTCUSDT", "SHIBUSDT", "TRXUSDT", "UNIUSDT", "ATOMUSDT",
+  "XLMUSDT", "NEARUSDT", "APTUSDT", "INJUSDT", "OPUSDT", "ARBUSDT", "RNDRUSDT", "SUIUSDT",
+  "TIAUSDT", "SEIUSDT", "FTMUSDT", "PEPEUSDT", "WIFUSDT", "JUPUSDT"
+].sort();
+
 const TIMEFRAMES = ["5m","15m","1h","4h","1d"];
 const HTF_MAP: Record<string, string> = { "5m":"15m","15m":"1h","1h":"4h","4h":"1d","1d":"1d" };
 
 // ── Tabs ─────────────────────────────────────────────────────────────────────
-type Tab = "confluence"|"mtf"|"killzone"|"pd-zones"|"sweep"|"ob-strength"|"fvg-breaker"|"position"|"scanner";
+type Tab = "confluence"|"mtf"|"market-structure"|"killzone"|"pd-zones"|"sweep"|"ob-strength"|"fvg-breaker"|"position"|"scanner";
 
 const TABS: { id: Tab; label: string; icon: string; desc: string; color: string; badge?: string }[] = [
   { id:"scanner",     label:"Live Scanner",    icon:"📡", desc:"Scan pairs ready to trade",         color:"#e879f9", badge:"PRO" },
   { id:"confluence",  label:"ICT Confluence", icon:"🧠", desc:"All signals in one view",           color:"#10b981", badge:"NEW" },
   { id:"mtf",         label:"Multi-TF",        icon:"📊", desc:"4H + 1H + 15M alignment",          color:"#3b82f6", badge:"NEW" },
+  { id:"market-structure", label:"Market Structure", icon:"📈", desc:"MSS, CHoCH, and BOS",            color:"#ec4899", badge:"NEW" },
   { id:"killzone",    label:"Killzone",        icon:"🎯", desc:"ICT session tracker",               color:"#f59e0b" },
-  { id:"pd-zones",    label:"P/D Zones",       icon:"📈", desc:"Premium & Discount arrays",         color:"#6366f1" },
+  { id:"pd-zones",    label:"P/D Zones",       icon:"📉", desc:"Premium & Discount arrays",         color:"#6366f1" },
   { id:"sweep",       label:"Sweep",           icon:"🌊", desc:"Liquidity sweep detector",          color:"#ef4444" },
   { id:"ob-strength", label:"OB Strength",     icon:"🧱", desc:"Order block quality scoring",       color:"#f59e0b" },
   { id:"fvg-breaker", label:"FVG+Breaker",     icon:"⬜", desc:"Fair Value Gap & Breaker Block",    color:"#6366f1" },
@@ -50,6 +58,47 @@ function WAToast({ msg, onClose }: { msg: string; onClose: () => void }) {
     </div>
   );
 }
+
+// ── Symbol Search Component (Bug #12) ──────────────────────────────────────────
+function SymbolSearch({ current, onSelect }: { current: string; onSelect: (s: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+
+  const filtered = ALL_SYMBOLS.filter(s => s.toLowerCase().includes(query.toLowerCase()));
+
+  return (
+    <div style={{ position: "relative" }}>
+      <input
+        value={open ? query : current}
+        onChange={e => { setQuery(e.target.value); setOpen(true); }}
+        onFocus={() => { setQuery(""); setOpen(true); }}
+        onBlur={() => setTimeout(() => setOpen(false), 200)}
+        placeholder="Search pair..."
+        style={{ width: 110, padding: "6px 12px", borderRadius: 8, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", color: "#fff", fontSize: "0.7rem", fontFamily: "monospace", transition: "all 0.2s" }}
+      />
+      {open && (
+        <div style={{ position: "absolute", top: "100%", left: 0, marginTop: 4, width: 140, maxHeight: 200, overflowY: "auto", background: "#0f172a", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, zIndex: 50, boxShadow: "0 10px 25px rgba(0,0,0,0.5)" }}>
+          {filtered.length === 0 ? (
+            <div style={{ padding: "8px", fontSize: "0.65rem", color: "var(--text-muted)", textAlign: "center" }}>Not found</div>
+          ) : (
+            filtered.map(s => (
+              <div
+                key={s}
+                onClick={() => { onSelect(s); setOpen(false); }}
+                style={{ padding: "8px 12px", fontSize: "0.7rem", color: s === current ? "#10b981" : "#fff", cursor: "pointer", background: s === current ? "rgba(16,185,129,0.1)" : "transparent", borderBottom: "1px solid rgba(255,255,255,0.02)" }}
+                onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.05)")}
+                onMouseLeave={e => (e.currentTarget.style.background = s === current ? "rgba(16,185,129,0.1)" : "transparent")}
+              >
+                {s}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function ProToolsPage() {
@@ -126,9 +175,9 @@ export default function ProToolsPage() {
         <div style={{ padding:"14px 18px", borderRadius:14, background:"rgba(255,255,255,0.03)", border:"1px solid rgba(255,255,255,0.08)", display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
           <span style={{ fontSize:"0.7rem", fontWeight:700, color:"var(--text-muted)", whiteSpace:"nowrap" }}>🎯 Global Symbol:</span>
 
-          {/* Symbol quick-pick */}
-          <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
-            {SYMBOLS.map(s => (
+          {/* Symbol quick-pick & search */}
+          <div style={{ display:"flex", gap:6, flexWrap:"wrap", alignItems: "center" }}>
+            {TOP_SYMBOLS.map(s => (
               <button key={s} onClick={() => setSymbol(s)}
                 style={{ padding:"5px 10px", borderRadius:7, fontSize:"0.68rem", fontWeight:symbol===s?900:500, cursor:"pointer", transition:"all .15s",
                   background: symbol===s ? "rgba(16,185,129,0.15)" : "rgba(255,255,255,0.04)",
@@ -138,8 +187,7 @@ export default function ProToolsPage() {
                 {s.replace("USDT","")}
               </button>
             ))}
-            <input value={symbol} onChange={e => setSymbol(e.target.value.toUpperCase())} placeholder="OTHER..."
-              style={{ width:90, padding:"5px 10px", borderRadius:7, background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.1)", color:"#fff", fontSize:"0.68rem", fontFamily:"monospace" }} />
+            <SymbolSearch current={symbol} onSelect={setSymbol} />
           </div>
 
           <div style={{ width:1, height:28, background:"rgba(255,255,255,0.08)", margin:"0 4px" }} />
@@ -206,14 +254,14 @@ export default function ProToolsPage() {
       {/* ══════════════════════════════════════════════
           LIVE SCANNER TAB (NEW)
       ══════════════════════════════════════════════ */}
-      {activeTab === "scanner" && (
+      <div style={{ display: activeTab === "scanner" ? "block" : "none" }}>
         <ProScannerPanel defaultTf={timeframe} onSetWAAlert={handleSetWAAlert} />
-      )}
+      </div>
 
       {/* ══════════════════════════════════════════════
           CONFLUENCE TAB (NEW)
       ══════════════════════════════════════════════ */}
-      {activeTab === "confluence" && (
+      <div style={{ display: activeTab === "confluence" ? "block" : "none" }}>
         <ICTConfluenceDashboard
           symbol={symbol}
           timeframe={timeframe}
@@ -222,19 +270,26 @@ export default function ProToolsPage() {
           refreshInterval={30}
           onSetWAAlert={handleSetWAAlert}
         />
-      )}
+      </div>
 
       {/* ══════════════════════════════════════════════
           MULTI-TIMEFRAME TAB (NEW)
       ══════════════════════════════════════════════ */}
-      {activeTab === "mtf" && (
+      <div style={{ display: activeTab === "mtf" ? "block" : "none" }}>
         <MultiTimeframeView symbol={symbol} />
-      )}
+      </div>
+
+      {/* ══════════════════════════════════════════════
+          MARKET STRUCTURE TAB (NEW)
+      ══════════════════════════════════════════════ */}
+      <div style={{ display: activeTab === "market-structure" ? "block" : "none" }}>
+        <MarketStructurePanel symbol={symbol} timeframe={timeframe} />
+      </div>
 
       {/* ══════════════════════════════════════════════
           KILLZONE TAB
       ══════════════════════════════════════════════ */}
-      {activeTab === "killzone" && (
+      <div style={{ display: activeTab === "killzone" ? "block" : "none" }}>
         <div style={{ display:"flex", flexDirection:"column", gap:20 }}>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1.4fr", gap:20, alignItems:"start" }}>
             <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
@@ -263,12 +318,12 @@ export default function ProToolsPage() {
             </div>
           </div>
         </div>
-      )}
+      </div>
 
       {/* ══════════════════════════════════════════════
           PD ZONES TAB
       ══════════════════════════════════════════════ */}
-      {activeTab === "pd-zones" && (
+      <div style={{ display: activeTab === "pd-zones" ? "block" : "none" }}>
         <div style={{ display:"flex", flexDirection:"column", gap:20 }}>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 2fr", gap:20 }}>
             <PDZoneWidget symbol={symbol} htf={htf} timeframe={timeframe} />
@@ -302,26 +357,26 @@ export default function ProToolsPage() {
             </div>
           </div>
         </div>
-      )}
+      </div>
 
       {/* ══════════════════════════════════════════════
           SWEEP TAB
       ══════════════════════════════════════════════ */}
-      {activeTab === "sweep" && (
+      <div style={{ display: activeTab === "sweep" ? "block" : "none" }}>
         <LiquiditySweepPanel symbol={symbol} timeframe={timeframe} autoLoad={true} />
-      )}
+      </div>
 
       {/* ══════════════════════════════════════════════
           OB STRENGTH TAB
       ══════════════════════════════════════════════ */}
-      {activeTab === "ob-strength" && (
+      <div style={{ display: activeTab === "ob-strength" ? "block" : "none" }}>
         <OBStrengthPanel symbol={symbol} timeframe={timeframe} htfTimeframe={htf} autoLoad={true} onSetWAAlert={handleSetWAAlert} />
-      )}
+      </div>
 
       {/* ══════════════════════════════════════════════
           FVG + BREAKER TAB
       ══════════════════════════════════════════════ */}
-      {activeTab === "fvg-breaker" && (
+      <div style={{ display: activeTab === "fvg-breaker" ? "block" : "none" }}>
         <div style={{ display:"flex", flexDirection:"column", gap:20 }}>
           <FVGBreakerPanel symbol={symbol} timeframe={timeframe} autoLoad={true} onSetWAAlert={handleSetWAAlert} />
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 }}>
@@ -357,12 +412,12 @@ export default function ProToolsPage() {
             </div>
           </div>
         </div>
-      )}
+      </div>
 
       {/* ══════════════════════════════════════════════
           POSITION SIZING TAB
       ══════════════════════════════════════════════ */}
-      {activeTab === "position" && (
+      <div style={{ display: activeTab === "position" ? "block" : "none" }}>
         <div>
           <PositionSizingCalculator />
           <div style={{ marginTop:20, padding:24, borderRadius:16, background:"rgba(255,255,255,0.02)", border:"1px solid var(--border)" }}>
@@ -382,7 +437,7 @@ export default function ProToolsPage() {
             </div>
           </div>
         </div>
-      )}
+      </div>
     </MainLayout>
   );
 }

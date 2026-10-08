@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { API_URL } from "@/lib/utils";
 
 interface SizingResult {
@@ -11,7 +11,11 @@ interface SizingResult {
   stop_distance: number;
   stop_distance_pct: number;
   take_profit_1: number | null;
+  take_profit_2: number | null;
+  take_profit_3: number | null;
   rr_1: number | null;
+  rr_2: number | null;
+  rr_3: number | null;
   kelly: {
     full_kelly_pct: number;
     quarter_kelly_pct: number;
@@ -61,11 +65,13 @@ function GaugeArc({ value, max = 100, color }: { value: number; max?: number; co
 
 export function PositionSizingCalculator() {
   const [form, setForm] = useState({
-    account_balance: "",
+    account_balance: typeof window !== "undefined" ? (localStorage.getItem("psCalc_balance") || "") : "",
     risk_pct: "1",
     entry: "",
     stop_loss: "",
-    take_profit: "",
+    take_profit_1: "",
+    take_profit_2: "",
+    take_profit_3: "",
     direction: "BUY",
     win_rate: "55",
     avg_rr: "2",
@@ -74,7 +80,24 @@ export function PositionSizingCalculator() {
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState("");
 
+  // Persist account balance to localStorage
+  useEffect(() => {
+    if (form.account_balance) {
+      localStorage.setItem("psCalc_balance", form.account_balance);
+    }
+  }, [form.account_balance]);
+
   const set = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }));
+
+  // Preset risk profiles
+  const applyPreset = (preset: "conservative" | "moderate" | "aggressive") => {
+    const presets = {
+      conservative: { risk_pct: "0.5",  win_rate: "60", avg_rr: "2.5" },
+      moderate:     { risk_pct: "1.0",  win_rate: "55", avg_rr: "2.0" },
+      aggressive:   { risk_pct: "2.0",  win_rate: "50", avg_rr: "1.5" },
+    };
+    setForm(f => ({ ...f, ...presets[preset] }));
+  };
 
   const calculate = useCallback(async () => {
     const { account_balance, risk_pct, entry, stop_loss } = form;
@@ -85,6 +108,11 @@ export function PositionSizingCalculator() {
     setError("");
     setLoading(true);
     try {
+      const tps: number[] = [];
+      if (form.take_profit_1) tps.push(parseFloat(form.take_profit_1));
+      if (form.take_profit_2) tps.push(parseFloat(form.take_profit_2));
+      if (form.take_profit_3) tps.push(parseFloat(form.take_profit_3));
+
       const body: any = {
         account_balance: parseFloat(account_balance),
         risk_pct:        parseFloat(risk_pct),
@@ -94,12 +122,17 @@ export function PositionSizingCalculator() {
         win_rate:        parseFloat(form.win_rate) / 100,
         avg_rr:          parseFloat(form.avg_rr),
       };
-      if (form.take_profit) body.take_profits = [parseFloat(form.take_profit)];
+      if (tps.length > 0) body.take_profits = tps;
 
       const res  = await fetch(`${API_URL}/api/v1/pro/position-size`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        setError(err.detail || `HTTP ${res.status}`);
+        return;
+      }
       const json = await res.json();
       if (json.result) setResult(json.result);
       else setError(json.error ?? "Calculation failed");
@@ -157,22 +190,61 @@ export function PositionSizingCalculator() {
           </div>
         </div>
 
+        {/* Risk Preset Buttons */}
+        <div style={{ marginBottom: 14 }}>
+          <label style={labelStyle}>⚡ Quick Preset</label>
+          <div style={{ display: "flex", gap: 6 }}>
+            {[
+              { label: "🛡️ Conservative", preset: "conservative" as const, color: "#a78bfa" },
+              { label: "📊 Moderate",     preset: "moderate"     as const, color: "#3b82f6" },
+              { label: "🚨 Aggressive",   preset: "aggressive"   as const, color: "#ef4444" },
+            ].map(({ label, preset, color }) => (
+              <button key={preset} onClick={() => applyPreset(preset)} style={{
+                flex: 1, padding: "6px 4px", borderRadius: 7, fontSize: "0.6rem", fontWeight: 700,
+                cursor: "pointer", border: `1px solid ${color}30`,
+                background: `${color}10`, color, transition: "all 0.2s",
+              }}
+                onMouseEnter={e => (e.currentTarget.style.background = `${color}20`)}
+                onMouseLeave={e => (e.currentTarget.style.background = `${color}10`)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
         {/* Inputs */}
         {[
-          { key: "account_balance", label: "Account Balance (USDT)", placeholder: "e.g. 10000" },
-          { key: "risk_pct",        label: "Risk per Trade (%)",     placeholder: "e.g. 1.0" },
-          { key: "entry",           label: "Entry Price",            placeholder: "e.g. 64000" },
-          { key: "stop_loss",       label: "Stop Loss",              placeholder: "e.g. 63000" },
-          { key: "take_profit",     label: "Take Profit (optional)", placeholder: "e.g. 66000" },
-        ].map(({ key, label, placeholder }) => (
+          { key: "account_balance", label: "Account Balance (USDT)", placeholder: "e.g. 10000", icon: "💰" },
+          { key: "risk_pct",        label: "Risk per Trade (%)",     placeholder: "e.g. 1.0",  icon: "⚠️" },
+          { key: "entry",           label: "Entry Price",            placeholder: "e.g. 64000", icon: "🎯" },
+          { key: "stop_loss",       label: "Stop Loss",              placeholder: "e.g. 63000", icon: "🛑" },
+        ].map(({ key, label, placeholder, icon }) => (
           <div key={key} style={{ marginBottom: 12 }}>
-            <label style={labelStyle}>{label}</label>
+            <label style={labelStyle}>{icon} {label}</label>
             <input
               type="number" value={(form as any)[key]} placeholder={placeholder}
               onChange={e => set(key, e.target.value)} style={inputStyle}
             />
           </div>
         ))}
+
+        {/* Take Profits — Bug #3 fix: TP1/TP2/TP3 */}
+        <div style={{ marginBottom: 12 }}>
+          <label style={labelStyle}>✅ Take Profits (optional)</label>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
+            {["take_profit_1", "take_profit_2", "take_profit_3"].map((key, i) => (
+              <input
+                key={key}
+                type="number" value={(form as any)[key]}
+                placeholder={`TP${i + 1}`}
+                onChange={e => set(key, e.target.value)}
+                style={{ ...inputStyle, borderColor: ["rgba(16,185,129,0.3)", "rgba(16,185,129,0.2)", "rgba(167,139,250,0.2)"][i] }}
+              />
+            ))}
+          </div>
+          <div style={{ fontSize: "0.55rem", color: "var(--text-muted)", marginTop: 4 }}>Kosongkan untuk auto-kalkulasi dari R:R</div>
+        </div>
 
         {/* Stats */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 16 }}>
@@ -238,14 +310,36 @@ export function PositionSizingCalculator() {
               {[
                 { label: "Risk Amount",  value: `$${result.risk_amount.toFixed(2)}`, color: "#ef4444" },
                 { label: "Stop Dist",    value: `${result.stop_distance_pct.toFixed(2)}%`, color: "#f59e0b" },
-                { label: "TP R:R",       value: result.rr_1 ? `1:${result.rr_1}` : "—", color: "#10b981" },
                 { label: "EV / Trade",   value: `$${result.risk_metrics.expected_value.toFixed(2)}`, color: result.risk_metrics.expected_value > 0 ? "#10b981" : "#ef4444" },
+                { label: "Break WR",     value: `${result.risk_metrics.breakeven_win_rate}%`, color: "#6366f1" },
               ].map(f => (
                 <div key={f.label} style={{ padding: "12px", borderRadius: 10, background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)" }}>
                   <div style={{ fontSize: "0.55rem", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>{f.label}</div>
                   <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "0.85rem", fontWeight: 800, color: f.color }}>{f.value}</div>
                 </div>
               ))}
+            </div>
+
+            {/* Bug #3 fix: TP1 / TP2 / TP3 panel */}
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: "0.62rem", fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>Take Profit Levels</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                {[
+                  { label: "TP1",  price: result.take_profit_1, rr: result.rr_1, color: "#10b981", icon: "✅" },
+                  { label: "TP2",  price: result.take_profit_2, rr: result.rr_2, color: "#10b981", icon: "✅" },
+                  { label: "TP3",  price: result.take_profit_3, rr: result.rr_3, color: "#a78bfa", icon: "🏆" },
+                ].map(tp => (
+                  <div key={tp.label} style={{ padding: "10px 8px", borderRadius: 10, background: tp.price ? `${tp.color}08` : "rgba(255,255,255,0.02)", border: `1px solid ${tp.price ? tp.color + "25" : "rgba(255,255,255,0.07)"}`, textAlign: "center" }}>
+                    <div style={{ fontSize: "0.52rem", color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 3 }}>{tp.icon} {tp.label}</div>
+                    <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "0.7rem", fontWeight: 900, color: tp.price ? tp.color : "#334155" }}>
+                      {tp.price ? tp.price.toLocaleString("en", { maximumFractionDigits: 5 }) : "—"}
+                    </div>
+                    <div style={{ fontSize: "0.5rem", color: tp.rr ? tp.color : "var(--text-muted)", marginTop: 2 }}>
+                      {tp.rr ? `R:R 1:${tp.rr}` : "—"}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
 
             {/* Kelly + Risk of Ruin Gauges */}

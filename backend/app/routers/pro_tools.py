@@ -7,11 +7,13 @@ Endpoints:
   POST /api/v1/pro/ob-strength       — Order Block strength scoring
   POST /api/v1/pro/position-size     — Advanced position sizing + Kelly
   GET  /api/v1/pro/killzones         — Killzone status (current session)
-  POST /api/v1/pro/full-analysis     — All Sprint 1 features in one call
+  POST /api/v1/pro/full-analysis     — All Sprint 1 features + FVG + Trade Plan in one call
+  POST /api/v1/pro/fvg-breaker       — FVG + Breaker Block detection
+  GET  /api/v1/pro/session-pairs     — Top volume pairs per killzone
 """
 
 import logging
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime, timezone
@@ -24,6 +26,7 @@ from app.engines.market_data import MarketDataEngine
 from app.engines.smart_money import SmartMoneyConceptsEngine
 from app.engines.fvg_breaker import FVGBreakerEngine
 from app.engines.session_pairs import SessionPairsEngine
+from app.engines.market_structure import MarketStructureAnalyzer
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/pro", tags=["Pro Tools — Sprint 1"])
@@ -37,7 +40,7 @@ _data_engine  = MarketDataEngine()
 _smc_engine   = SmartMoneyConceptsEngine()
 _fvg_engine   = FVGBreakerEngine()
 _session_engine = SessionPairsEngine()
-
+_ms_engine    = MarketStructureAnalyzer()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Pydantic request/response models
@@ -176,7 +179,7 @@ async def get_pd_zones(req: PDZoneRequest):
         df_entry = await _data_engine.get_candles(req.symbol, req.timeframe, limit=5)
 
         if df_entry is None or df_entry.empty:
-            return {"error": "No candle data available", "symbol": req.symbol}
+            raise HTTPException(status_code=404, detail=f"No candle data available for {req.symbol}")
 
         current_price = float(df_entry["close"].iloc[-1])
 
@@ -210,9 +213,11 @@ async def get_pd_zones(req: PDZoneRequest):
                 },
             },
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("PD Zone error")
-        return {"error": str(e), "symbol": req.symbol}
+        raise HTTPException(status_code=500, detail=f"PD Zone analysis failed: {str(e)}")
 
 
 @router.post("/liquidity-sweep")
@@ -224,7 +229,7 @@ async def get_liquidity_sweep(req: LiquiditySweepRequest):
     try:
         df = await _data_engine.get_candles(req.symbol, req.timeframe, limit=req.lookback + 20)
         if df is None or df.empty:
-            return {"error": "No candle data", "symbol": req.symbol}
+            raise HTTPException(status_code=404, detail=f"No candle data for {req.symbol}")
 
         result = _sweep_engine.analyze(df)
 
@@ -233,9 +238,11 @@ async def get_liquidity_sweep(req: LiquiditySweepRequest):
             "timeframe":    req.timeframe,
             **result,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Liquidity sweep error")
-        return {"error": str(e), "symbol": req.symbol}
+        raise HTTPException(status_code=500, detail=f"Liquidity sweep analysis failed: {str(e)}")
 
 
 @router.post("/ob-strength")
@@ -248,7 +255,7 @@ async def get_ob_strength(req: OBStrengthRequest):
         df_htf   = await _data_engine.get_candles(req.symbol, req.htf, limit=100)
 
         if df_entry is None or df_entry.empty:
-            return {"error": "No candle data", "symbol": req.symbol}
+            raise HTTPException(status_code=404, detail=f"No candle data for {req.symbol}")
 
         # Get OBs and FVGs from SMC engine
         smc_entry = _smc_engine.analyze(df_entry, req.symbol, req.timeframe)
@@ -272,15 +279,18 @@ async def get_ob_strength(req: OBStrengthRequest):
             "order_blocks":  [_ob_meter.to_dict(s) for s in scored],
             "best_ob":       _ob_meter.to_dict(scored[0]) if scored else None,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("OB strength error")
-        return {"error": str(e), "symbol": req.symbol}
+        raise HTTPException(status_code=500, detail=f"OB strength analysis failed: {str(e)}")
 
 
 @router.post("/position-size")
 async def calculate_position_size(req: PositionSizeRequest):
     """
     Advanced position sizing with Kelly Criterion and Risk of Ruin.
+    Supports multiple take profits (TP1, TP2, TP3).
     """
     try:
         result = _size_engine.calculate(
@@ -328,16 +338,18 @@ async def calculate_position_size(req: PositionSizeRequest):
                 "warnings":    result.warnings,
             }
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Position sizing error")
-        return {"error": str(e)}
+        raise HTTPException(status_code=500, detail=f"Position sizing calculation failed: {str(e)}")
 
 
 @router.post("/full-analysis")
 async def get_full_sprint1_analysis(req: FullAnalysisRequest):
     """
-    Combined Sprint 1 analysis: PD zones + Liquidity sweeps + OB strength + Killzone.
-    Single call for full institutional analysis overlay.
+    Combined analysis: PD zones + Liquidity sweeps + OB strength + Killzone + FVG + Auto Trade Plan.
+    Single call for complete institutional analysis overlay.
     """
     try:
         symbol = req.symbol.upper()
@@ -347,7 +359,7 @@ async def get_full_sprint1_analysis(req: FullAnalysisRequest):
         df_htf   = await _data_engine.get_candles(symbol, req.htf, limit=100)
 
         if df_entry is None or df_entry.empty:
-            return {"error": "No candle data", "symbol": symbol}
+            raise HTTPException(status_code=404, detail=f"No candle data for {symbol}")
 
         current_price = float(df_entry["close"].iloc[-1])
 
@@ -362,27 +374,78 @@ async def get_full_sprint1_analysis(req: FullAnalysisRequest):
         sweep_result = _sweep_engine.analyze(df_entry)
 
         # 3. OB Strength
-        smc_entry = _smc_engine.analyze(df_entry, symbol, req.timeframe)
-        smc_htf   = _smc_engine.analyze(df_htf, symbol, req.htf) if df_htf is not None and not df_htf.empty else None
-        htf_obs   = smc_htf.order_blocks if smc_htf else []
+        smc_entry  = _smc_engine.analyze(df_entry, symbol, req.timeframe)
+        smc_htf    = _smc_engine.analyze(df_htf, symbol, req.htf) if df_htf is not None and not df_htf.empty else None
+        htf_obs    = smc_htf.order_blocks if smc_htf else []
         scored_obs = _ob_meter.score_order_blocks(df_entry, smc_entry.order_blocks, smc_entry.fvgs, htf_obs)
 
         # 4. Killzone
         kz_status = _get_killzone_status()
 
-        # ── Aggregate confluence score from Sprint 1 features ──────────────
-        pd_score     = _pd_engine.score_for_confluence(pd_result, sweep_result.get("bias_from_sweep") or "BUY")
-        sweep_score  = sweep_result.get("score", 0)
-        ob_score     = min(5, (scored_obs[0].score // 20) if scored_obs else 0)
-        kz_score     = 3 if kz_status["is_killzone_active"] else (1 if kz_status["current_kz"] else 0)
+        # 5. FVG + Breaker analysis
+        fvg_result_raw = _fvg_engine.analyze(df_entry)
+        fvg_data       = _fvg_engine.to_dict(fvg_result_raw)
 
-        total_sprint1_score = pd_score + sweep_score + ob_score + kz_score
+        # ── Aggregate confluence score (0–16 scale from backend) ────────────
+        bias_direction  = sweep_result.get("bias_from_sweep") or fvg_data["signals"]["entry_bias"] or "BUY"
+        pd_score        = _pd_engine.score_for_confluence(pd_result, bias_direction)
+        sweep_score     = sweep_result.get("score", 0)
+        ob_score        = min(5, (scored_obs[0].score // 20) if scored_obs else 0)
+        kz_score        = 3 if kz_status["is_killzone_active"] else (1 if kz_status["current_kz"] else 0)
+        total_score     = pd_score + sweep_score + ob_score + kz_score
+        score_pct       = round((total_score / 16) * 100, 1)
+
+        # ── Auto Trade Plan ─────────────────────────────────────────────────
+        trade_plan = None
+        entry_zone = None
+
+        # Prefer FVG entry zone aligned with bias
+        if bias_direction in ("BUY", "STRONG_BUY"):
+            nearest = fvg_data["nearest"]["bullish_fvg"]
+            if nearest:
+                entry_zone = nearest.get("entry_zone")
+        elif bias_direction in ("SELL", "STRONG_SELL"):
+            nearest = fvg_data["nearest"]["bearish_fvg"]
+            if nearest:
+                entry_zone = nearest.get("entry_zone")
+
+        # Fallback to best breaker
+        if not entry_zone:
+            breaker = fvg_data["nearest"].get("breaker")
+            if breaker:
+                entry_zone = breaker.get("entry_zone")
+
+        if entry_zone:
+            trade_plan = {
+                "bias":         bias_direction,
+                "entry":        entry_zone.get("entry"),
+                "stop_loss":    entry_zone.get("stop_loss"),
+                "tp1":          entry_zone.get("tp1"),
+                "tp2":          entry_zone.get("tp2"),
+                "tp3":          entry_zone.get("tp3"),
+                "rr_tp1":       entry_zone.get("rr_tp1"),
+                "rr_tp2":       entry_zone.get("rr_tp2"),
+                "risk_pct":     entry_zone.get("risk_pct"),
+                "quality":      entry_zone.get("quality"),
+                "pd_zone":      pd_result.zone,
+                "killzone":     kz_status["current_session"],
+                "is_killzone":  kz_status["is_killzone_active"],
+                "in_ote":       pd_result.is_in_ote,
+                "confidence":   score_pct,
+            }
+
+        grade = (
+            "A+" if total_score >= 13 else
+            "A"  if total_score >= 10 else
+            "B"  if total_score >= 7  else
+            "C"  if total_score >= 4  else "WEAK"
+        )
 
         return {
-            "symbol":         symbol,
-            "timeframe":      req.timeframe,
-            "htf":            req.htf,
-            "current_price":  current_price,
+            "symbol":        symbol,
+            "timeframe":     req.timeframe,
+            "htf":           req.htf,
+            "current_price": current_price,
 
             "pd_zone": {
                 "zone":           pd_result.zone,
@@ -392,6 +455,7 @@ async def get_full_sprint1_analysis(req: FullAnalysisRequest):
                 "htf_bias":       pd_result.htf_bias,
                 "trade_allowed":  pd_result.trade_allowed,
                 "is_in_ote":      pd_result.is_in_ote,
+                "distance_to_ote_pct": pd_result.distance_to_ote_pct,
                 "levels": {
                     "range_high":         pd_result.range_high,
                     "range_low":          pd_result.range_low,
@@ -409,6 +473,7 @@ async def get_full_sprint1_analysis(req: FullAnalysisRequest):
                 "bias_from_sweep":  sweep_result.get("bias_from_sweep"),
                 "confirmed_count":  sweep_result.get("confirmed_count", 0),
                 "total_pools":      len(sweep_result.get("pools", [])),
+                "pools":            sweep_result.get("pools", [])[:6],
                 "score":            sweep_score,
             },
 
@@ -425,34 +490,45 @@ async def get_full_sprint1_analysis(req: FullAnalysisRequest):
                 "score": kz_score,
             },
 
-            "sprint1_confluence": {
-                "total_score":    total_sprint1_score,
-                "max_score":      16,
-                "score_pct":      round((total_sprint1_score / 16) * 100, 1),
-                "breakdown": {
-                    "pd_zone":    pd_score,
-                    "sweep":      sweep_score,
-                    "ob":         ob_score,
-                    "killzone":   kz_score,
-                },
-                "grade": (
-                    "A+" if total_sprint1_score >= 13 else
-                    "A"  if total_sprint1_score >= 10 else
-                    "B"  if total_sprint1_score >= 7  else
-                    "C"  if total_sprint1_score >= 4  else "WEAK"
-                ),
+            "fvg": {
+                "summary":          fvg_data["summary"],
+                "nearest":          fvg_data["nearest"],
+                "ict_setup":        fvg_data["ict_setup"],
+                "signals":          fvg_data["signals"],
+                "bullish_fvgs":     fvg_data["bullish_fvgs"][:5],
+                "bearish_fvgs":     fvg_data["bearish_fvgs"][:5],
+                "bullish_breakers": fvg_data["bullish_breakers"][:3],
+                "bearish_breakers": fvg_data["bearish_breakers"][:3],
+            },
+
+            "trade_plan": trade_plan,
+
+            "confluence": {
+                "total_score":  total_score,
+                "max_score":    16,
+                "score_pct":    score_pct,
+                "grade":        grade,
+                "bias":         bias_direction,
                 "signal": (
-                    "HIGH CONVICTION ENTRY"    if total_sprint1_score >= 13 else
-                    "VALID SETUP"              if total_sprint1_score >= 10 else
-                    "WATCHLIST"                if total_sprint1_score >= 7  else
+                    "HIGH CONVICTION ENTRY" if total_score >= 13 else
+                    "VALID SETUP"           if total_score >= 10 else
+                    "WATCHLIST"             if total_score >= 7  else
                     "WAIT"
                 ),
+                "breakdown": {
+                    "pd_zone":  pd_score,
+                    "sweep":    sweep_score,
+                    "ob":       ob_score,
+                    "killzone": kz_score,
+                },
             },
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.exception("Full Sprint 1 analysis error")
-        return {"error": str(e), "symbol": req.symbol}
+        logger.exception("Full analysis error")
+        raise HTTPException(status_code=500, detail=f"Full analysis failed: {str(e)}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -478,7 +554,7 @@ async def get_fvg_breaker(req: FVGRequest):
     try:
         df = await _data_engine.get_candles(req.symbol, req.timeframe, limit=req.limit)
         if df is None or df.empty:
-            return {"error": "No candle data", "symbol": req.symbol}
+            raise HTTPException(status_code=404, detail=f"No candle data for {req.symbol}")
 
         result = _fvg_engine.analyze(df)
         return {
@@ -486,9 +562,66 @@ async def get_fvg_breaker(req: FVGRequest):
             "timeframe": req.timeframe,
             **_fvg_engine.to_dict(result),
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("FVG/Breaker error")
-        return {"error": str(e)}
+        raise HTTPException(status_code=500, detail=f"FVG/Breaker analysis failed: {str(e)}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MARKET STRUCTURE (MSS/CHoCH) endpoint (Feature #1)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class MarketStructureRequest(BaseModel):
+    symbol: str = Field(..., example="BTCUSDT")
+    timeframe: str = Field("1h", example="1h")
+    lookback: int = Field(200, example=200, ge=50, le=500)
+    swing_lookback: int = Field(5, example=5, ge=2, le=20)
+
+@router.post("/market-structure")
+async def get_market_structure(req: MarketStructureRequest):
+    """
+    Market Structure Analyzer.
+    Detects HH, HL, LH, LL swing points.
+    Identifies Break of Structure (BOS) and Change of Character (CHOCH).
+    Returns overall market bias based on recent structure.
+    """
+    try:
+        df = await _data_engine.get_candles(req.symbol, req.timeframe, limit=req.lookback)
+        if df is None or df.empty:
+            raise HTTPException(status_code=404, detail=f"No candle data for {req.symbol}")
+            
+        # Re-initialize engine if swing_lookback differs from default
+        engine = _ms_engine if req.swing_lookback == 5 else MarketStructureAnalyzer(swing_lookback=req.swing_lookback)
+        result = engine.analyze(df, symbol=req.symbol, timeframe=req.timeframe)
+        
+        return {
+            "symbol": result.symbol,
+            "timeframe": result.timeframe,
+            "bias": result.bias,
+            "swing_points": [
+                {
+                    "index": s.index,
+                    "price": s.price,
+                    "type": s.type,
+                    "time": str(s.time) if s.time else None
+                } for s in result.swing_points[-20:] # Return last 20 swings
+            ],
+            "structure_labels": [
+                {
+                    "index": l.index,
+                    "label": l.label,
+                    "is_break": l.is_break,
+                    "break_type": l.break_type
+                } for l in result.structure_labels[-10:] # Return last 10 structure events
+            ]
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Market structure error")
+        raise HTTPException(status_code=500, detail=f"Market structure analysis failed: {str(e)}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -511,6 +644,8 @@ async def get_session_pairs(
             top_n=top_n,
         )
         return _session_engine.to_dict(result)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Session pairs error")
-        return {"error": str(e)}
+        raise HTTPException(status_code=500, detail=f"Session pairs fetch failed: {str(e)}")

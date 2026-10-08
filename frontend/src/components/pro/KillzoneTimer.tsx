@@ -56,6 +56,7 @@ function SessionBar({ sessions, currentSession }: { sessions: KillzoneData["all_
 export function KillzoneTimer({ compact = false }: { compact?: boolean }) {
   const [data, setData]       = useState<KillzoneData | null>(null);
   const [displayTime, setDisplayTime] = useState("");
+  const [localTime, setLocalTime] = useState("");
 
   const fetchKZ = useCallback(async () => {
     try {
@@ -70,12 +71,15 @@ export function KillzoneTimer({ compact = false }: { compact?: boolean }) {
     return () => clearInterval(interval);
   }, [fetchKZ]);
 
-  // Real-time UTC clock
+  // Real-time UTC & Local clock
   useEffect(() => {
     const tick = () => {
       const now = new Date();
       setDisplayTime(
         now.toUTCString().split(" ")[4] + " UTC"
+      );
+      setLocalTime(
+        new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'short' }).format(now)
       );
     };
     tick();
@@ -168,12 +172,15 @@ export function KillzoneTimer({ compact = false }: { compact?: boolean }) {
           </div>
         </div>
 
-        {/* UTC Clock */}
+        {/* Clocks */}
         <div style={{ textAlign: "right" }}>
           <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "1rem", fontWeight: 700, color: "#3b82f6", letterSpacing: "0.05em" }}>
             {displayTime}
           </div>
-          <div style={{ fontSize: "0.65rem", color: "var(--text-muted)", marginTop: 2 }}>
+          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "0.75rem", fontWeight: 600, color: "#10b981", letterSpacing: "0.05em", marginTop: 2 }}>
+            {localTime}
+          </div>
+          <div style={{ fontSize: "0.65rem", color: "var(--text-muted)", marginTop: 4 }}>
             Next KZ in <span style={{ color, fontWeight: 700 }}>{data.time_to_next}</span>
           </div>
         </div>
