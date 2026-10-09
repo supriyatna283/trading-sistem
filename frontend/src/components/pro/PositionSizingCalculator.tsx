@@ -63,7 +63,7 @@ function GaugeArc({ value, max = 100, color }: { value: number; max?: number; co
   );
 }
 
-export function PositionSizingCalculator() {
+export function PositionSizingCalculator({ symbol = "BTCUSDT", initialData }: { symbol?: string; initialData?: any }) {
   const [form, setForm] = useState({
     account_balance: typeof window !== "undefined" ? (localStorage.getItem("psCalc_balance") || "") : "",
     risk_pct: "1",
@@ -87,7 +87,46 @@ export function PositionSizingCalculator() {
     }
   }, [form.account_balance]);
 
+  // Load from initialData when passed
+  useEffect(() => {
+    if (initialData) {
+      setForm(f => ({
+        ...f,
+        entry: initialData.entry ? initialData.entry.toString() : f.entry,
+        stop_loss: initialData.stop_loss ? initialData.stop_loss.toString() : f.stop_loss,
+        take_profit_1: initialData.tp1 ? initialData.tp1.toString() : f.take_profit_1,
+        take_profit_2: initialData.tp2 ? initialData.tp2.toString() : f.take_profit_2,
+        take_profit_3: initialData.tp3 ? initialData.tp3.toString() : f.take_profit_3,
+        direction: (initialData.bias === "SELL" || initialData.bias === "STRONG_SELL") ? "SELL" : "BUY"
+      }));
+    }
+  }, [initialData]);
+
   const set = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }));
+
+  const fetchGarchSL = async () => {
+    if (!form.entry) {
+      setError("Please input entry price first to calculate ATR/GARCH Stop Loss");
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await window.fetch(`${API_URL}/api/v1/pro/volatility`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol, timeframe: "1d", limit: 100 }),
+      });
+      const data = await res.json();
+      if (data.atr_equivalent) {
+        const entryPrice = parseFloat(form.entry);
+        const sl = form.direction === "BUY" ? entryPrice - data.atr_equivalent : entryPrice + data.atr_equivalent;
+        set("stop_loss", sl.toFixed(5));
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // Preset risk profiles
   const applyPreset = (preset: "conservative" | "moderate" | "aggressive") => {
@@ -218,7 +257,6 @@ export function PositionSizingCalculator() {
           { key: "account_balance", label: "Account Balance (USDT)", placeholder: "e.g. 10000", icon: "💰" },
           { key: "risk_pct",        label: "Risk per Trade (%)",     placeholder: "e.g. 1.0",  icon: "⚠️" },
           { key: "entry",           label: "Entry Price",            placeholder: "e.g. 64000", icon: "🎯" },
-          { key: "stop_loss",       label: "Stop Loss",              placeholder: "e.g. 63000", icon: "🛑" },
         ].map(({ key, label, placeholder, icon }) => (
           <div key={key} style={{ marginBottom: 12 }}>
             <label style={labelStyle}>{icon} {label}</label>
@@ -228,6 +266,26 @@ export function PositionSizingCalculator() {
             />
           </div>
         ))}
+        
+        {/* Stop Loss with GARCH SL button */}
+        <div style={{ marginBottom: 12, position: "relative" }}>
+          <label style={labelStyle}>🛑 Stop Loss</label>
+          <input
+            type="number" value={form.stop_loss} placeholder="e.g. 63000"
+            onChange={e => set("stop_loss", e.target.value)} style={inputStyle}
+          />
+          <button 
+            onClick={fetchGarchSL}
+            title="Auto-fill Volatility (GARCH/ATR) Stop Loss"
+            style={{ 
+              position: "absolute", right: 6, top: 21, background: "rgba(99,102,241,0.15)", 
+              border: "1px solid rgba(99,102,241,0.3)", color: "#818cf8", borderRadius: 4, 
+              padding: "3px 8px", fontSize: "0.6rem", cursor: "pointer", fontWeight: 700 
+            }}
+          >
+            {loading ? "..." : "GARCH SL"}
+          </button>
+        </div>
 
         {/* Take Profits — Bug #3 fix: TP1/TP2/TP3 */}
         <div style={{ marginBottom: 12 }}>

@@ -30,6 +30,7 @@ interface ConfluenceProps {
   autoRefresh?: boolean;
   refreshInterval?: number;
   onSetWAAlert?: (data: any) => void;
+  onLoadPosCalc?: (data: any) => void;
 }
 
 // ── Unified response shape from /full-analysis ──────────────────────────
@@ -179,7 +180,7 @@ function ScoreBreakdown({ breakdown, maxPer }: { breakdown: Record<string, numbe
 }
 
 // ── Trade Plan Card (Feature #4) ─────────────────────────────────────────
-function TradePlanCard({ plan, symbol, onWA }: { plan: NonNullable<FullAnalysisData["trade_plan"]>; symbol: string; onWA?: () => void }) {
+function TradePlanCard({ plan, symbol, onWA, onLoadPosCalc }: { plan: NonNullable<FullAnalysisData["trade_plan"]>; symbol: string; onWA?: () => void; onLoadPosCalc?: () => void }) {
   const isBuy = plan.bias.includes("BUY");
   const accentColor = isBuy ? "#10b981" : "#ef4444";
   const qualityColors: Record<string, string> = { IDEAL: "#10b981", GOOD: "#3b82f6", VALID: "#f59e0b" };
@@ -245,21 +246,39 @@ function TradePlanCard({ plan, symbol, onWA }: { plan: NonNullable<FullAnalysisD
           ))}
         </div>
 
-        {/* WA Button */}
-        {onWA && (
-          <button onClick={onWA} style={{
-            width: "100%", padding: "10px", borderRadius: 10, cursor: "pointer",
-            background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.3)",
-            color: "#10b981", fontSize: "0.78rem", fontWeight: 800, letterSpacing: "0.03em",
-            display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
-            transition: "all 0.2s",
-          }}
-            onMouseEnter={e => (e.currentTarget.style.background = "rgba(16,185,129,0.2)")}
-            onMouseLeave={e => (e.currentTarget.style.background = "rgba(16,185,129,0.1)")}
-          >
-            📱 Kirim Trade Plan ke WhatsApp
-          </button>
-        )}
+        {/* Action Buttons */}
+        <div style={{ display: "flex", gap: 10 }}>
+          {onLoadPosCalc && (
+            <button onClick={onLoadPosCalc} style={{
+              flex: 1, padding: "10px", borderRadius: 10, cursor: "pointer",
+              background: "rgba(99,102,241,0.1)", border: "1px solid rgba(99,102,241,0.3)",
+              color: "#818cf8", fontSize: "0.78rem", fontWeight: 800, letterSpacing: "0.03em",
+              display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+              transition: "all 0.2s",
+            }}
+              onMouseEnter={e => (e.currentTarget.style.background = "rgba(99,102,241,0.2)")}
+              onMouseLeave={e => (e.currentTarget.style.background = "rgba(99,102,241,0.1)")}
+            >
+              🔢 Load Position Calc
+            </button>
+          )}
+          
+          {/* WA Button */}
+          {onWA && (
+            <button onClick={onWA} style={{
+              flex: 1, padding: "10px", borderRadius: 10, cursor: "pointer",
+              background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.3)",
+              color: "#10b981", fontSize: "0.78rem", fontWeight: 800, letterSpacing: "0.03em",
+              display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+              transition: "all 0.2s",
+            }}
+              onMouseEnter={e => (e.currentTarget.style.background = "rgba(16,185,129,0.2)")}
+              onMouseLeave={e => (e.currentTarget.style.background = "rgba(16,185,129,0.1)")}
+            >
+              📱 Kirim ke WA
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -270,7 +289,7 @@ function TradePlanCard({ plan, symbol, onWA }: { plan: NonNullable<FullAnalysisD
 export function ICTConfluenceDashboard({
   symbol, timeframe, htfTimeframe,
   autoRefresh = true, refreshInterval = 30,
-  onSetWAAlert,
+  onSetWAAlert, onLoadPosCalc,
 }: ConfluenceProps) {
   const [data, setData] = useState<FullAnalysisData | null>(null);
   const [loading, setLoading] = useState(false);
@@ -603,6 +622,7 @@ export function ICTConfluenceDashboard({
                 plan={data.trade_plan}
                 symbol={symbol}
                 onWA={onSetWAAlert ? handleWAAlert : undefined}
+                onLoadPosCalc={onLoadPosCalc ? () => onLoadPosCalc(data.trade_plan) : undefined}
               />
             </div>
           ) : (

@@ -107,6 +107,12 @@ export default function ProToolsPage() {
   const [timeframe, setTimeframe] = useState("1h");
   const [toast, setToast] = useState<string | null>(null);
   const [sendingWA, setSendingWA] = useState(false);
+  const [tradePlanContext, setTradePlanContext] = useState<any>(null);
+
+  const handleLoadTradePlan = useCallback((plan: any) => {
+    setTradePlanContext(plan);
+    setActiveTab("position");
+  }, []);
 
   const active = TABS.find(t => t.id === activeTab)!;
   const htf = HTF_MAP[timeframe] || "4h";
@@ -267,6 +273,7 @@ export default function ProToolsPage() {
           autoRefresh={true}
           refreshInterval={30}
           onSetWAAlert={handleSetWAAlert}
+          onLoadPosCalc={handleLoadTradePlan}
         />
       </div>
 
@@ -417,7 +424,7 @@ export default function ProToolsPage() {
       ══════════════════════════════════════════════ */}
       <div style={{ display: activeTab === "position" ? "block" : "none" }}>
         <div>
-          <PositionSizingCalculator />
+          <PositionSizingCalculator symbol={symbol} initialData={tradePlanContext} />
           <div style={{ marginTop: 20, padding: 24, borderRadius: 16, background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)" }}>
             <div style={{ fontWeight: 800, fontSize: "0.9rem", marginBottom: 14 }}>📚 Kelly Criterion & Risk of Ruin</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
