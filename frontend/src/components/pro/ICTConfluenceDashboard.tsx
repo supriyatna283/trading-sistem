@@ -99,6 +99,11 @@ interface FullAnalysisData {
     is_killzone: boolean;
     in_ote: boolean;
     confidence: number;
+    exit_strategy?: {
+      tp1_action: string;
+      tp2_action: string;
+      tp3_action: string;
+    };
   } | null;
   confluence: {
     total_score: number;
