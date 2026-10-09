@@ -112,7 +112,11 @@ interface FullAnalysisData {
     grade: string;
     bias: string;
     signal: string;
+    macro_restricted: boolean;
+    macro_message: string;
     breakdown: { pd_zone: number; sweep: number; ob: number; killzone: number };
+    smt?: { is_divergent: boolean; type: string; description: string };
+    volume_profile?: { poc_price: number; vah_price: number; val_price: number };
   };
 }
 
@@ -426,6 +430,28 @@ export function ICTConfluenceDashboard({
         </div>
       )}
 
+      {/* ── Macro News Alert (Sprint D) ── */}
+      {data?.confluence.macro_restricted && (
+        <div style={{ padding: "12px 18px", borderRadius: 12, background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.4)", color: "#fca5a5", fontSize: "0.8rem", marginBottom: 16, display: "flex", alignItems: "center", gap: 12 }}>
+          <span style={{ fontSize: "1.5rem" }}>🚨</span>
+          <div>
+            <div style={{ fontWeight: 900, color: "#ef4444", marginBottom: 4 }}>MACRO NEWS WARNING</div>
+            <div style={{ fontSize: "0.7rem", color: "#fecaca" }}>{data.confluence.macro_message} (Trade Plan Disabled)</div>
+          </div>
+        </div>
+      )}
+
+      {/* ── SMT Divergence Alert (Sprint D) ── */}
+      {data?.confluence.smt?.is_divergent && (
+        <div style={{ padding: "12px 18px", borderRadius: 12, background: data.confluence.smt.type === "BULLISH" ? "rgba(16,185,129,0.15)" : "rgba(239,68,68,0.15)", border: `1px solid ${data.confluence.smt.type === "BULLISH" ? "rgba(16,185,129,0.4)" : "rgba(239,68,68,0.4)"}`, color: data.confluence.smt.type === "BULLISH" ? "#6ee7b7" : "#fca5a5", fontSize: "0.8rem", marginBottom: 16, display: "flex", alignItems: "center", gap: 12 }}>
+          <span style={{ fontSize: "1.5rem" }}>👀</span>
+          <div>
+            <div style={{ fontWeight: 900, color: data.confluence.smt.type === "BULLISH" ? "#10b981" : "#ef4444", marginBottom: 4 }}>{data.confluence.smt.type} SMT DIVERGENCE DETECTED</div>
+            <div style={{ fontSize: "0.7rem", color: data.confluence.smt.type === "BULLISH" ? "#a7f3d0" : "#fecaca" }}>{data.confluence.smt.description}</div>
+          </div>
+        </div>
+      )}
+
       {/* ── Confluence Score Card (Bug #2 fixed: uses backend score_pct) ── */}
       {data && (
         <div style={{ padding: "16px 20px", borderRadius: 14, background: `${gradeColor}08`, border: `1px solid ${gradeColor}30`, marginBottom: 16, display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap" }}>
@@ -541,6 +567,17 @@ export function ICTConfluenceDashboard({
                   <div style={{ display: "flex", gap: 10, color: "var(--text-muted)", flexWrap: "wrap" }}>
                     <span>Zone: <strong style={{ color: "#fff" }}>{fmtPrice(data.fvg.nearest.bearish_fvg.gap_low)} – {fmtPrice(data.fvg.nearest.bearish_fvg.gap_high)}</strong></span>
                     <span>CE: <strong style={{ color: "#f59e0b" }}>{fmtPrice(data.fvg.nearest.bearish_fvg.ce_level)}</strong></span>
+                  </div>
+                </div>
+              )}
+              {/* ── FRVP Indicator (Sprint D) ── */}
+              {data.confluence.volume_profile && (
+                <div style={{ marginTop: 10, padding: "8px 10px", borderRadius: 8, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", fontSize: "0.65rem" }}>
+                  <div style={{ fontWeight: 700, color: "#6366f1", marginBottom: 4 }}>📊 Fixed Range Volume Profile</div>
+                  <div style={{ display: "flex", gap: 10, color: "var(--text-muted)", flexWrap: "wrap", justifyContent: "space-between" }}>
+                    <span>VAL: <strong style={{ color: "#fff" }}>{fmtPrice(data.confluence.volume_profile.val_price)}</strong></span>
+                    <span>POC: <strong style={{ color: "#f59e0b" }}>{fmtPrice(data.confluence.volume_profile.poc_price)}</strong></span>
+                    <span>VAH: <strong style={{ color: "#fff" }}>{fmtPrice(data.confluence.volume_profile.vah_price)}</strong></span>
                   </div>
                 </div>
               )}

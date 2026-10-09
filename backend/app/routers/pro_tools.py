@@ -32,6 +32,9 @@ from app.engines.garch_volatility import GARCHVolatilityEngine
 from app.engines.wyckoff import WyckoffEngine
 from app.engines.options_perps import OptionsPerpsEngine
 from app.engines.mtf_confirmation import MTFConfirmationEngine
+from app.engines.macro_news import MacroNewsEngine
+from app.engines.smt_divergence import SMTDivergenceEngine
+from app.engines.volume_profile import VolumeProfileEngine
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/pro", tags=["Pro Tools"])
@@ -51,6 +54,9 @@ _garch_engine = GARCHVolatilityEngine()
 _wyckoff_engine = WyckoffEngine()
 _options_engine = OptionsPerpsEngine()
 _mtf_engine   = MTFConfirmationEngine()
+_macro_engine = MacroNewsEngine()
+_smt_engine   = SMTDivergenceEngine()
+_vp_engine    = VolumeProfileEngine()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Pydantic request/response models
@@ -429,6 +435,21 @@ async def get_full_sprint1_analysis(req: FullAnalysisRequest):
         mm_result = _mm_engine.analyze(df_entry)
         mm_score = mm_result.confluence_score
 
+        # 8. SMT Divergence Check (Sprint D)
+        correlated_sym = "ETHUSDT" if symbol == "BTCUSDT" else "BTCUSDT"
+        df_corr = await _data_engine.get_candles(correlated_sym, req.timeframe, limit=200)
+        if df_corr is not None and not df_corr.empty:
+            smt_result = _smt_engine.analyze(df_entry, df_corr, symbol, correlated_sym)
+        else:
+            smt_result = None
+
+        # 9. Volume Profile Check (Sprint D)
+        vp_result = _vp_engine.analyze(df_entry)
+        if vp_result:
+            # If POC is inside FVG or OB zone, that's heavy confluence
+            # For simplicity, we just add it to the payload
+            pass
+
         # ── Aggregate confluence score (0–24 scale from backend) ────────────
         bias_direction  = sweep_result.get("bias_from_sweep") or fvg_data["signals"]["entry_bias"] or "BUY"
         pd_score        = _pd_engine.score_for_confluence(pd_result, bias_direction)
@@ -439,6 +460,19 @@ async def get_full_sprint1_analysis(req: FullAnalysisRequest):
         total_score     = pd_score + sweep_score + ob_score + kz_score + structure_score + mm_score
         max_score       = 24
         score_pct       = round((total_score / max_score) * 100, 1)
+
+        # 7. Macro News Check (Sprint D)
+        macro_status = _macro_engine.check_news_proximity(warning_minutes=60)
+        
+        # If macro restricted, we kill the trade plan
+        if macro_status["is_restricted"]:
+            score_pct = min(score_pct, 40) # Cap score if news is imminent
+            grade = "WAIT"
+            signal = "NEUTRAL"
+        else:
+            grade = ("A+" if score_pct >= 90 else "A" if score_pct >= 80 else
+                     "B"  if score_pct >= 65 else "C" if score_pct >= 50 else
+                     "D"  if score_pct >= 30 else "WAIT")
 
         # ── Auto Trade Plan ─────────────────────────────────────────────────
         trade_plan = None
@@ -560,11 +594,14 @@ async def get_full_sprint1_analysis(req: FullAnalysisRequest):
                 "grade":        grade,
                 "bias":         bias_direction,
                 "signal": (
+                    "NEUTRAL" if macro_status["is_restricted"] else
                     "HIGH CONVICTION ENTRY" if total_score >= 19 else
                     "VALID SETUP"           if total_score >= 15 else
                     "WATCHLIST"             if total_score >= 11 else
                     "WAIT"
                 ),
+                "macro_restricted": macro_status["is_restricted"],
+                "macro_message": macro_status["message"],
                 "breakdown": {
                     "pd_zone":  pd_score,
                     "sweep":    sweep_score,
@@ -573,6 +610,16 @@ async def get_full_sprint1_analysis(req: FullAnalysisRequest):
                     "structure": structure_score,
                     "mm_flow":  mm_score,
                 },
+                "smt": {
+                    "is_divergent": smt_result.is_divergent if smt_result else False,
+                    "type": smt_result.smt_type if smt_result else "NONE",
+                    "description": smt_result.description if smt_result else "No SMT data",
+                } if smt_result else None,
+                "volume_profile": {
+                    "poc_price": vp_result.poc_price,
+                    "vah_price": vp_result.vah_price,
+                    "val_price": vp_result.val_price,
+                } if vp_result else None,
             },
         }
 

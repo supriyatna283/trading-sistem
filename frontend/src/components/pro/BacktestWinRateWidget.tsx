@@ -11,11 +11,20 @@ export function BacktestWinRateWidget({ symbol, timeframe }: { symbol: string; t
   const fetchBacktest = async () => {
     setLoading(true);
     setError("");
+
+    // Dynamic lookback period based on timeframe to ensure statistical significance
+    let days = 30;
+    if (timeframe === "1m" || timeframe === "5m") days = 15;
+    else if (timeframe === "15m") days = 30;
+    else if (timeframe === "1h") days = 90;
+    else if (timeframe === "4h") days = 180;
+    else if (timeframe === "1d") days = 365;
+
     try {
       const res = await fetch(`${API_URL}/api/v1/backtest/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbol, timeframe, days: 30, initial_capital: 10000, risk_per_trade_pct: 1.0 })
+        body: JSON.stringify({ symbol, timeframe, days, initial_capital: 10000, risk_per_trade_pct: 1.0 })
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
@@ -57,7 +66,7 @@ export function BacktestWinRateWidget({ symbol, timeframe }: { symbol: string; t
           <span style={{ fontSize: "1.1rem" }}>🕰️</span>
           <div>
             <div style={{ fontWeight: 800, fontSize: "0.85rem", color: "#fff" }}>Historical Win Rate</div>
-            <div style={{ fontSize: "0.6rem", color: "var(--text-muted)" }}>Last 30 Days (A+ & A setups)</div>
+            <div style={{ fontSize: "0.6rem", color: "var(--text-muted)" }}>Dynamic Lookback ({data.summary.total_trades || 0} setups)</div>
           </div>
         </div>
         <div style={{ padding: "4px 10px", borderRadius: 8, background: `${color}15`, border: `1px solid ${color}40`, color, fontSize: "0.85rem", fontWeight: 900 }}>
