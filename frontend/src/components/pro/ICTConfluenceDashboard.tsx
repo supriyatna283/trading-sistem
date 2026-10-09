@@ -512,7 +512,7 @@ export function ICTConfluenceDashboard({
             <Section title="Fair Value Gaps" icon="⬜" color="#6366f1">
               <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
                 <Pill label={data.fvg.signals.entry_bias || "—"} color={BIAS_COLOR[data.fvg.signals.entry_bias] || "#64748b"} />
-                <Pill label={`Score ${data.fvg.signals.confluence_score || 0}/100`} color={GRADE_COLOR[data.fvg.ict_setup?.grade] || "#64748b"} size="xs" />
+                <Pill label={`Score ${data.fvg.ict_setup?.total || 0}/100`} color={GRADE_COLOR[data.fvg.ict_setup?.grade] || "#64748b"} size="xs" />
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 10 }}>
                 {[
