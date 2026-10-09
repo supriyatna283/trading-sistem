@@ -27,6 +27,8 @@ from app.engines.smart_money import SmartMoneyConceptsEngine
 from app.engines.fvg_breaker import FVGBreakerEngine
 from app.engines.session_pairs import SessionPairsEngine
 from app.engines.market_structure import MarketStructureAnalyzer
+from app.engines.market_maker_flow import MarketMakerFlowEngine
+from app.engines.garch_volatility import GARCHVolatilityEngine
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/pro", tags=["Pro Tools — Sprint 1"])
@@ -41,6 +43,8 @@ _smc_engine   = SmartMoneyConceptsEngine()
 _fvg_engine   = FVGBreakerEngine()
 _session_engine = SessionPairsEngine()
 _ms_engine    = MarketStructureAnalyzer()
+_mm_engine    = MarketMakerFlowEngine()
+_garch_engine = GARCHVolatilityEngine()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Pydantic request/response models
@@ -57,6 +61,18 @@ class LiquiditySweepRequest(BaseModel):
     symbol: str = Field(..., example="BTCUSDT")
     timeframe: str = Field("1h", example="1h")
     lookback: int = Field(80, ge=20, le=200)
+
+
+class VolatilityRequest(BaseModel):
+    symbol: str = Field(..., example="BTCUSDT")
+    timeframe: str = Field("1d", example="1d")
+    limit: int = Field(100, ge=30, le=500)
+
+
+class MMFlowRequest(BaseModel):
+    symbol: str = Field(..., example="BTCUSDT")
+    timeframe: str = Field("1h", example="1h")
+    limit: int = Field(100, ge=20, le=500)
 
 
 class OBStrengthRequest(BaseModel):
@@ -386,14 +402,23 @@ async def get_full_sprint1_analysis(req: FullAnalysisRequest):
         fvg_result_raw = _fvg_engine.analyze(df_entry)
         fvg_data       = _fvg_engine.to_dict(fvg_result_raw)
 
-        # ── Aggregate confluence score (0–16 scale from backend) ────────────
+        # 6. Market Structure & MMFlow for enhanced scoring
+        ms_result = _ms_engine.analyze(df_entry, symbol, req.timeframe)
+        structure_score = 3 if any(l.label in ["BOS", "CHOCH"] for l in ms_result.structure_labels[-5:]) else 0
+        
+        mm_result = _mm_engine.analyze(df_entry)
+        mm_score = mm_result.confluence_score
+
+        # ── Aggregate confluence score (0–24 scale from backend) ────────────
         bias_direction  = sweep_result.get("bias_from_sweep") or fvg_data["signals"]["entry_bias"] or "BUY"
         pd_score        = _pd_engine.score_for_confluence(pd_result, bias_direction)
         sweep_score     = sweep_result.get("score", 0)
         ob_score        = min(5, (scored_obs[0].score // 20) if scored_obs else 0)
         kz_score        = 3 if kz_status["is_killzone_active"] else (1 if kz_status["current_kz"] else 0)
-        total_score     = pd_score + sweep_score + ob_score + kz_score
-        score_pct       = round((total_score / 16) * 100, 1)
+        
+        total_score     = pd_score + sweep_score + ob_score + kz_score + structure_score + mm_score
+        max_score       = 24
+        score_pct       = round((total_score / max_score) * 100, 1)
 
         # ── Auto Trade Plan ─────────────────────────────────────────────────
         trade_plan = None
@@ -435,10 +460,10 @@ async def get_full_sprint1_analysis(req: FullAnalysisRequest):
             }
 
         grade = (
-            "A+" if total_score >= 13 else
-            "A"  if total_score >= 10 else
-            "B"  if total_score >= 7  else
-            "C"  if total_score >= 4  else "WEAK"
+            "A+" if total_score >= 19 else
+            "A"  if total_score >= 15 else
+            "B"  if total_score >= 11 else
+            "C"  if total_score >= 7  else "WEAK"
         )
 
         return {
@@ -505,14 +530,14 @@ async def get_full_sprint1_analysis(req: FullAnalysisRequest):
 
             "confluence": {
                 "total_score":  total_score,
-                "max_score":    16,
+                "max_score":    24,
                 "score_pct":    score_pct,
                 "grade":        grade,
                 "bias":         bias_direction,
                 "signal": (
-                    "HIGH CONVICTION ENTRY" if total_score >= 13 else
-                    "VALID SETUP"           if total_score >= 10 else
-                    "WATCHLIST"             if total_score >= 7  else
+                    "HIGH CONVICTION ENTRY" if total_score >= 19 else
+                    "VALID SETUP"           if total_score >= 15 else
+                    "WATCHLIST"             if total_score >= 11 else
                     "WAIT"
                 ),
                 "breakdown": {
@@ -520,6 +545,8 @@ async def get_full_sprint1_analysis(req: FullAnalysisRequest):
                     "sweep":    sweep_score,
                     "ob":       ob_score,
                     "killzone": kz_score,
+                    "structure": structure_score,
+                    "mm_flow":  mm_score,
                 },
             },
         }
@@ -656,3 +683,55 @@ async def get_session_pairs(
     except Exception as e:
         logger.exception("Session pairs error")
         raise HTTPException(status_code=500, detail=f"Session pairs fetch failed: {str(e)}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MMFlow and Volatility Endpoints (Sprint A additions)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.post("/mm-flow")
+async def get_mm_flow(req: MMFlowRequest):
+    """Get market maker flow analysis."""
+    try:
+        df = await _data_engine.get_candles(req.symbol, req.timeframe, limit=req.limit)
+        if df is None or df.empty:
+            raise HTTPException(status_code=404, detail=f"No candle data for {req.symbol}")
+        
+        result = _mm_engine.analyze(df)
+        return {
+            "symbol": req.symbol,
+            "timeframe": req.timeframe,
+            "candle_delta": result.candle_delta,
+            "cumulative_delta": result.cumulative_delta,
+            "delta_trend": result.delta_trend,
+            "vwap_deviation_pct": result.vwap_deviation_pct,
+            "price_vs_vwap": result.price_vs_vwap,
+            "mm_phase": result.mm_phase,
+            "absorption_detected": result.absorption_detected,
+            "confluence_score": result.confluence_score,
+        }
+    except Exception as e:
+        logger.exception("MM Flow error")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/volatility")
+async def get_volatility(req: VolatilityRequest):
+    """Get GARCH volatility forecast for SL sizing."""
+    try:
+        df = await _data_engine.get_candles(req.symbol, req.timeframe, limit=req.limit)
+        if df is None or df.empty:
+            raise HTTPException(status_code=404, detail=f"No candle data for {req.symbol}")
+        
+        result = _garch_engine.analyze(df)
+        return {
+            "symbol": req.symbol,
+            "timeframe": req.timeframe,
+            "vol_regime": result.vol_regime,
+            "current_vol_daily": result.current_vol_daily,
+            "expected_daily_move_pct": result.expected_daily_move_pct,
+            "atr_equivalent": result.atr_equivalent,
+        }
+    except Exception as e:
+        logger.exception("Volatility error")
+        raise HTTPException(status_code=500, detail=str(e))
