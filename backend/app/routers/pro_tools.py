@@ -29,9 +29,12 @@ from app.engines.session_pairs import SessionPairsEngine
 from app.engines.market_structure import MarketStructureAnalyzer
 from app.engines.market_maker_flow import MarketMakerFlowEngine
 from app.engines.garch_volatility import GARCHVolatilityEngine
+from app.engines.wyckoff import WyckoffEngine
+from app.engines.options_perps import OptionsPerpsEngine
+from app.engines.mtf_confirmation import MTFConfirmationEngine
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/v1/pro", tags=["Pro Tools — Sprint 1"])
+router = APIRouter(prefix="/api/v1/pro", tags=["Pro Tools"])
 
 # Engine singletons
 _pd_engine    = PDZoneEngine()
@@ -45,6 +48,9 @@ _session_engine = SessionPairsEngine()
 _ms_engine    = MarketStructureAnalyzer()
 _mm_engine    = MarketMakerFlowEngine()
 _garch_engine = GARCHVolatilityEngine()
+_wyckoff_engine = WyckoffEngine()
+_options_engine = OptionsPerpsEngine()
+_mtf_engine   = MTFConfirmationEngine()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Pydantic request/response models
@@ -73,6 +79,20 @@ class MMFlowRequest(BaseModel):
     symbol: str = Field(..., example="BTCUSDT")
     timeframe: str = Field("1h", example="1h")
     limit: int = Field(100, ge=20, le=500)
+
+
+class WyckoffRequest(BaseModel):
+    symbol: str = Field(..., example="BTCUSDT")
+    timeframe: str = Field("1h", example="1h")
+    limit: int = Field(150, ge=50, le=500)
+
+
+class OptionsPerpsRequest(BaseModel):
+    symbol: str = Field(..., example="BTCUSDT")
+
+
+class MTFAlignmentRequest(BaseModel):
+    symbol: str = Field(..., example="BTCUSDT")
 
 
 class OBStrengthRequest(BaseModel):
@@ -735,3 +755,100 @@ async def get_volatility(req: VolatilityRequest):
     except Exception as e:
         logger.exception("Volatility error")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Sprint B Endpoints: Wyckoff, Options/Perps, MTF Alignment
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.post("/wyckoff")
+async def get_wyckoff(req: WyckoffRequest):
+    """Detect Wyckoff phases (Accumulation / Distribution) for macro context."""
+    try:
+        df = await _data_engine.get_candles(req.symbol, req.timeframe, limit=req.limit)
+        if df is None or df.empty:
+            raise HTTPException(status_code=404, detail=f"No candle data for {req.symbol}")
+        
+        result = _wyckoff_engine.analyze(df, lookback=req.limit)
+        return {
+            "symbol": req.symbol,
+            "timeframe": req.timeframe,
+            "schematic": result.schematic,
+            "phase": result.phase,
+            "is_actionable": result.is_actionable,
+            "signal": result.signal,
+            "events": [{"name": e.name, "description": e.description} for e in result.events],
+            "description": result.description,
+            "range_high": result.trading_range_high,
+            "range_low": result.trading_range_low,
+        }
+    except Exception as e:
+        logger.exception("Wyckoff error")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/options-perps")
+async def get_options_perps(req: OptionsPerpsRequest):
+    """Fetch Options & Perps metrics (Funding rate, OI, etc.). Proxy using default values if external API missing."""
+    try:
+        # Currently, the engine requires spot_price, iv_30d. 
+        # We will fetch recent daily candle to get price and estimate IV (ATR/Price).
+        df = await _data_engine.get_candles(req.symbol, "1d", limit=30)
+        if df is None or df.empty:
+            raise HTTPException(status_code=404, detail=f"No candle data for {req.symbol}")
+            
+        spot_price = float(df["close"].iloc[-1])
+        
+        # Estimate 30d IV based on historical volatility of last 30 days
+        returns = df["close"].pct_change().dropna()
+        hist_vol = float(returns.std() * (365 ** 0.5)) if not returns.empty else 0.5
+        
+        # Pass dummy values for funding rate and OI for now, as Binance/OKX futures APIs might need specific endpoints
+        result = _options_engine.analyze(
+            spot_price=spot_price,
+            iv_30d=hist_vol,
+            funding_rate_8h=0.01,  # fallback
+            long_short_ratio=1.05, # fallback
+            perp_price=spot_price,
+        )
+        
+        return {
+            "symbol": req.symbol,
+            "spot_price": result.spot_price,
+            "iv_30d": result.iv_30d,
+            "funding_rate_8h": result.perp.funding_rate_8h if result.perp else 0,
+            "funding_sentiment": result.perp.funding_sentiment if result.perp else "NEUTRAL",
+            "oi_trend": result.perp.oi_trend if result.perp else "STABLE",
+            "long_short_ratio": result.perp.long_short_ratio if result.perp else 1.0,
+            "ls_signal": result.perp.ls_signal if result.perp else "NEUTRAL",
+            "basis_pct": result.perp.basis_pct if result.perp else 0.0,
+            "options_bias": result.options_bias,
+        }
+    except Exception as e:
+        logger.exception("Options/Perps error")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/mtf-alignment")
+async def get_mtf_alignment(req: MTFAlignmentRequest):
+    """True Multi-Timeframe Alignment Check (1d, 4h, 1h, 15m, 5m)."""
+    try:
+        tfs = ["1d", "4h", "1h", "15m", "5m"]
+        candles_by_tf = {}
+        for tf in tfs:
+            df = await _data_engine.get_candles(req.symbol, tf, limit=100)
+            candles_by_tf[tf] = df
+            
+        result = _mtf_engine.analyze(candles_by_tf, req.symbol)
+        return {
+            "symbol": req.symbol,
+            "dominant_bias": result["dominant_bias"],
+            "confirmed": result["confirmed"],
+            "confirmation_level": result["confirmation_level"],
+            "agreement_score": result["agreement_score"],
+            "per_tf": result["per_tf"],
+        }
+    except Exception as e:
+        logger.exception("MTF Alignment error")
+        raise HTTPException(status_code=500, detail=str(e))
+

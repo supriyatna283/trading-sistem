@@ -133,6 +133,8 @@ export function MultiTimeframeView({ symbol }: MTFProps) {
   );
   const [currentPrice, setCurrentPrice] = useState<number | undefined>();
   const [alignment, setAlignment] = useState<"bullish" | "bearish" | "mixed" | "neutral">("neutral");
+  const [trueMTF, setTrueMTF] = useState<any>(null);
+  const [loadingMTF, setLoadingMTF] = useState(false);
 
   const fetchTF = useCallback(async (cfg: typeof TF_CONFIG[0]) => {
     try {
@@ -173,10 +175,27 @@ export function MultiTimeframeView({ symbol }: MTFProps) {
     }
   }, [symbol, currentPrice]);
 
-  const fetchAll = useCallback(() => {
+  const fetchAll = useCallback(async () => {
     setTFData(prev => prev.map(d => ({ ...d, loading: true, error: undefined })));
     TF_CONFIG.forEach(cfg => fetchTF(cfg));
-  }, [fetchTF]);
+    
+    // Fetch True MTF Alignment
+    setLoadingMTF(true);
+    try {
+      const res = await fetch(`${API_URL}/api/v1/pro/mtf-alignment`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol })
+      });
+      if (res.ok) {
+        const json = await res.json();
+        setTrueMTF(json);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingMTF(false);
+    }
+  }, [fetchTF, symbol]);
 
   // Bug #4 Fix: Debounce the API calls
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
@@ -187,6 +206,16 @@ export function MultiTimeframeView({ symbol }: MTFProps) {
     
     debounceRef.current = setTimeout(() => {
       TF_CONFIG.forEach(cfg => fetchTF(cfg));
+      
+      // Fetch True MTF Alignment
+      setLoadingMTF(true);
+      fetch(`${API_URL}/api/v1/pro/mtf-alignment`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol })
+      }).then(r => r.json()).then(json => {
+        setTrueMTF(json);
+      }).catch(e => console.error(e)).finally(() => setLoadingMTF(false));
+      
     }, 400); // 400ms debounce
     
     return () => {
@@ -194,7 +223,7 @@ export function MultiTimeframeView({ symbol }: MTFProps) {
     };
   }, [symbol, fetchTF]);
 
-  // Compute alignment
+  // Compute fallback alignment if trueMTF fails
   useEffect(() => {
     const biases = tfData.filter(d => d.bias && d.bias !== "NEUTRAL").map(d => d.bias);
     const bullish = biases.filter(b => b?.includes("BUY")).length;
@@ -222,12 +251,41 @@ export function MultiTimeframeView({ symbol }: MTFProps) {
       </div>
 
       {/* Alignment Banner */}
-      <div style={{ padding: "10px 16px", borderRadius: 10, background: `${alignmentColor}10`, border: `1px solid ${alignmentColor}30`, marginBottom: 16, fontSize: "0.78rem", fontWeight: 800, color: alignmentColor }}>
-        {alignmentLabel}
-        {alignment === "bullish" && <span style={{ fontSize: "0.62rem", fontWeight: 400, color: "var(--text-muted)", marginLeft: 8 }}>→ All timeframes confirm BUY. Highest probability setup.</span>}
-        {alignment === "bearish" && <span style={{ fontSize: "0.62rem", fontWeight: 400, color: "var(--text-muted)", marginLeft: 8 }}>→ All timeframes confirm SELL. Highest probability setup.</span>}
-        {alignment === "mixed" && <span style={{ fontSize: "0.62rem", fontWeight: 400, color: "var(--text-muted)", marginLeft: 8 }}>→ Wait for higher TF to resolve before entry.</span>}
-      </div>
+      {trueMTF ? (
+        <div style={{ padding: "12px 18px", borderRadius: 12, background: trueMTF.confirmed ? (trueMTF.dominant_bias.includes("BUY") ? "rgba(16,185,129,0.1)" : "rgba(239,68,68,0.1)") : "rgba(245,158,11,0.1)", border: `1px solid ${trueMTF.confirmed ? (trueMTF.dominant_bias.includes("BUY") ? "rgba(16,185,129,0.3)" : "rgba(239,68,68,0.3)") : "rgba(245,158,11,0.3)"}`, marginBottom: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ fontSize: "0.85rem", fontWeight: 800, color: trueMTF.confirmed ? (trueMTF.dominant_bias.includes("BUY") ? "#10b981" : "#ef4444") : "#f59e0b" }}>
+              {trueMTF.confirmed ? (trueMTF.dominant_bias.includes("BUY") ? "🟢 TRUE BULLISH ALIGNMENT" : "🔴 TRUE BEARISH ALIGNMENT") : "🟡 MIXED / UNCONFIRMED ALIGNMENT"}
+            </div>
+            <div style={{ fontSize: "0.7rem", fontWeight: 800, color: "#fff", background: "rgba(255,255,255,0.1)", padding: "2px 8px", borderRadius: 4 }}>
+              Score: {trueMTF.agreement_score}/5
+            </div>
+          </div>
+          <div style={{ fontSize: "0.65rem", color: "var(--text-muted)", marginTop: 6, display: "flex", gap: 12, flexWrap: "wrap" }}>
+            {["1d", "4h", "1h", "15m", "5m"].map(tf => {
+              const b = trueMTF.per_tf[tf]?.bias || "SIDEWAYS";
+              return (
+                <span key={tf}>
+                  <strong>{tf.toUpperCase()}</strong>: 
+                  <span style={{ color: b.includes("BUY") ? "#10b981" : b.includes("SELL") ? "#ef4444" : "#64748b", marginLeft: 4 }}>{b}</span>
+                </span>
+              );
+            })}
+          </div>
+          <div style={{ fontSize: "0.65rem", marginTop: 8, color: trueMTF.confirmed ? "#fff" : "var(--text-muted)", fontWeight: trueMTF.confirmed ? 700 : 400 }}>
+            {trueMTF.confirmed 
+              ? `→ Strong ${trueMTF.confirmation_level} confirmation across timeframes. High probability setup.` 
+              : "→ Wait for ≥2 consecutive timeframes to align before entry."}
+          </div>
+        </div>
+      ) : (
+        <div style={{ padding: "10px 16px", borderRadius: 10, background: `${alignmentColor}10`, border: `1px solid ${alignmentColor}30`, marginBottom: 16, fontSize: "0.78rem", fontWeight: 800, color: alignmentColor }}>
+          {alignmentLabel}
+          {alignment === "bullish" && <span style={{ fontSize: "0.62rem", fontWeight: 400, color: "var(--text-muted)", marginLeft: 8 }}>→ All timeframes confirm BUY. Highest probability setup.</span>}
+          {alignment === "bearish" && <span style={{ fontSize: "0.62rem", fontWeight: 400, color: "var(--text-muted)", marginLeft: 8 }}>→ All timeframes confirm SELL. Highest probability setup.</span>}
+          {alignment === "mixed" && <span style={{ fontSize: "0.62rem", fontWeight: 400, color: "var(--text-muted)", marginLeft: 8 }}>→ Wait for higher TF to resolve before entry.</span>}
+        </div>
+      )}
 
       {/* TF Cards */}
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
