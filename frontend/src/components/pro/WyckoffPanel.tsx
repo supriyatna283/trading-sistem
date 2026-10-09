@@ -95,17 +95,17 @@ export function WyckoffPanel({ symbol, timeframe, autoLoad = true }: { symbol: s
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 20 }}>
             <div style={{ padding: 12, borderRadius: 10, background: "rgba(16,185,129,0.05)", border: "1px dashed rgba(16,185,129,0.2)" }}>
               <div style={{ fontSize: "0.6rem", textTransform: "uppercase", color: "#10b981", marginBottom: 4, fontWeight: 700 }}>Range High</div>
-              <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "0.9rem", color: "#fff", fontWeight: 800 }}>{data.range_high.toLocaleString("en")}</div>
+              <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "0.9rem", color: "#fff", fontWeight: 800 }}>{data.range_high?.toLocaleString("en")}</div>
             </div>
             <div style={{ padding: 12, borderRadius: 10, background: "rgba(239,68,68,0.05)", border: "1px dashed rgba(239,68,68,0.2)" }}>
               <div style={{ fontSize: "0.6rem", textTransform: "uppercase", color: "#ef4444", marginBottom: 4, fontWeight: 700 }}>Range Low</div>
-              <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "0.9rem", color: "#fff", fontWeight: 800 }}>{data.range_low.toLocaleString("en")}</div>
+              <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "0.9rem", color: "#fff", fontWeight: 800 }}>{data.range_low?.toLocaleString("en")}</div>
             </div>
           </div>
 
           <div style={{ fontWeight: 800, fontSize: "0.85rem", marginBottom: 10 }}>Recent Events</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {data.events.slice(-4).map((e, i) => (
+            {(data.events || []).slice(-4).map((e, i) => (
               <div key={i} style={{ display: "flex", gap: 12, alignItems: "center", padding: "8px 12px", background: "rgba(255,255,255,0.03)", borderRadius: 8 }}>
                 <span style={{ fontWeight: 800, color, fontSize: "0.75rem", width: 40 }}>{e.name}</span>
                 <span style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>{e.description}</span>

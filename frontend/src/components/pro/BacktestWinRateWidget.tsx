@@ -47,7 +47,7 @@ export function BacktestWinRateWidget({ symbol, timeframe }: { symbol: string; t
   if (!data || !data.summary) return null;
 
   const summary = data.summary;
-  const isProfitable = summary.net_profit_pct > 0;
+  const isProfitable = (summary.net_profit_pct || 0) > 0;
   const color = isProfitable ? "#10b981" : "#ef4444";
 
   return (
@@ -61,22 +61,22 @@ export function BacktestWinRateWidget({ symbol, timeframe }: { symbol: string; t
           </div>
         </div>
         <div style={{ padding: "4px 10px", borderRadius: 8, background: `${color}15`, border: `1px solid ${color}40`, color, fontSize: "0.85rem", fontWeight: 900 }}>
-          {summary.win_rate_pct.toFixed(1)}%
+          {summary.win_rate_pct?.toFixed(1) || 0}%
         </div>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
         <div style={{ padding: 10, borderRadius: 8, background: "rgba(255,255,255,0.03)", textAlign: "center" }}>
           <div style={{ fontSize: "0.55rem", color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 4 }}>Total Trades</div>
-          <div style={{ fontSize: "0.85rem", fontWeight: 800, color: "#fff" }}>{summary.total_trades}</div>
+          <div style={{ fontSize: "0.85rem", fontWeight: 800, color: "#fff" }}>{summary.total_trades || 0}</div>
         </div>
         <div style={{ padding: 10, borderRadius: 8, background: "rgba(255,255,255,0.03)", textAlign: "center" }}>
           <div style={{ fontSize: "0.55rem", color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 4 }}>Profit Factor</div>
-          <div style={{ fontSize: "0.85rem", fontWeight: 800, color: summary.profit_factor >= 1.5 ? "#10b981" : "#f59e0b" }}>{summary.profit_factor.toFixed(2)}</div>
+          <div style={{ fontSize: "0.85rem", fontWeight: 800, color: (summary.profit_factor || 0) >= 1.5 ? "#10b981" : "#f59e0b" }}>{summary.profit_factor?.toFixed(2) || "0.00"}</div>
         </div>
         <div style={{ padding: 10, borderRadius: 8, background: "rgba(255,255,255,0.03)", textAlign: "center" }}>
           <div style={{ fontSize: "0.55rem", color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 4 }}>Net Return</div>
-          <div style={{ fontSize: "0.85rem", fontWeight: 800, color }}>{summary.net_profit_pct > 0 ? "+" : ""}{summary.net_profit_pct.toFixed(2)}%</div>
+          <div style={{ fontSize: "0.85rem", fontWeight: 800, color }}>{(summary.net_profit_pct || 0) > 0 ? "+" : ""}{summary.net_profit_pct?.toFixed(2) || "0.00"}%</div>
         </div>
       </div>
       

@@ -189,9 +189,12 @@ export function MultiTimeframeView({ symbol }: MTFProps) {
       if (res.ok) {
         const json = await res.json();
         setTrueMTF(json);
+      } else {
+        setTrueMTF(null);
       }
     } catch (e) {
       console.error(e);
+      setTrueMTF(null);
     } finally {
       setLoadingMTF(false);
     }
@@ -212,9 +215,15 @@ export function MultiTimeframeView({ symbol }: MTFProps) {
       fetch(`${API_URL}/api/v1/pro/mtf-alignment`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ symbol })
-      }).then(r => r.json()).then(json => {
+      }).then(r => {
+        if (!r.ok) throw new Error("MTF API Failed");
+        return r.json();
+      }).then(json => {
         setTrueMTF(json);
-      }).catch(e => console.error(e)).finally(() => setLoadingMTF(false));
+      }).catch(e => {
+        console.error(e);
+        setTrueMTF(null);
+      }).finally(() => setLoadingMTF(false));
       
     }, 400); // 400ms debounce
     
@@ -251,7 +260,7 @@ export function MultiTimeframeView({ symbol }: MTFProps) {
       </div>
 
       {/* Alignment Banner */}
-      {trueMTF ? (
+      {trueMTF && trueMTF.per_tf ? (
         <div style={{ padding: "12px 18px", borderRadius: 12, background: trueMTF.confirmed ? (trueMTF.dominant_bias.includes("BUY") ? "rgba(16,185,129,0.1)" : "rgba(239,68,68,0.1)") : "rgba(245,158,11,0.1)", border: `1px solid ${trueMTF.confirmed ? (trueMTF.dominant_bias.includes("BUY") ? "rgba(16,185,129,0.3)" : "rgba(239,68,68,0.3)") : "rgba(245,158,11,0.3)"}`, marginBottom: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <div style={{ fontSize: "0.85rem", fontWeight: 800, color: trueMTF.confirmed ? (trueMTF.dominant_bias.includes("BUY") ? "#10b981" : "#ef4444") : "#f59e0b" }}>

@@ -77,15 +77,15 @@ export function OptionsPerpsPanel({ symbol, autoLoad = true }: { symbol: string;
         <div style={{ padding: 16, borderRadius: 12, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.05)" }}>
           <div style={{ fontSize: "0.65rem", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 6, fontWeight: 700 }}>8h Funding Rate</div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: "1.1rem", fontWeight: 800, color: data.funding_rate_8h > 0 ? "#10b981" : "#ef4444", fontFamily: "'JetBrains Mono', monospace" }}>
-              {data.funding_rate_8h.toFixed(4)}%
+            <span style={{ fontSize: "1.1rem", fontWeight: 800, color: (data.funding_rate_8h || 0) > 0 ? "#10b981" : "#ef4444", fontFamily: "'JetBrains Mono', monospace" }}>
+              {data.funding_rate_8h?.toFixed(4)}%
             </span>
             <span style={{ fontSize: "0.6rem", padding: "2px 6px", borderRadius: 4, background: "rgba(255,255,255,0.05)", color: "#fff" }}>
               {data.funding_sentiment}
             </span>
           </div>
           <div style={{ marginTop: 8, fontSize: "0.6rem", color: "var(--text-muted)" }}>
-            {data.funding_rate_8h > 0 ? "Longs pay shorts. Market is bullish/greedy." : "Shorts pay longs. Market is bearish/fearful."}
+            {(data.funding_rate_8h || 0) > 0 ? "Longs pay shorts. Market is bullish/greedy." : "Shorts pay longs. Market is bearish/fearful."}
           </div>
         </div>
 
@@ -93,15 +93,15 @@ export function OptionsPerpsPanel({ symbol, autoLoad = true }: { symbol: string;
         <div style={{ padding: 16, borderRadius: 12, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.05)" }}>
           <div style={{ fontSize: "0.65rem", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 6, fontWeight: 700 }}>Long/Short Ratio</div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: "1.1rem", fontWeight: 800, color: data.long_short_ratio > 1 ? "#ef4444" : "#10b981", fontFamily: "'JetBrains Mono', monospace" }}>
-              {data.long_short_ratio.toFixed(2)}
+            <span style={{ fontSize: "1.1rem", fontWeight: 800, color: (data.long_short_ratio || 1) > 1 ? "#ef4444" : "#10b981", fontFamily: "'JetBrains Mono', monospace" }}>
+              {data.long_short_ratio?.toFixed(2)}
             </span>
             <span style={{ fontSize: "0.6rem", padding: "2px 6px", borderRadius: 4, background: "rgba(255,255,255,0.05)", color: "#fff" }}>
               {data.ls_signal}
             </span>
           </div>
           <div style={{ marginTop: 8, fontSize: "0.6rem", color: "var(--text-muted)" }}>
-            {data.long_short_ratio > 1 ? "Retail is overwhelmingly long." : "Retail is predominantly short."}
+            {(data.long_short_ratio || 1) > 1 ? "Retail is overwhelmingly long." : "Retail is predominantly short."}
           </div>
         </div>
 
@@ -118,13 +118,13 @@ export function OptionsPerpsPanel({ symbol, autoLoad = true }: { symbol: string;
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span style={{ fontSize: "0.75rem", color: "#cbd5e1" }}>Implied Vol (30d)</span>
               <span style={{ fontSize: "0.75rem", fontWeight: 800, color: "#fff", fontFamily: "'JetBrains Mono', monospace" }}>
-                {(data.iv_30d * 100).toFixed(1)}%
+                {((data.iv_30d || 0) * 100).toFixed(1)}%
               </span>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span style={{ fontSize: "0.75rem", color: "#cbd5e1" }}>Basis (Premium)</span>
-              <span style={{ fontSize: "0.75rem", fontWeight: 800, color: data.basis_pct > 0 ? "#10b981" : "#ef4444", fontFamily: "'JetBrains Mono', monospace" }}>
-                {data.basis_pct.toFixed(3)}%
+              <span style={{ fontSize: "0.75rem", fontWeight: 800, color: (data.basis_pct || 0) > 0 ? "#10b981" : "#ef4444", fontFamily: "'JetBrains Mono', monospace" }}>
+                {data.basis_pct?.toFixed(3)}%
               </span>
             </div>
           </div>
