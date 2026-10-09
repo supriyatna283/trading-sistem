@@ -21,7 +21,7 @@ class MacroNewsEngine:
                 "title": "FOMC Press Conference",
                 "impact": "HIGH",
                 "currency": "USD",
-                "time": now_utc + timedelta(minutes=45), # 45 mins from now
+                "time": now_utc + timedelta(hours=5), # 5 hours from now (mock)
             },
             {
                 "id": 2,
