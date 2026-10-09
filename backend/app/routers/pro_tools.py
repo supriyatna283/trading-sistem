@@ -477,6 +477,11 @@ async def get_full_sprint1_analysis(req: FullAnalysisRequest):
                 "is_killzone":  kz_status["is_killzone_active"],
                 "in_ote":       pd_result.is_in_ote,
                 "confidence":   score_pct,
+                "exit_strategy": {
+                    "tp1_action": "Close 50% & move SL to Break Even",
+                    "tp2_action": "Close 30% & trail SL by 1 ATR",
+                    "tp3_action": "Let remaining 20% run / manually trail"
+                }
             }
 
         grade = (

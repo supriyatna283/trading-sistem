@@ -14,6 +14,7 @@ import { ProScannerPanel } from "@/components/pro/ProScannerPanel";
 import { MarketStructurePanel } from "@/components/pro/MarketStructurePanel";
 import { WyckoffPanel } from "@/components/pro/WyckoffPanel";
 import { OptionsPerpsPanel } from "@/components/pro/OptionsPerpsPanel";
+import { ConditionalAlertWidget } from "@/components/pro/ConditionalAlertWidget";
 import { useState, useCallback } from "react";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://ucilkecil387-trading-api.hf.space";
@@ -30,7 +31,7 @@ const TIMEFRAMES = ["5m", "15m", "1h", "4h", "1d"];
 const HTF_MAP: Record<string, string> = { "5m": "15m", "15m": "1h", "1h": "4h", "4h": "1d", "1d": "1d" };
 
 // ── Tabs ─────────────────────────────────────────────────────────────────────
-type Tab = "confluence" | "mtf" | "wyckoff" | "options-perps" | "market-structure" | "killzone" | "pd-zones" | "sweep" | "ob-strength" | "fvg-breaker" | "position" | "scanner";
+type Tab = "confluence" | "mtf" | "wyckoff" | "options-perps" | "alerts" | "market-structure" | "killzone" | "pd-zones" | "sweep" | "ob-strength" | "fvg-breaker" | "position" | "scanner";
 
 const TABS: { id: Tab; label: string; desc: string; color: string; badge?: string }[] = [
   { id: "scanner", label: "Live Scanner", desc: "Scan pairs ready to trade", color: "#e879f9", badge: "PRO" },
@@ -38,6 +39,7 @@ const TABS: { id: Tab; label: string; desc: string; color: string; badge?: strin
   { id: "mtf", label: "Multi-TF", desc: "4H + 1H + 15M alignment", color: "#3b82f6", badge: "NEW" },
   { id: "wyckoff", label: "Wyckoff", desc: "Macro context & Phase", color: "#8b5cf6", badge: "BETA" },
   { id: "options-perps", label: "Options & Perps", desc: "Funding, OI & Options Edge", color: "#6366f1", badge: "BETA" },
+  { id: "alerts", label: "Conditional Alerts", desc: "Technical WA Alerts", color: "#10b981", badge: "NEW" },
   { id: "market-structure", label: "Market Structure", desc: "MSS, CHoCH, and BOS", color: "#ec4899", badge: "NEW" },
   { id: "killzone", label: "Killzone", desc: "ICT session tracker", color: "#f59e0b" },
   { id: "pd-zones", label: "P/D Zones", desc: "Premium & Discount arrays", color: "#6366f1" },
@@ -300,6 +302,13 @@ export default function ProToolsPage() {
       ══════════════════════════════════════════════ */}
       <div style={{ display: activeTab === "options-perps" ? "block" : "none" }}>
         <OptionsPerpsPanel symbol={symbol} />
+      </div>
+
+      {/* ══════════════════════════════════════════════
+          CONDITIONAL ALERTS TAB (SPRINT C)
+      ══════════════════════════════════════════════ */}
+      <div style={{ display: activeTab === "alerts" ? "block" : "none" }}>
+        <ConditionalAlertWidget symbol={symbol} />
       </div>
 
       {/* ══════════════════════════════════════════════

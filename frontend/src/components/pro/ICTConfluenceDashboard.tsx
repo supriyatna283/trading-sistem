@@ -11,6 +11,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { API_URL } from "@/lib/utils";
+import { BacktestWinRateWidget } from "./BacktestWinRateWidget";
 
 /** Adaptive precision for price display */
 const fmtPrice = (v?: number | null) => {
@@ -245,6 +246,27 @@ function TradePlanCard({ plan, symbol, onWA, onLoadPosCalc }: { plan: NonNullabl
             </div>
           ))}
         </div>
+
+        {/* Exit Strategy Framework */}
+        {plan.exit_strategy && (
+          <div style={{ marginBottom: 14, padding: "10px 14px", borderRadius: 10, background: "rgba(255,255,255,0.02)", border: "1px dashed rgba(255,255,255,0.1)" }}>
+            <div style={{ fontSize: "0.6rem", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 6, fontWeight: 800 }}>📉 Exit Strategy Framework</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <Pill label="TP1" color="#10b981" size="xs" />
+                <span style={{ fontSize: "0.65rem", color: "#e2e8f0" }}>{plan.exit_strategy.tp1_action}</span>
+              </div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <Pill label="TP2" color="#3b82f6" size="xs" />
+                <span style={{ fontSize: "0.65rem", color: "#e2e8f0" }}>{plan.exit_strategy.tp2_action}</span>
+              </div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <Pill label="TP3" color="#a78bfa" size="xs" />
+                <span style={{ fontSize: "0.65rem", color: "#e2e8f0" }}>{plan.exit_strategy.tp3_action}</span>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Action Buttons */}
         <div style={{ display: "flex", gap: 10 }}>
@@ -618,6 +640,7 @@ export function ICTConfluenceDashboard({
           {/* ── Auto Trade Plan (Feature #4) ── */}
           {data.trade_plan ? (
             <div style={{ marginBottom: 14 }}>
+              <BacktestWinRateWidget symbol={symbol} timeframe={timeframe} />
               <TradePlanCard
                 plan={data.trade_plan}
                 symbol={symbol}
