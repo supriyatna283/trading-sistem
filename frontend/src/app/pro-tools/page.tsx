@@ -65,43 +65,52 @@ function WAToast({ msg, onClose }: { msg: string; onClose: () => void }) {
   );
 }
 
-// ── Symbol Search Component (Bug #12) ──────────────────────────────────────────
+// ── Symbol Free-Text Input ─────────────────────────────────────────────────────
 function SymbolSearch({ current, onSelect }: { current: string; onSelect: (s: string) => void }) {
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
+  const [draft, setDraft] = useState(current);
 
-  const filtered = ALL_SYMBOLS.filter(s => s.toLowerCase().includes(query.toLowerCase()));
+  // Sync if parent changes symbol externally
+  if (draft !== current && document.activeElement?.id !== "pair-input") {
+    setDraft(current);
+  }
+
+  const commit = () => {
+    const val = draft.trim().toUpperCase();
+    if (val.length >= 2) {
+      // Append USDT if user typed just the base (e.g. "BTC" → "BTCUSDT")
+      const normalized = val.endsWith("USDT") ? val : val + "USDT";
+      onSelect(normalized);
+      setDraft(normalized);
+    } else {
+      setDraft(current); // revert on empty input
+    }
+  };
 
   return (
-    <div style={{ position: "relative" }}>
-      <input
-        value={open ? query : current}
-        onChange={e => { setQuery(e.target.value); setOpen(true); }}
-        onFocus={() => { setQuery(""); setOpen(true); }}
-        onBlur={() => setTimeout(() => setOpen(false), 200)}
-        placeholder="Search pair..."
-        style={{ width: 110, padding: "6px 12px", borderRadius: 8, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", color: "#fff", fontSize: "0.7rem", fontFamily: "monospace", transition: "all 0.2s" }}
-      />
-      {open && (
-        <div style={{ position: "absolute", top: "100%", left: 0, marginTop: 4, width: 140, maxHeight: 200, overflowY: "auto", background: "#0f172a", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, zIndex: 50, boxShadow: "0 10px 25px rgba(0,0,0,0.5)" }}>
-          {filtered.length === 0 ? (
-            <div style={{ padding: "8px", fontSize: "0.65rem", color: "var(--text-muted)", textAlign: "center" }}>Not found</div>
-          ) : (
-            filtered.map(s => (
-              <div
-                key={s}
-                onClick={() => { onSelect(s); setOpen(false); }}
-                style={{ padding: "8px 12px", fontSize: "0.7rem", color: s === current ? "#10b981" : "#fff", cursor: "pointer", background: s === current ? "rgba(16,185,129,0.1)" : "transparent", borderBottom: "1px solid rgba(255,255,255,0.02)" }}
-                onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.05)")}
-                onMouseLeave={e => (e.currentTarget.style.background = s === current ? "rgba(16,185,129,0.1)" : "transparent")}
-              >
-                {s}
-              </div>
-            ))
-          )}
-        </div>
-      )}
-    </div>
+    <input
+      id="pair-input"
+      value={draft}
+      onChange={e => setDraft(e.target.value.toUpperCase())}
+      onBlur={commit}
+      onKeyDown={e => { if (e.key === "Enter") { (e.target as HTMLInputElement).blur(); commit(); } }}
+      placeholder="e.g. BTCUSDT"
+      title="Ketik nama pair lalu tekan Enter"
+      style={{
+        width: 120,
+        padding: "6px 12px",
+        borderRadius: 8,
+        background: "rgba(255,255,255,0.05)",
+        border: "1px solid rgba(255,255,255,0.12)",
+        color: "#fff",
+        fontSize: "0.72rem",
+        fontFamily: "'JetBrains Mono', monospace",
+        fontWeight: 700,
+        letterSpacing: "0.03em",
+        outline: "none",
+        transition: "border 0.2s",
+      }}
+      onFocus={e => (e.target.style.border = "1px solid rgba(99,102,241,0.6)")}
+    />
   );
 }
 
