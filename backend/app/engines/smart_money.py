@@ -86,7 +86,7 @@ class SmartMoneyConceptsEngine:
     def _detect_order_blocks(self, df: pd.DataFrame, atr: float) -> List[OrderBlock]:
         """
         V2 Order Block detection with quality filters:
-        - Impulse must be >= 2.0x average body (stronger institutional footprint)
+        - Impulse must be >= 1.3x average body (stronger institutional footprint)
         - OB candle must have body ratio >= 0.5 (no doji OBs)
         - OBs older than ob_max_age candles are discarded
         - Mitigated OBs (price revisited) are marked

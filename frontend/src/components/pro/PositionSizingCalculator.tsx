@@ -27,7 +27,7 @@ interface SizingResult {
     breakeven_win_rate: number;
     expected_value: number;
   };
-  leverage_sizes: { "1x": number; "5x": number; "10x": number };
+  margin_required: { "1x": number; "5x": number; "10x": number };
   size_grade: string;
   warnings: string[];
 }
@@ -411,23 +411,26 @@ export function PositionSizingCalculator({ symbol = "BTCUSDT", initialData }: { 
                 <div style={{ fontSize: "0.58rem", color: "var(--text-muted)", marginBottom: 4, fontWeight: 700 }}>RISK OF RUIN</div>
                 <GaugeArc value={result.risk_metrics.risk_of_ruin_pct} max={100} color={rorColor} />
                 <div style={{ fontSize: "0.65rem", color: "var(--text-muted)" }}>
-                  Max streak: <span style={{ color: rorColor }}>{result.risk_metrics.max_consecutive_losses} losses</span>
+                  Losses to halve: <span style={{ color: rorColor }}>{result.risk_metrics.max_consecutive_losses}</span>
                 </div>
               </div>
             </div>
 
-            {/* Leverage Sizes */}
+            {/* Margin Required */}
             <div style={{ marginBottom: 14 }}>
-              <div style={{ fontSize: "0.62rem", color: "var(--text-muted)", fontWeight: 700, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.08em" }}>Leverage Sizes</div>
+              <div style={{ fontSize: "0.62rem", color: "var(--text-muted)", fontWeight: 700, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.08em" }}>Margin Required (Collateral)</div>
               <div style={{ display: "flex", gap: 8 }}>
                 {(["1x", "5x", "10x"] as const).map(lev => (
                   <div key={lev} style={{ flex: 1, padding: "8px", borderRadius: 8, background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)", textAlign: "center" }}>
                     <div style={{ fontSize: "0.58rem", color: "var(--text-muted)" }}>{lev}</div>
                     <div style={{ fontSize: "0.7rem", fontWeight: 700, color: "#3b82f6", fontFamily: "monospace" }}>
-                      {result.leverage_sizes[lev].toFixed(3)}
+                      {result.margin_required[lev].toFixed(2)}
                     </div>
                   </div>
                 ))}
+              </div>
+              <div style={{ fontSize: "0.55rem", color: "var(--text-muted)", marginTop: 6 }}>
+                Kolateral yang dibutuhkan. Ukuran posisi & risiko tetap sama di semua leverage.
               </div>
             </div>
 

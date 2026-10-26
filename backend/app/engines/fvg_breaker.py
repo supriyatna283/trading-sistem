@@ -377,18 +377,22 @@ class FVGBreakerEngine:
         for fvg in fvgs:
             if fvg.status == "FILLED":
                 continue
+            # TPs are anchored to ENTRY (not current price) so the displayed
+            # levels match the reported R:R exactly.
             if fvg.type == "BULLISH":
                 entry = fvg.ce_level
                 sl    = fvg.gap_low - atr * 0.1
-                tp1   = price + (entry - sl) * 1.5
-                tp2   = price + (entry - sl) * 2.0
-                tp3   = price + (entry - sl) * 3.0
+                risk  = entry - sl
+                tp1   = entry + risk * 1.5
+                tp2   = entry + risk * 2.0
+                tp3   = entry + risk * 3.0
             else:
                 entry = fvg.ce_level
                 sl    = fvg.gap_high + atr * 0.1
-                tp1   = price - (sl - entry) * 1.5
-                tp2   = price - (sl - entry) * 2.0
-                tp3   = price - (sl - entry) * 3.0
+                risk  = sl - entry
+                tp1   = entry - risk * 1.5
+                tp2   = entry - risk * 2.0
+                tp3   = entry - risk * 3.0
 
             risk    = abs(entry - sl)
             rr1     = abs(tp1 - entry) / risk if risk > 0 else 0
@@ -454,24 +458,24 @@ class FVGBreakerEngine:
         sh_pts = [(i, float(h[i])) for i in range(2, n-2) if h[i] == max(h[i-2:i+3])]
         sl_pts = [(i, float(l[i])) for i in range(2, n-2) if l[i] == min(l[i-2:i+3])]
 
-        # ── Bullish Breaker: swing low broken upward ──
-        for sl_idx, sl_price in sl_pts[:-2]:
-            subs = c[sl_idx+1:]
-            breaks = np.where(subs > sl_price)[0]
+        # ── Bullish Breaker: swing HIGH (bearish OB / supply) broken UPWARD ──
+        for sh_idx, sh_price in sh_pts[:-2]:
+            subs = c[sh_idx+1:]
+            breaks = np.where(subs > sh_price)[0]
             if len(breaks) == 0: continue
-            bi  = sl_idx + 1 + int(breaks[0])
+            bi  = sh_idx + 1 + int(breaks[0])
             if bi >= n: continue
-            bsz = c[bi] - sl_price
+            bsz = c[bi] - sh_price
             if bsz < atr * 0.25: continue
 
             post = l[bi+1:]
-            returns = np.where((post <= sl_price * 1.003) & (post >= sl_price * 0.99))[0]
+            returns = np.where((post <= sh_price * 1.003) & (post >= sh_price * 0.99))[0]
             tc  = len(returns)
             hr  = tc > 0
 
-            # OTE entry: 62% retrace of the OB zone
-            ob_h = sl_price + atr * 0.3
-            ob_l = sl_price - atr * 0.15
+            # OTE entry: 62% retrace of the flipped supply→demand zone
+            ob_h = sh_price + atr * 0.3
+            ob_l = sh_price - atr * 0.15
             ote  = ob_l + (ob_h - ob_l) * 0.62
 
             vol_mult = float(v[bi]) / avg_v if avg_v > 0 else 1
@@ -479,7 +483,7 @@ class FVGBreakerEngine:
 
             bull_bb.append(BreakerBlock(
                 id=bid, type="BULLISH_BREAKER",
-                ob_high=round(ob_h,6), ob_low=round(ob_l,6), midpoint=round(sl_price,6),
+                ob_high=round(ob_h,6), ob_low=round(ob_l,6), midpoint=round(sh_price,6),
                 ote_entry=round(ote,6),
                 break_candle_idx=bi, break_price=round(float(c[bi]),6),
                 break_direction="UPWARD",
@@ -489,23 +493,23 @@ class FVGBreakerEngine:
             ))
             bid += 1
 
-        # ── Bearish Breaker: swing high broken downward ──
-        for sh_idx, sh_price in sh_pts[:-2]:
-            subs = c[sh_idx+1:]
-            breaks = np.where(subs < sh_price)[0]
+        # ── Bearish Breaker: swing LOW (bullish OB / demand) broken DOWNWARD ──
+        for sl_idx, sl_price in sl_pts[:-2]:
+            subs = c[sl_idx+1:]
+            breaks = np.where(subs < sl_price)[0]
             if len(breaks) == 0: continue
-            bi  = sh_idx + 1 + int(breaks[0])
+            bi  = sl_idx + 1 + int(breaks[0])
             if bi >= n: continue
-            bsz = sh_price - c[bi]
+            bsz = sl_price - c[bi]
             if bsz < atr * 0.25: continue
 
             post = h[bi+1:]
-            returns = np.where((post >= sh_price * 0.997) & (post <= sh_price * 1.01))[0]
+            returns = np.where((post >= sl_price * 0.997) & (post <= sl_price * 1.01))[0]
             tc  = len(returns)
             hr  = tc > 0
 
-            ob_h = sh_price + atr * 0.15
-            ob_l = sh_price - atr * 0.3
+            ob_h = sl_price + atr * 0.15
+            ob_l = sl_price - atr * 0.3
             ote  = ob_h - (ob_h - ob_l) * 0.62
 
             vol_mult = float(v[bi]) / avg_v if avg_v > 0 else 1
@@ -513,7 +517,7 @@ class FVGBreakerEngine:
 
             bear_bb.append(BreakerBlock(
                 id=bid, type="BEARISH_BREAKER",
-                ob_high=round(ob_h,6), ob_low=round(ob_l,6), midpoint=round(sh_price,6),
+                ob_high=round(ob_h,6), ob_low=round(ob_l,6), midpoint=round(sl_price,6),
                 ote_entry=round(ote,6),
                 break_candle_idx=bi, break_price=round(float(c[bi]),6),
                 break_direction="DOWNWARD",

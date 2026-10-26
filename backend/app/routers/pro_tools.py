@@ -371,10 +371,10 @@ async def calculate_position_size(req: PositionSizeRequest):
                     "breakeven_win_rate":     result.breakeven_win_rate,
                     "expected_value":         result.expected_value,
                 },
-                "leverage_sizes": {
-                    "1x":   result.leverage_1x_size,
-                    "5x":   result.leverage_5x_size,
-                    "10x":  result.leverage_10x_size,
+                "margin_required": {
+                    "1x":   result.margin_1x,
+                    "5x":   result.margin_5x,
+                    "10x":  result.margin_10x,
                 },
                 "size_grade":  result.size_grade,
                 "warnings":    result.warnings,
@@ -451,10 +451,10 @@ async def get_full_sprint1_analysis(req: FullAnalysisRequest):
             pass
 
         # ── Aggregate confluence score (0–24 scale from backend) ────────────
-        bias_direction  = sweep_result.get("bias_from_sweep") or fvg_data["signals"]["entry_bias"] or "BUY"
+        bias_direction  = sweep_result.get("bias_from_sweep") or fvg_data["signals"]["entry_bias"] or "NEUTRAL"
         pd_score        = _pd_engine.score_for_confluence(pd_result, bias_direction)
         sweep_score     = sweep_result.get("score", 0)
-        ob_score        = min(5, (scored_obs[0].score // 20) if scored_obs else 0)
+        ob_score        = min(5, ((scored_obs[0].score + 10) // 20) if scored_obs else 0)
         kz_score        = 3 if kz_status["is_killzone_active"] else (1 if kz_status["current_kz"] else 0)
         
         total_score     = pd_score + sweep_score + ob_score + kz_score + structure_score + mm_score
@@ -463,16 +463,22 @@ async def get_full_sprint1_analysis(req: FullAnalysisRequest):
 
         # 7. Macro News Check (Sprint D)
         macro_status = _macro_engine.check_news_proximity(warning_minutes=60)
-        
-        # If macro restricted, we kill the trade plan
-        if macro_status["is_restricted"]:
-            score_pct = min(score_pct, 40) # Cap score if news is imminent
+        macro_restricted = macro_status["is_restricted"]
+
+        # Cap the score and force WAIT/NEUTRAL during high-impact news. Grade
+        # and signal are computed exactly once here (single source of truth).
+        if macro_restricted:
+            score_pct = min(score_pct, 40)
             grade = "WAIT"
             signal = "NEUTRAL"
         else:
             grade = ("A+" if score_pct >= 90 else "A" if score_pct >= 80 else
                      "B"  if score_pct >= 65 else "C" if score_pct >= 50 else
                      "D"  if score_pct >= 30 else "WAIT")
+            signal = ("HIGH CONVICTION ENTRY" if total_score >= 19 else
+                      "VALID SETUP"           if total_score >= 15 else
+                      "WATCHLIST"             if total_score >= 11 else
+                      "WAIT")
 
         # ── Auto Trade Plan ─────────────────────────────────────────────────
         trade_plan = None
@@ -494,7 +500,7 @@ async def get_full_sprint1_analysis(req: FullAnalysisRequest):
             if breaker:
                 entry_zone = breaker.get("entry_zone")
 
-        if entry_zone:
+        if entry_zone and not macro_restricted:
             trade_plan = {
                 "bias":         bias_direction,
                 "entry":        entry_zone.get("entry"),
@@ -517,13 +523,6 @@ async def get_full_sprint1_analysis(req: FullAnalysisRequest):
                     "tp3_action": "Let remaining 20% run / manually trail"
                 }
             }
-
-        grade = (
-            "A+" if total_score >= 19 else
-            "A"  if total_score >= 15 else
-            "B"  if total_score >= 11 else
-            "C"  if total_score >= 7  else "WEAK"
-        )
 
         return {
             "symbol":        symbol,
@@ -593,13 +592,7 @@ async def get_full_sprint1_analysis(req: FullAnalysisRequest):
                 "score_pct":    score_pct,
                 "grade":        grade,
                 "bias":         bias_direction,
-                "signal": (
-                    "NEUTRAL" if macro_status["is_restricted"] else
-                    "HIGH CONVICTION ENTRY" if total_score >= 19 else
-                    "VALID SETUP"           if total_score >= 15 else
-                    "WATCHLIST"             if total_score >= 11 else
-                    "WAIT"
-                ),
+                "signal":        signal,
                 "macro_restricted": macro_status["is_restricted"],
                 "macro_message": macro_status["message"],
                 "breakdown": {
@@ -841,40 +834,55 @@ async def get_wyckoff(req: WyckoffRequest):
 
 @router.post("/options-perps")
 async def get_options_perps(req: OptionsPerpsRequest):
-    """Fetch Options & Perps metrics (Funding rate, OI, etc.). Proxy using default values if external API missing."""
+    """Options & perps analysis.
+
+    Funding rate, open interest and long/short ratio are NOT connected to a
+    live data source, so they are reported as unavailable rather than
+    fabricating placeholder values. Option pricing uses realized (historical)
+    volatility as a stand-in for implied volatility.
+    """
     try:
-        # Currently, the engine requires spot_price, iv_30d. 
-        # We will fetch recent daily candle to get price and estimate IV (ATR/Price).
         df = await _data_engine.get_candles(req.symbol, "1d", limit=30)
         if df is None or df.empty:
             raise HTTPException(status_code=404, detail=f"No candle data for {req.symbol}")
-            
+
         spot_price = float(df["close"].iloc[-1])
-        
-        # Estimate 30d IV based on historical volatility of last 30 days
+
+        # Realized (historical) volatility as a stand-in for implied volatility.
         returns = df["close"].pct_change().dropna()
-        hist_vol = float(returns.std() * (365 ** 0.5)) if not returns.empty else 0.5
-        
-        # Pass dummy values for funding rate and OI for now, as Binance/OKX futures APIs might need specific endpoints
+        hist_vol = float(returns.std() * (365 ** 0.5)) if len(returns) > 1 else 0.0
+
+        # Neutral placeholders keep the options engine running, but the response
+        # reports perp metrics as unavailable instead of inventing values.
         result = _options_engine.analyze(
             spot_price=spot_price,
             iv_30d=hist_vol,
-            funding_rate_8h=0.01,  # fallback
-            long_short_ratio=1.05, # fallback
-            perp_price=spot_price,
+            funding_rate_8h=0.0,
+            long_short_ratio=1.0,
+            perp_price=None,
         )
-        
+
         return {
             "symbol": req.symbol,
             "spot_price": result.spot_price,
-            "iv_30d": result.iv_30d,
-            "funding_rate_8h": result.perp.funding_rate_8h if result.perp else 0,
-            "funding_sentiment": result.perp.funding_sentiment if result.perp else "NEUTRAL",
-            "oi_trend": result.perp.oi_trend if result.perp else "STABLE",
-            "long_short_ratio": result.perp.long_short_ratio if result.perp else 1.0,
-            "ls_signal": result.perp.ls_signal if result.perp else "NEUTRAL",
-            "basis_pct": result.perp.basis_pct if result.perp else 0.0,
+            "iv_30d_pct": result.iv_30d,  # realized vol, in percent
+            "put_call_ratio": result.put_call_ratio,
+            "max_pain": result.max_pain_strike,
+            "skew_pct": result.skew,
             "options_bias": result.options_bias,
+            # Perp metrics are not wired to a live feed — report honestly.
+            "funding_rate_8h": None,
+            "funding_sentiment": "UNAVAILABLE",
+            "oi_trend": "UNAVAILABLE",
+            "long_short_ratio": None,
+            "ls_signal": "UNAVAILABLE",
+            "basis_pct": None,
+            "data_disclaimer": (
+                "Funding rate, open interest, dan long/short ratio belum tersambung "
+                "ke data source live; ditampilkan sebagai UNAVAILABLE, bukan angka "
+                "perkiraan. Volatilitas memakai realized volatility (historis), bukan "
+                "implied volatility pasar."
+            ),
         }
     except Exception as e:
         logger.exception("Options/Perps error")

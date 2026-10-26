@@ -339,9 +339,13 @@ export default function ProToolsPage() {
                 <div style={{ fontWeight: 800, fontSize: "0.85rem", marginBottom: 14 }}>🎯 ICT Killzone Rules</div>
                 {[
                   { session: "🌏 ASIA (00-07 UTC)", rule: "Observe range. Mark Asia High (AH) & Low (AL) — these become liquidity targets." },
-                  { session: "🇬🇧 LONDON (07-10 UTC)", rule: "Sweeps Asia range (Judas Swing) then reverses to real direction." },
+                  { session: "🇬🇧 LONDON OPEN (07-10 UTC)", rule: "Sweeps Asia range (Judas Swing) then reverses to real direction." },
+                  { session: "🏙️ LONDON (10-12 UTC)", rule: "Continuation of London. Manage open positions." },
                   { session: "🗽 NY OPEN (12-15 UTC)", rule: "Most powerful. Confirms or reverses London. Best setup window." },
-                  { session: "😴 DEAD ZONE (20-00)", rule: "Low volume. No new entries." },
+                  { session: "📈 NY AM (15-17 UTC)", rule: "Trend continuation after NY Open." },
+                  { session: "🍔 NY LUNCH (17-19 UTC)", rule: "Low liquidity. Choppy — avoid new entries." },
+                  { session: "🌅 NY PM (19-21 UTC)", rule: "Late NY. Only high-quality continuation setups." },
+                  { session: "😴 DEAD ZONE (21-24 UTC)", rule: "Low volume. No new entries." },
                 ].map(({ session, rule }) => (
                   <div key={session} style={{ marginBottom: 8, padding: "9px 12px", borderRadius: 8, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
                     <div style={{ fontSize: "0.7rem", fontWeight: 700, color: "#fff", marginBottom: 2 }}>{session}</div>

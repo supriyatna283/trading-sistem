@@ -447,9 +447,9 @@ export function WAAlertConfigPanel() {
             ✅ <strong style={{ color: "#10b981" }}>WA sudah dikonfigurasi via senderme.my.id</strong><br/>
             Set di <strong style={{ color: "#fff" }}>Vercel Dashboard → Settings → Environment Variables:</strong><br/>
             <code style={{ fontFamily: "monospace", fontSize: "0.68rem", color: "#94a3b8", display: "block", marginTop: 6, padding: "8px", background: "rgba(0,0,0,0.2)", borderRadius: 6, lineHeight: 2 }}>
-              WA_API_KEY = wa_key_787f15b9ce664d8fb98a426befba34ca<br/>
+              WA_API_KEY = wa_key_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx<br/>
               WA_API_URL = https://senderme.my.id/api/send-message<br/>
-              WA_OWNER_PHONE = 6281112300343
+              WA_OWNER_PHONE = 62xxxxxxxxxxxx
             </code>
           </div>
 

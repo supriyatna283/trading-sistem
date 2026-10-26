@@ -167,8 +167,8 @@ function Section({ title, icon, color, children }: { title: string; icon: string
 
 // ── Score breakdown bar ───────────────────────────────────────────────────
 function ScoreBreakdown({ breakdown, maxPer }: { breakdown: Record<string, number>; maxPer: Record<string, number> }) {
-  const labels: Record<string, string> = { pd_zone: "P/D Zone", sweep: "Sweep", ob: "OB", killzone: "Killzone" };
-  const colors: Record<string, string> = { pd_zone: "#6366f1", sweep: "#ef4444", ob: "#f59e0b", killzone: "#10b981" };
+  const labels: Record<string, string> = { pd_zone: "P/D Zone", sweep: "Sweep", ob: "OB", killzone: "Killzone", structure: "Structure", mm_flow: "MM Flow" };
+  const colors: Record<string, string> = { pd_zone: "#6366f1", sweep: "#ef4444", ob: "#f59e0b", killzone: "#10b981", structure: "#ec4899", mm_flow: "#6366f1" };
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
       {Object.entries(breakdown).map(([k, v]) => {
@@ -191,7 +191,7 @@ function ScoreBreakdown({ breakdown, maxPer }: { breakdown: Record<string, numbe
 
 // ── Trade Plan Card (Feature #4) ─────────────────────────────────────────
 function TradePlanCard({ plan, symbol, onWA, onLoadPosCalc }: { plan: NonNullable<FullAnalysisData["trade_plan"]>; symbol: string; onWA?: () => void; onLoadPosCalc?: () => void }) {
-  const isBuy = plan.bias.includes("BUY");
+  const isBuy = plan.bias === "BUY" || plan.bias === "STRONG_BUY";
   const accentColor = isBuy ? "#10b981" : "#ef4444";
   const qualityColors: Record<string, string> = { IDEAL: "#10b981", GOOD: "#3b82f6", VALID: "#f59e0b" };
   const qColor = qualityColors[plan.quality] || "#64748b";
@@ -485,7 +485,7 @@ export function ICTConfluenceDashboard({
             {/* Score breakdown bars */}
             <ScoreBreakdown
               breakdown={data.confluence.breakdown}
-              maxPer={{ pd_zone: 4, sweep: 5, ob: 5, killzone: 3 }}
+              maxPer={{ pd_zone: 4, sweep: 5, ob: 5, killzone: 3, structure: 3, mm_flow: 5 }}
             />
           </div>
 

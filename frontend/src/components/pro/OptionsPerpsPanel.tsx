@@ -6,14 +6,18 @@ import { API_URL } from "@/lib/utils";
 interface OptionsPerpsData {
   symbol: string;
   spot_price: number;
-  iv_30d: number;
-  funding_rate_8h: number;
+  iv_30d_pct: number;
+  put_call_ratio: number;
+  max_pain: number;
+  skew_pct: number;
+  options_bias: string;
+  funding_rate_8h: number | null;
   funding_sentiment: string;
   oi_trend: string;
-  long_short_ratio: number;
+  long_short_ratio: number | null;
   ls_signal: string;
-  basis_pct: number;
-  options_bias: string;
+  basis_pct: number | null;
+  data_disclaimer?: string;
 }
 
 export function OptionsPerpsPanel({ symbol, autoLoad = true }: { symbol: string; autoLoad?: boolean }) {
@@ -77,15 +81,15 @@ export function OptionsPerpsPanel({ symbol, autoLoad = true }: { symbol: string;
         <div style={{ padding: 16, borderRadius: 12, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.05)" }}>
           <div style={{ fontSize: "0.65rem", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 6, fontWeight: 700 }}>8h Funding Rate</div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: "1.1rem", fontWeight: 800, color: (data.funding_rate_8h || 0) > 0 ? "#10b981" : "#ef4444", fontFamily: "'JetBrains Mono', monospace" }}>
-              {data.funding_rate_8h?.toFixed(4)}%
+            <span style={{ fontSize: "1.1rem", fontWeight: 800, color: data.funding_rate_8h == null ? "#64748b" : data.funding_rate_8h > 0 ? "#10b981" : "#ef4444", fontFamily: "'JetBrains Mono', monospace" }}>
+              {data.funding_rate_8h == null ? "N/A" : `${data.funding_rate_8h.toFixed(4)}%`}
             </span>
             <span style={{ fontSize: "0.6rem", padding: "2px 6px", borderRadius: 4, background: "rgba(255,255,255,0.05)", color: "#fff" }}>
               {data.funding_sentiment}
             </span>
           </div>
           <div style={{ marginTop: 8, fontSize: "0.6rem", color: "var(--text-muted)" }}>
-            {(data.funding_rate_8h || 0) > 0 ? "Longs pay shorts. Market is bullish/greedy." : "Shorts pay longs. Market is bearish/fearful."}
+            {data.funding_rate_8h == null ? "Data funding belum tersambung ke feed live." : data.funding_rate_8h > 0 ? "Longs pay shorts. Market is bullish/greedy." : "Shorts pay longs. Market is bearish/fearful."}
           </div>
         </div>
 
@@ -93,15 +97,15 @@ export function OptionsPerpsPanel({ symbol, autoLoad = true }: { symbol: string;
         <div style={{ padding: 16, borderRadius: 12, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.05)" }}>
           <div style={{ fontSize: "0.65rem", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 6, fontWeight: 700 }}>Long/Short Ratio</div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: "1.1rem", fontWeight: 800, color: (data.long_short_ratio || 1) > 1 ? "#ef4444" : "#10b981", fontFamily: "'JetBrains Mono', monospace" }}>
-              {data.long_short_ratio?.toFixed(2)}
+            <span style={{ fontSize: "1.1rem", fontWeight: 800, color: data.long_short_ratio == null ? "#64748b" : data.long_short_ratio > 1 ? "#ef4444" : "#10b981", fontFamily: "'JetBrains Mono', monospace" }}>
+              {data.long_short_ratio == null ? "N/A" : data.long_short_ratio.toFixed(2)}
             </span>
             <span style={{ fontSize: "0.6rem", padding: "2px 6px", borderRadius: 4, background: "rgba(255,255,255,0.05)", color: "#fff" }}>
               {data.ls_signal}
             </span>
           </div>
           <div style={{ marginTop: 8, fontSize: "0.6rem", color: "var(--text-muted)" }}>
-            {(data.long_short_ratio || 1) > 1 ? "Retail is overwhelmingly long." : "Retail is predominantly short."}
+            {data.long_short_ratio == null ? "Data long/short belum tersambung ke feed live." : data.long_short_ratio > 1 ? "Retail is overwhelmingly long." : "Retail is predominantly short."}
           </div>
         </div>
 
@@ -111,26 +115,31 @@ export function OptionsPerpsPanel({ symbol, autoLoad = true }: { symbol: string;
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span style={{ fontSize: "0.75rem", color: "#cbd5e1" }}>OI Trend</span>
-              <span style={{ fontSize: "0.75rem", fontWeight: 800, color: data.oi_trend === "RISING" ? "#10b981" : data.oi_trend === "FALLING" ? "#ef4444" : "#f59e0b" }}>
+              <span style={{ fontSize: "0.75rem", fontWeight: 800, color: data.oi_trend === "RISING" ? "#10b981" : data.oi_trend === "FALLING" ? "#ef4444" : "#64748b" }}>
                 {data.oi_trend}
               </span>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ fontSize: "0.75rem", color: "#cbd5e1" }}>Implied Vol (30d)</span>
+              <span style={{ fontSize: "0.75rem", color: "#cbd5e1" }}>Realized Vol (30d)</span>
               <span style={{ fontSize: "0.75rem", fontWeight: 800, color: "#fff", fontFamily: "'JetBrains Mono', monospace" }}>
-                {((data.iv_30d || 0) * 100).toFixed(1)}%
+                {data.iv_30d_pct != null ? `${data.iv_30d_pct.toFixed(1)}%` : "N/A"}
               </span>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span style={{ fontSize: "0.75rem", color: "#cbd5e1" }}>Basis (Premium)</span>
-              <span style={{ fontSize: "0.75rem", fontWeight: 800, color: (data.basis_pct || 0) > 0 ? "#10b981" : "#ef4444", fontFamily: "'JetBrains Mono', monospace" }}>
-                {data.basis_pct?.toFixed(3)}%
+              <span style={{ fontSize: "0.75rem", fontWeight: 800, color: data.basis_pct == null ? "#64748b" : data.basis_pct > 0 ? "#10b981" : "#ef4444", fontFamily: "'JetBrains Mono', monospace" }}>
+                {data.basis_pct == null ? "N/A" : `${data.basis_pct.toFixed(3)}%`}
               </span>
             </div>
           </div>
         </div>
       </div>
       
+      {data.data_disclaimer && (
+        <div style={{ marginTop: 16, padding: "10px 14px", borderRadius: 8, background: "rgba(100,116,139,0.08)", border: "1px solid rgba(100,116,139,0.3)", fontSize: "0.68rem", color: "#94a3b8", lineHeight: 1.5 }}>
+          ⚠️ {data.data_disclaimer}
+        </div>
+      )}
       <div style={{ marginTop: 16, padding: "10px 14px", borderRadius: 8, background: "rgba(245,158,11,0.05)", border: "1px solid rgba(245,158,11,0.2)", fontSize: "0.7rem", color: "#f59e0b", display: "flex", alignItems: "center", gap: 8 }}>
         <span>💡</span>
         <span>Contrarian Edge: Smart money hunts liquidity when Retail Long/Short Ratio is extremely high and Funding Rate is heavily skewed.</span>

@@ -212,8 +212,7 @@ class LiquiditySweepEngine:
 
                 # ── BUY-SIDE SWEEP (Equal Highs swept then price rejects down)
                 if pool.type == "EQUAL_HIGH":
-                    wick_above = highs[i] > pool.price * self.sweep_wick_multiplier
-                    # Actually for sweep: wick just needs to pierce the level
+                    # A sweep just needs the wick to pierce the level and close back below it.
                     wick_pierces = highs[i] > pool.price and closes[i] < pool.price
                     if wick_pierces:
                         sweep_event = SweepEvent(
@@ -249,7 +248,7 @@ class LiquiditySweepEngine:
                 if sweep_event:
                     # Check displacement on next 1-3 bars
                     self._check_displacement(sweep_event, df, i, n, atr)
-                    self._score_sweep(sweep_event, pool, atr)
+                    self._score_sweep(sweep_event, pool, atr, n)
 
                     # Add time context
                     if "open_time" in df.columns:
@@ -303,7 +302,7 @@ class LiquiditySweepEngine:
                 event.is_confirmed = True
                 break
 
-    def _score_sweep(self, event: SweepEvent, pool: LiquidityPool, atr: float):
+    def _score_sweep(self, event: SweepEvent, pool: LiquidityPool, atr: float, n: int):
         """Score the sweep quality 0-100."""
         score = 0
 
@@ -315,9 +314,10 @@ class LiquiditySweepEngine:
             score += 30
             score += min(int(event.displacement_strength * 10), 20)  # max 20 pts for strength
 
-        # Fresh sweep (recent)
-        age = event.sweep_bar_idx
-        recency_bonus = max(0, 20 - age)  # More recent = higher score
+        # Fresh sweep (recent). sweep_bar_idx is the index inside the
+        # tail(lookback) window (0 = oldest), so bars_ago = n - 1 - idx.
+        bars_ago = n - 1 - event.sweep_bar_idx
+        recency_bonus = max(0, 20 - bars_ago)  # More recent = higher score
         score += min(recency_bonus, 20)
 
         event.quality_score = min(100, score)

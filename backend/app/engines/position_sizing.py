@@ -47,10 +47,10 @@ class PositionSizingResult:
     risk_of_ruin_pct: float    # % probability of blowing account
     max_consecutive_losses: int  # Consecutive losses to cut risk in half
 
-    # Crypto specific
-    leverage_1x_size: float    # Position size at 1x leverage
-    leverage_5x_size: float    # Position size at 5x (cross margin)
-    leverage_10x_size: float   # Position size at 10x
+    # Margin (collateral) required for the fixed-risk position at each leverage
+    margin_1x: float      # Collateral at 1x (spot) = position_value
+    margin_5x: float      # Collateral at 5x = position_value / 5
+    margin_10x: float     # Collateral at 10x = position_value / 10
 
     # Break even
     breakeven_win_rate: float  # Win rate needed to break even at this R:R
@@ -138,14 +138,16 @@ class PositionSizingEngine:
         tp2 = tps[1] if len(tps) > 1 else None
         tp3 = tps[2] if len(tps) > 2 else None
 
-        rr1 = self._calc_rr(entry, stop_loss, tp1, direction) if tp1 else None
-        rr2 = self._calc_rr(entry, stop_loss, tp2, direction) if tp2 else None
-        rr3 = self._calc_rr(entry, stop_loss, tp3, direction) if tp3 else None
+        rr1 = self._calc_rr(entry, stop_loss, tp1) if tp1 else None
+        rr2 = self._calc_rr(entry, stop_loss, tp2) if tp2 else None
+        rr3 = self._calc_rr(entry, stop_loss, tp3) if tp3 else None
 
-        # ── Leverage sizes ────────────────────────────────────────────────
-        lev1  = position_size
-        lev5  = position_size * 5
-        lev10 = position_size * 10
+        # ── Margin required (collateral) ────────────────────────────────
+        # Leverage does NOT change the fixed-risk position size; it only
+        # reduces the collateral needed to hold the same position.
+        margin_1x  = position_value / 1.0
+        margin_5x  = position_value / 5.0
+        margin_10x = position_value / 10.0
 
         # ── Break-even & Expected Value ───────────────────────────────────
         breakeven_wr = 1 / (1 + avg_rr)   # WR needed to break even
@@ -176,9 +178,9 @@ class PositionSizingEngine:
             kelly_recommended_pct=round(kelly_rec_pct, 2),
             risk_of_ruin_pct=round(ror_pct, 2),
             max_consecutive_losses=max_consec,
-            leverage_1x_size=round(lev1, 6),
-            leverage_5x_size=round(lev5, 6),
-            leverage_10x_size=round(lev10, 6),
+            margin_1x=round(margin_1x, 2),
+            margin_5x=round(margin_5x, 2),
+            margin_10x=round(margin_10x, 2),
             breakeven_win_rate=round(breakeven_wr * 100, 1),
             expected_value=round(ev, 2),
             size_grade=grade,
@@ -187,21 +189,44 @@ class PositionSizingEngine:
 
     def _risk_of_ruin(self, win_rate: float, avg_rr: float, risk_fraction: float) -> float:
         """
-        Approximate Risk of Ruin using gambler's ruin formula.
-        Higher = worse.
-        """
-        edge = win_rate * avg_rr - (1 - win_rate)
-        if edge <= 0:
-            return 100.0  # Negative edge = guaranteed ruin
+        Risk of ruin for a fixed-fractional strategy with payoff ratio b=avg_rr.
 
-        # Simplified RoR formula
+        Models each trade as winning +b·f of bankroll with probability p, or
+        losing −f with probability q = 1−p. The ruin probability is r^(1/f),
+        where r ∈ (0,1) is the smaller root of the gambler's-ruin recurrence
+        p·r^(b+1) − r + q = 0. For b == 1 this reduces to the classic
+        (q/p)^(1/f). Negative or zero edge means ruin is certain.
+        """
+        p = win_rate
+        q = 1.0 - win_rate
+        b = avg_rr
+
+        if p * b - q <= 0:
+            return 100.0  # Negative/zero edge = guaranteed ruin
+
         try:
-            q_over_p = (1 - win_rate) / win_rate
-            n_units   = 1.0 / risk_fraction  # Number of risk units in account
-            ror = (q_over_p ** n_units) * 100
-            return min(100.0, max(0.0, ror))
+            if abs(b - 1.0) < 1e-9:
+                r = q / p
+            else:
+                r = self._solve_ruin_root(p, q, b)
+            if not (0.0 < r < 1.0):
+                return 0.0
+            ror = (r ** (1.0 / risk_fraction)) * 100.0
+            return round(min(100.0, max(0.0, ror)), 4)
         except Exception:
             return 0.0
+
+    def _solve_ruin_root(self, p: float, q: float, b: float) -> float:
+        """Bisection for the ruin root r ∈ (0,1) of p·r^(b+1) − r + q = 0."""
+        lo, hi = 0.0, 1.0
+        for _ in range(100):
+            mid = (lo + hi) / 2.0
+            f = p * (mid ** (b + 1.0)) - mid + q
+            if f > 0.0:
+                lo = mid
+            else:
+                hi = mid
+        return (lo + hi) / 2.0
 
     def _max_consecutive_losses_before_halving(self, risk_pct: float) -> int:
         """How many consecutive losses before account halved."""
@@ -215,11 +240,11 @@ class PositionSizingEngine:
         except Exception:
             return 999
 
-    def _calc_rr(self, entry: float, sl: float, tp: float, direction: str) -> float:
+    def _calc_rr(self, entry: float, sl: float, tp: float) -> float:
+        """Risk:Reward ratio — both sides are absolute distances, so direction
+        is irrelevant."""
         risk   = abs(entry - sl)
         reward = abs(tp - entry)
-        if direction == "SELL":
-            reward = abs(entry - tp)
         return round(reward / risk, 2) if risk > 0 else 0.0
 
     def _grade_size(
@@ -227,7 +252,6 @@ class PositionSizingEngine:
         position_value: float, account: float
     ) -> tuple[str, List[str]]:
         warnings = []
-        leverage_implied = (position_value / account) * 100
 
         if risk_pct <= kelly_pct and ror_pct < 5:
             grade = "OPTIMAL"
