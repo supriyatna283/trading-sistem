@@ -464,7 +464,7 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
         ls_ratio_raw,
         order_flow_raw,
     ) = await asyncio.gather(
-        *[_data_engine.get_candles_with_source(symbol.upper(), tf, 200) for tf in HTF_TIMEFRAMES],
+        *[_data_engine.get_candles_with_source(symbol.upper(), tf, 220) for tf in HTF_TIMEFRAMES],
         _news_engine.get_events(),
         _crypto_news_engine.get_crypto_news(symbol, limit=5),
         _intel_engine.get_btc_dominance(),
@@ -886,6 +886,16 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
     pd_mid = _safe_float(smc.premium_discount_mid if smc and hasattr(smc, "premium_discount_mid") else None)
     pd_zone = "PREMIUM" if pd_mid and last_close > pd_mid else ("DISCOUNT" if pd_mid else "UNKNOWN")
 
+    # Re-align fib_data nearest level & distance with live last_close so AI sees 0 discrepancy
+    if isinstance(fib_data, dict) and fib_data.get("retracement_levels") and last_close > 0:
+        _ret = fib_data["retracement_levels"]
+        if _ret:
+            _closest_k, _closest_v = min(_ret.items(), key=lambda kv: abs(float(kv[1]) - last_close))
+            _dist_pct = abs(float(_closest_v) - last_close) / last_close * 100.0
+            fib_data["nearest_level"] = f"{_closest_k} ({_safe_float(_closest_v)})"
+            fib_data["nearest_distance_pct"] = round(_dist_pct, 3)
+            fib_data["is_near_key_level"] = bool(_dist_pct <= 0.8 and str(_closest_k) in ("0.382", "0.5", "0.618", "0.786"))
+
     # Confluence highlights — V5 keys (Fibonacci + MACD + RSI as primary signals)
     fib_det  = conf_details.get("fibonacci", {})
     macd_det = conf_details.get("macd", {})
@@ -1156,17 +1166,12 @@ def _build_prompt(ctx: dict, setup: dict, active_signal: Optional[dict] = None) 
         sample_warn = f"\n⚠️ PERINGATAN: Data candle {sym} mengandung sample data pada TF {ctx.get('sample_data_tfs')}. Hindari rekomendasi posisi agresif.\n"
 
     system_msg = (
-        "Kamu adalah Principal Quantitative & ICT/SMC Prop Trader. "
-        "Tugasmu menganalisis telemetri pasar real-time secara objektif, presisi matematis, dan hemat kata.\n"
-        "ATURAN PENALARAN (THINKING) & OUTPUT:\n"
-        "1. Di dalam internal reasoning, JANGAN menyalin ulang data prompt. Evaluasi langsung dalam 4 langkah singkat: "
-        "(a) Rezim HTF + EMA Stack + Volume Profile (POC/VAH/VAL), "
-        "(b) Lokasi harga terhadap Fibonacci OTE (0.618-0.786), Order Block, FVG, dan Liquidity Sweep, "
-        "(c) Konfirmasi Momentum (RSI, MACD, StochRSI, Order Flow/Whale), "
-        "(d) Validasi matematis Entry, SL, TP1-TP3, dan R:R.\n"
-        "2. WAJIB konsisten dengan angka telemetri. Sebutkan angka spesifik (harga, EMA, POC, Fib, RSI, MACD, SL/TP).\n"
-        "3. Jika sinyal engine BUY/SELL tetapi ada kontradiksi fatal (misal: ADX<18 ranging berat, counter-HTF tanpa Liquidity Sweep, atau harga tepat di resistance VAH/OB lawan), kamu WAJIB memberi peringatan tegas.\n"
-        "4. Gunakan Bahasa Indonesia profesional, padat, tanpa basa-basi."
+        "Kamu adalah Principal Quantitative & ICT/SMC Prop Trader.\n"
+        "ATURAN MUTLAK BAHASA & EFISIENSI PENALARAN (THINKING):\n"
+        "1. WAJIB gunakan 100% Bahasa Indonesia baik di dalam proses berpikir internal (reasoning_content) maupun pada laporan akhir. DILARANG menggunakan Bahasa Inggris di dalam reasoning_content.\n"
+        "2. Di dalam internal reasoning (Chain-of-Thought), DILARANG KERAS menyalin/mengabsen ulang angka dari prompt. Cukup tulis maksimal 5 poin evaluasi singkat (maksimal 150 kata), lalu SEGERA tulis jawaban final.\n"
+        "3. Pada laporan final, WAJIB konsisten dengan angka telemetri (sebutkan angka spesifik harga, EMA20/50/200, POC/VAH/VAL, Fib/OTE, OB/FVG, RSI, MACD, SL/TP).\n"
+        "4. Jika sinyal engine BUY/SELL tetapi ada kontradiksi fatal (misal: ADX<18 ranging berat, counter-HTF tanpa Liquidity Sweep, atau harga tepat di resistance VAH/OB lawan), beri peringatan tegas."
     )
 
     if signal == "WAIT":
@@ -1270,7 +1275,7 @@ async def _stream_ai_analysis(
 
     # ── 1. Cache check (Timeframe-aware TTL saves DeepSeek tokens) ──
     cached = None if force else _get_cached(symbol, timeframe)
-    if cached:
+    if cached and len((cached.get("answer_summary") or "").strip()) >= 200:
         yield sse("status", "cache_hit")
         yield sse("context", json.dumps(cached.get("context_snapshot", {})))
         yield sse("setup_data", json.dumps(cached["setup"]))
@@ -1428,8 +1433,9 @@ async def _stream_ai_analysis(
     full_answer = ""
 
     t_start_ai = time.time()
-    # Dynamic token cap: actionable setups get 2600 tokens; WAIT setups get 1800 tokens
-    target_max_tokens = 2600 if ctx["signal"] in ("BUY", "SELL") else 1800
+    # IMPORTANT: In deepseek-reasoner, max_tokens is the COMBINED ceiling of reasoning_content + content.
+    # Setting 6000 ensures reasoning_content never truncates or starves the final Indonesian report.
+    target_max_tokens = 6000
     max_retries = 3
     for attempt in range(max_retries):
         try:
@@ -1463,6 +1469,27 @@ async def _stream_ai_analysis(
                 if delta.content:
                     full_answer += delta.content
                     yield sse("token", delta.content)
+
+            # Safety fallback: if deepseek-reasoner finished with empty/truncated content, complete with deepseek-chat
+            if len(full_answer.strip()) < 150:
+                logger.warning(f"[DeepSeek-R1] Answer too short ({len(full_answer)} chars); completing via deepseek-chat fallback")
+                fb_stream = await client.chat.completions.create(
+                    model="deepseek-chat",
+                    messages=[
+                        {"role": "system", "content": system_msg},
+                        {"role": "user", "content": user_msg},
+                    ],
+                    max_tokens=2500,
+                    temperature=0.3,
+                    stream=True,
+                )
+                async for fb_chunk in fb_stream:
+                    if not fb_chunk.choices:
+                        continue
+                    fb_delta = fb_chunk.choices[0].delta
+                    if fb_delta.content:
+                        full_answer += fb_delta.content
+                        yield sse("token", fb_delta.content)
 
             break
 
@@ -1512,15 +1539,16 @@ async def _stream_ai_analysis(
         except Exception as e:
             logger.error(f"[AI] Failed to save ShadowSetup: {e}")
 
-    # ── 5b. Cache full result + reasoning so cache hits are complete & zero-token ──
+    # ── 5b. Cache full result + reasoning ONLY if answer is complete ──
     _now_ts = time.time()
-    _set_cache(symbol, timeframe, {
-        "context_snapshot": context_snapshot,
-        "setup": full_setup,
-        "reasoning_summary": full_reasoning,
-        "answer_summary": full_answer,
-        "ts": _now_ts,
-    })
+    if len(full_answer.strip()) >= 200:
+        _set_cache(symbol, timeframe, {
+            "context_snapshot": context_snapshot,
+            "setup": full_setup,
+            "reasoning_summary": full_reasoning,
+            "answer_summary": full_answer,
+            "ts": _now_ts,
+        })
 
     # ── 5c. Save AI Signal to DB & Trigger Telegram Alert ──
     if signal_grade in ["A+", "A"] and ctx["signal"] in ["BUY", "SELL"]:
@@ -1730,7 +1758,7 @@ async def _stream_chat(req: ChatRequest) -> AsyncGenerator[str, None]:
             stream = await client.chat.completions.create(
                 model=AI_MODEL_NAME,
                 messages=messages,
-                max_tokens=1200,
+                max_tokens=3500,
                 stream=True,
             )
 

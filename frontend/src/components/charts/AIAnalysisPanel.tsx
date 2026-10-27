@@ -182,12 +182,15 @@ function GaugeMeter({ value, max, label, color }: { value: number; max: number; 
 }
 
 function BiasChip({ tf, bias }: { tf: string; bias: string }) {
-  const clr = bias === "BULLISH" ? "#22c55e" : bias === "BEARISH" ? "#ef4444" : "#71717a";
-  const bg = bias === "BULLISH" ? "rgba(34,197,94,0.1)" : bias === "BEARISH" ? "rgba(239,68,68,0.1)" : "rgba(113,113,122,0.08)";
+  const clr = bias === "BULLISH" ? "#22c55e" : bias === "BEARISH" ? "#ef4444" : "#94a3b8";
+  const bg = bias === "BULLISH" ? "rgba(34,197,94,0.1)" : bias === "BEARISH" ? "rgba(239,68,68,0.1)" : "rgba(148,163,184,0.08)";
   return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
-      <span style={{ fontSize: "0.52rem", color: "var(--text-muted)", fontWeight: 700, letterSpacing: "0.04em" }}>{tf.toUpperCase()}</span>
-      <span style={{ fontSize: "0.58rem", fontWeight: 800, color: clr, background: bg, border: `1px solid ${clr}33`, padding: "2px 6px", borderRadius: 4 }}>
+    <div style={{
+      display: "flex", alignItems: "center", justifyContent: "space-between",
+      padding: "4px 8px", borderRadius: 6, background: bg, border: `1px solid ${clr}30`
+    }}>
+      <span style={{ fontSize: "0.54rem", color: "var(--text-muted)", fontWeight: 800, letterSpacing: "0.04em" }}>{tf.toUpperCase()}</span>
+      <span style={{ fontSize: "0.56rem", fontWeight: 900, color: clr }}>
         {bias === "BULLISH" ? "▲ BULL" : bias === "BEARISH" ? "▼ BEAR" : "— SIDE"}
       </span>
     </div>
@@ -237,45 +240,184 @@ function CheckItem({ label, active }: { label: string; active: boolean }) {
 }
 
 // ─────────────────────────────────────────────────
-// Markdown parser for AI output
+// Rich Inline & Section Markdown Renderer for AI Output
 // ─────────────────────────────────────────────────
-function ParsedAnalysis({ text }: { text: string }) {
+function renderInlineRich(line: string) {
+  // Split by **bold** segments
+  const parts = line.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, i) => {
+    if (part.startsWith("**") && part.endsWith("**")) {
+      const inner = part.slice(2, -2);
+      const upper = inner.trim().toUpperCase();
+      if (upper === "BUY" || upper === "LONG" || upper === "STRONG_BUY") {
+        return (
+          <span key={i} style={{
+            padding: "1px 6px", borderRadius: 4, fontSize: "0.66rem", fontWeight: 900,
+            background: "rgba(34,197,94,0.16)", color: "#4ade80", border: "1px solid rgba(34,197,94,0.35)",
+            margin: "0 2px", fontFamily: "'JetBrains Mono', monospace"
+          }}>{inner}</span>
+        );
+      }
+      if (upper === "SELL" || upper === "SHORT" || upper === "STRONG_SELL") {
+        return (
+          <span key={i} style={{
+            padding: "1px 6px", borderRadius: 4, fontSize: "0.66rem", fontWeight: 900,
+            background: "rgba(239,68,68,0.16)", color: "#f87171", border: "1px solid rgba(239,68,68,0.35)",
+            margin: "0 2px", fontFamily: "'JetBrains Mono', monospace"
+          }}>{inner}</span>
+        );
+      }
+      if (upper === "WAIT" || upper === "NEUTRAL") {
+        return (
+          <span key={i} style={{
+            padding: "1px 6px", borderRadius: 4, fontSize: "0.66rem", fontWeight: 900,
+            background: "rgba(245,158,11,0.16)", color: "#fbbf24", border: "1px solid rgba(245,158,11,0.35)",
+            margin: "0 2px", fontFamily: "'JetBrains Mono', monospace"
+          }}>{inner}</span>
+        );
+      }
+      return <strong key={i} style={{ color: "#f8fafc", fontWeight: 800 }}>{inner}</strong>;
+    }
+    return <span key={i}>{part}</span>;
+  });
+}
+
+function FormattedBlock({ content, accent }: { content: string; accent: string }) {
+  const lines = content.split("\n").map(l => l.trim()).filter(Boolean);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      {lines.map((line, i) => {
+        const isBullet = /^[-•*]\s+/.test(line);
+        const numMatch = line.match(/^(\d+)\.\s+(.*)/);
+        if (isBullet) {
+          const clean = line.replace(/^[-•*]\s+/, "");
+          return (
+            <div key={i} style={{
+              display: "flex", alignItems: "flex-start", gap: 8,
+              padding: "5px 8px", borderRadius: 7,
+              background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.04)"
+            }}>
+              <span style={{
+                width: 6, height: 6, borderRadius: "50%", background: accent,
+                marginTop: 6, flexShrink: 0, boxShadow: `0 0 6px ${accent}80`
+              }} />
+              <div style={{ fontSize: "0.73rem", color: "#cbd5e1", lineHeight: 1.65, flex: 1 }}>
+                {renderInlineRich(clean)}
+              </div>
+            </div>
+          );
+        }
+        if (numMatch) {
+          return (
+            <div key={i} style={{
+              display: "flex", alignItems: "flex-start", gap: 8,
+              padding: "5px 8px", borderRadius: 7,
+              background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.04)"
+            }}>
+              <span style={{
+                fontSize: "0.6rem", fontWeight: 900, color: accent,
+                background: `${accent}18`, border: `1px solid ${accent}40`,
+                borderRadius: 4, padding: "1px 5px", fontFamily: "'JetBrains Mono', monospace",
+                marginTop: 2, flexShrink: 0
+              }}>{numMatch[1]}</span>
+              <div style={{ fontSize: "0.73rem", color: "#cbd5e1", lineHeight: 1.65, flex: 1 }}>
+                {renderInlineRich(numMatch[2])}
+              </div>
+            </div>
+          );
+        }
+        return (
+          <p key={i} style={{ margin: 0, fontSize: "0.74rem", color: "#cbd5e1", lineHeight: 1.72 }}>
+            {renderInlineRich(line)}
+          </p>
+        );
+      })}
+    </div>
+  );
+}
+
+function ParsedAnalysis({ text, isStreaming = false }: { text: string; isStreaming?: boolean }) {
+  const [copied, setCopied] = useState(false);
   if (!text) return null;
 
-  const sectionColors: Record<string, string> = {
-    "Struktur": "#60a5fa",
-    "Pembacaan": "#60a5fa",
-    "Narasi": "#60a5fa",
-    "Konfluensi": "#a78bfa",
-    "Justifikasi": "#a78bfa",
-    "Rencana": "#34d399",
-    "Setup": "#34d399",
-    "Skenario Gagal": "#f87171",
-    "Invalidasi": "#f87171",
-    "Devil": "#fb923c",
-    "Self-Critique": "#fb923c",
-    "Risiko": "#f87171",
-    "Kesimpulan": "#4ade80",
-    "Timing": "#94a3b8",
-    "Waktu": "#94a3b8",
+  const sectionColors: Record<string, { color: string; badge: string }> = {
+    "Struktur": { color: "#38bdf8", badge: "STRUKTUR & VP" },
+    "Pembacaan": { color: "#38bdf8", badge: "STRUKTUR" },
+    "Narasi": { color: "#38bdf8", badge: "NARASI" },
+    "Konfluensi": { color: "#a78bfa", badge: "FIB & SMC" },
+    "Justifikasi": { color: "#a78bfa", badge: "KONFLUENSI" },
+    "Rencana": { color: "#34d399", badge: "TRADE PLAN" },
+    "Setup": { color: "#34d399", badge: "EKSEKUSI" },
+    "Skenario Gagal": { color: "#f87171", badge: "INVALIDASI" },
+    "Invalidasi": { color: "#f87171", badge: "RISIKO" },
+    "Devil": { color: "#fb923c", badge: "DEVIL'S ADVOCATE" },
+    "Self-Critique": { color: "#fb923c", badge: "KRITIK" },
+    "Risiko": { color: "#f87171", badge: "RISIKO" },
+    "Kesimpulan": { color: "#4ade80", badge: "VERDICT" },
+    "Timing": { color: "#94a3b8", badge: "TIMING" },
   };
 
   const sections = text.split(/(?=### \d\.)/g);
 
+  const handleCopy = () => {
+    navigator.clipboard?.writeText(text.replace(/\*\*/g, ""));
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
+      {/* Top Action Bar for Report */}
+      <div style={{
+        display: "flex", justifyContent: "space-between", alignItems: "center",
+        padding: "6px 10px", borderRadius: 8,
+        background: "rgba(56,189,248,0.06)", border: "1px solid rgba(56,189,248,0.18)"
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontSize: "0.72rem" }}>📑</span>
+          <span style={{ fontSize: "0.62rem", fontWeight: 800, color: "#38bdf8", letterSpacing: "0.04em" }}>
+            LAPORAN KUANTITATIF &amp; SMC
+          </span>
+          {isStreaming && (
+            <span style={{
+              fontSize: "0.55rem", fontWeight: 800, padding: "1px 6px", borderRadius: 4,
+              background: "rgba(167,139,250,0.2)", color: "#c4b5fd"
+            }}>LIVE STREAMING…</span>
+          )}
+        </div>
+        <button
+          onClick={handleCopy}
+          style={{
+            background: copied ? "rgba(34,197,94,0.18)" : "rgba(255,255,255,0.06)",
+            border: `1px solid ${copied ? "rgba(34,197,94,0.4)" : "rgba(255,255,255,0.12)"}`,
+            color: copied ? "#4ade80" : "#cbd5e1",
+            borderRadius: 6, padding: "3px 8px", fontSize: "0.58rem", fontWeight: 700, cursor: "pointer",
+            transition: "all 0.15s"
+          }}
+        >
+          {copied ? "✓ Tersalin" : "📋 Salin"}
+        </button>
+      </div>
+
       {sections.map((sec, idx) => {
-        const titleMatch = sec.match(/### \d+\.\s*(.*)/);
-        const rawTitle = titleMatch ? titleMatch[1].trim() : "";
-        const title = rawTitle.replace(/[^\w\sÀ-ÿ]/g, "").trim();
-        const content = sec.replace(/### \d+\.\s*.*\n?/, "").trim().replace(/\*\*/g, "");
+        const titleMatch = sec.match(/### (\d+)\.\s*(.*)/);
+        const secNum = titleMatch ? titleMatch[1] : "";
+        const rawTitle = titleMatch ? titleMatch[2].trim() : "";
+        const content = sec.replace(/### \d+\.\s*.*\n?/, "").trim();
+        const isLast = idx === sections.length - 1;
 
         const accentKey = Object.keys(sectionColors).find(k => rawTitle.includes(k));
-        const accent = accentKey ? sectionColors[accentKey] : "#94a3b8";
+        const meta = accentKey ? sectionColors[accentKey] : { color: "#94a3b8", badge: "ANALISIS" };
+        const accent = meta.color;
 
         if (!rawTitle) {
           return content ? (
-            <div key={idx} style={{ fontSize: "0.73rem", color: "var(--text-muted)", lineHeight: 1.7, padding: "4px 0" }}>{content}</div>
+            <div key={idx} style={{
+              padding: "10px 12px", borderRadius: 10,
+              background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)"
+            }}>
+              <FormattedBlock content={content} accent="#38bdf8" />
+            </div>
           ) : null;
         }
 
@@ -285,28 +427,59 @@ function ParsedAnalysis({ text }: { text: string }) {
         if (isSummary) {
           return (
             <div key={idx} style={{
-              background: "linear-gradient(135deg, rgba(74,222,128,0.08), rgba(16,185,129,0.04))",
-              border: "1px solid rgba(74,222,128,0.25)", borderRadius: 10, padding: "14px 16px",
+              background: "linear-gradient(135deg, rgba(16,185,129,0.12), rgba(6,78,59,0.25))",
+              border: "1px solid rgba(52,211,153,0.35)",
+              boxShadow: "0 4px 20px rgba(16,185,129,0.1)",
+              borderRadius: 12, padding: "13px 15px",
             }}>
-              <div style={{ fontSize: "0.62rem", fontWeight: 800, color: "#4ade80", letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: 8 }}>
-                {rawTitle}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                  <span style={{
+                    fontSize: "0.58rem", fontWeight: 900, padding: "2px 6px", borderRadius: 4,
+                    background: "rgba(52,211,153,0.2)", color: "#6ee7b7", fontFamily: "'JetBrains Mono', monospace"
+                  }}>0{secNum}</span>
+                  <span style={{ fontSize: "0.68rem", fontWeight: 900, color: "#4ade80", letterSpacing: "0.04em", textTransform: "uppercase" }}>
+                    {rawTitle}
+                  </span>
+                </div>
+                <span style={{
+                  fontSize: "0.52rem", fontWeight: 800, padding: "2px 6px", borderRadius: 4,
+                  background: "rgba(52,211,153,0.15)", color: "#34d399", border: "1px solid rgba(52,211,153,0.3)"
+                }}>{meta.badge}</span>
               </div>
-              <div style={{ fontSize: "0.75rem", color: "var(--text-primary)", lineHeight: 1.7, fontWeight: 600 }}>{content}</div>
+              <FormattedBlock content={content} accent="#4ade80" />
+              {isStreaming && isLast && <span id="ai-cursor">▌</span>}
             </div>
           );
         }
 
         return (
           <div key={idx} style={{
-            background: isRisk ? "rgba(239,68,68,0.04)" : "rgba(255,255,255,0.02)",
-            border: `1px solid ${isRisk ? "rgba(239,68,68,0.18)" : "rgba(255,255,255,0.07)"}`,
-            borderLeft: `3px solid ${accent}`,
-            borderRadius: 8, padding: "10px 13px",
+            background: isRisk
+              ? "linear-gradient(145deg, rgba(239,68,68,0.06), rgba(15,23,42,0.6))"
+              : "linear-gradient(145deg, rgba(30,41,59,0.45), rgba(15,23,42,0.65))",
+            border: `1px solid ${isRisk ? "rgba(239,68,68,0.22)" : "rgba(255,255,255,0.07)"}`,
+            borderLeft: `3.5px solid ${accent}`,
+            borderRadius: 11, padding: "11px 13px",
           }}>
-            <div style={{ fontSize: "0.65rem", fontWeight: 800, color: accent, letterSpacing: "0.05em", textTransform: "uppercase", marginBottom: 7 }}>
-              {rawTitle}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                <span style={{
+                  fontSize: "0.56rem", fontWeight: 900, padding: "1px 5px", borderRadius: 4,
+                  background: `${accent}18`, color: accent, border: `1px solid ${accent}35`,
+                  fontFamily: "'JetBrains Mono', monospace"
+                }}>0{secNum}</span>
+                <span style={{ fontSize: "0.67rem", fontWeight: 800, color: accent, letterSpacing: "0.03em", textTransform: "uppercase" }}>
+                  {rawTitle}
+                </span>
+              </div>
+              <span style={{
+                fontSize: "0.5rem", fontWeight: 800, padding: "1px 6px", borderRadius: 4,
+                background: `${accent}12`, color: accent, letterSpacing: "0.04em"
+              }}>{meta.badge}</span>
             </div>
-            <div style={{ fontSize: "0.72rem", color: "var(--text-secondary)", lineHeight: 1.75, whiteSpace: "pre-wrap" }}>{content}</div>
+            <FormattedBlock content={content} accent={accent} />
+            {isStreaming && isLast && <span id="ai-cursor">▌</span>}
           </div>
         );
       })}
@@ -336,7 +509,8 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose, on
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [isChatting, setIsChatting] = useState(false);
-  const [showThinking, setShowThinking] = useState(true);
+  const [showThinking, setShowThinking] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
   const [accountSize, setAccountSize] = useState<number>(1000);
   const [riskPct, setRiskPct] = useState<number>(1);
 
@@ -477,9 +651,10 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose, on
     connect();
   }, [cancelStream]);
 
-  const submitChat = useCallback(async () => {
-    if (!chatInput.trim() || isChatting) return;
-    const msg = chatInput.trim();
+  const submitChat = useCallback(async (overrideQuestion?: string) => {
+    const rawMsg = typeof overrideQuestion === "string" ? overrideQuestion : chatInput;
+    if (!rawMsg.trim() || isChatting) return;
+    const msg = rawMsg.trim();
     setChatInput(""); setIsChatting(true);
     setChatHistory(prev => [...prev, { role: "user", content: msg }]);
     try {
@@ -649,38 +824,53 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose, on
   const stochClr = stochK == null ? "#a78bfa" : stochK > 80 ? "#ef4444" : stochK < 20 ? "#22c55e" : "#a78bfa";
 
   return (
-    <div id="ai-panel" className="glass-card">
+    <div id="ai-panel" className="glass-card" style={{ width: isExpanded ? 520 : 390, transition: "width 0.25s cubic-bezier(0.22, 1, 0.36, 1)" }}>
       {/* ── Header ── */}
       <div id="ai-panel-header">
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div id={isPulsing ? "ai-icon-pulse" : "ai-icon"}>
+        <div style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
+          <div id={isPulsing ? "ai-icon-pulse" : "ai-icon"} style={{
+            width: 26, height: 26, borderRadius: 7,
+            background: "linear-gradient(135deg, rgba(56,189,248,0.2), rgba(139,92,246,0.2))",
+            border: "1px solid rgba(56,189,248,0.35)",
+            display: "flex", alignItems: "center", justifyContent: "center", color: "#38bdf8", flexShrink: 0
+          }}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
               <circle cx="12" cy="12" r="3" fill="currentColor" />
               <path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.93 4.93l2.12 2.12M16.95 16.95l2.12 2.12M4.93 19.07l2.12-2.12M16.95 7.05l2.12-2.12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
             </svg>
           </div>
-          <span id="ai-panel-title">DeepSeek R1</span>
-          <span style={{
-            fontSize: "0.52rem", fontWeight: 800, padding: "2px 6px", borderRadius: 4,
-            background: "linear-gradient(135deg, rgba(56,189,248,0.2), rgba(99,102,241,0.2))",
-            color: "#38bdf8", border: "1px solid rgba(56,189,248,0.35)", letterSpacing: "0.04em"
-          }}>REASONER</span>
-          <span id="ai-symbol-badge">{symbol.replace("USDT", "")}/{timeframe.toUpperCase()}</span>
-          {setup?.session && (
-            <span className="ai-session-tag">{setup.session.split("/")[0]}</span>
-          )}
-          {context?.analyzed_at && (
-            <span style={{ fontSize: "0.55rem", color: "var(--text-muted)", marginLeft: 6 }}>
-              {(() => {
-                const diff = Math.floor(Date.now() / 1000) - context.analyzed_at;
-                if (diff < 60) return "Just now";
-                const m = Math.floor(diff / 60);
-                return `${m}m ago`;
-              })()}
-            </span>
-          )}
+          <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span id="ai-panel-title">DeepSeek R1</span>
+              <span id="ai-symbol-badge">{symbol.replace("USDT", "")} · {timeframe.toUpperCase()}</span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: "0.52rem", color: "#38bdf8", fontWeight: 700 }}>Quant &amp; ICT Copilot</span>
+              {setup?.session && (
+                <span className="ai-session-tag">{setup.session.split("/")[0]}</span>
+              )}
+              {context?.analyzed_at && (
+                <span style={{ fontSize: "0.52rem", color: "var(--text-muted)" }}>
+                  · {(() => {
+                    const diff = Math.floor(Date.now() / 1000) - context.analyzed_at;
+                    if (diff < 60) return "Baru saja";
+                    const m = Math.floor(diff / 60);
+                    return `${m}m lalu`;
+                  })()}
+                </span>
+              )}
+            </div>
+          </div>
         </div>
-        <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
+          <button
+            onClick={() => setIsExpanded(v => !v)}
+            className="ai-icon-btn"
+            title={isExpanded ? "Perkecil panel (Compact)" : "Lebarkan panel baca (Wide Mode)"}
+            style={{ color: isExpanded ? "#38bdf8" : "var(--text-muted)" }}
+          >
+            {isExpanded ? "⇥" : "⇤"}
+          </button>
           <button 
             onClick={() => {
               if (!alertEnabled) {
@@ -917,17 +1107,15 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose, on
                 </div>
               </div>
 
-              {/* Gauges Row — now with real ADX + Stoch RSI data */}
-              {setup.signal !== "WAIT" && (
-                <div id="ai-gauges-row">
-                  <GaugeMeter value={Math.round(pct)} max={100} label="Confluence" color={pct >= 60 ? "#22c55e" : pct >= 35 ? "#f59e0b" : "#ef4444"} />
-                  <GaugeMeter value={rsiVal ? Math.round(rsiVal) : 0} max={100} label="RSI" color={rsiClr} />
-                  <GaugeMeter value={adxVal ? Math.round(adxVal) : 0} max={60} label="ADX" color={adxVal > 25 ? "#a78bfa" : "#71717a"} />
-                  {stochK != null && (
-                    <GaugeMeter value={Math.round(stochK)} max={100} label="Stoch" color={stochClr} />
-                  )}
-                </div>
-              )}
+              {/* Gauges Row — always shown (including WAIT) with real ADX + Stoch RSI data */}
+              <div id="ai-gauges-row">
+                <GaugeMeter value={Math.round(pct)} max={100} label="Confluence" color={pct >= 60 ? "#22c55e" : pct >= 35 ? "#f59e0b" : "#ef4444"} />
+                <GaugeMeter value={rsiVal ? Math.round(rsiVal) : 0} max={100} label="RSI" color={rsiClr} />
+                <GaugeMeter value={adxVal ? Math.round(adxVal) : 0} max={60} label="ADX" color={adxVal > 25 ? "#a78bfa" : "#71717a"} />
+                {stochK != null && (
+                  <GaugeMeter value={Math.round(stochK)} max={100} label="Stoch" color={stochClr} />
+                )}
+              </div>
 
               {/* Price Levels */}
               {setup.signal !== "WAIT" ? (
@@ -1023,12 +1211,57 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose, on
                   )}
                 </div>
               ) : (
-                <div id="ai-wait-box">
-                  <div style={{ fontSize: "2rem" }}>⏸</div>
-                  <div style={{ fontWeight: 800, color: "#fbbf24", fontSize: "0.85rem" }}>No Trade Zone</div>
-                  <div style={{ fontSize: "0.7rem", color: "var(--text-muted)", textAlign: "center", lineHeight: 1.6 }}>
-                    Confluence {pct}% — insufficient for a high-probability setup. Wait for conditions to align.
+                <div id="ai-wait-box" style={{ alignItems: "stretch", textAlign: "left", padding: "14px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                    <div style={{
+                      width: 34, height: 34, borderRadius: 9, background: "rgba(245,158,11,0.15)",
+                      border: "1px solid rgba(245,158,11,0.35)", display: "flex", alignItems: "center",
+                      justifyContent: "center", fontSize: "1.1rem", flexShrink: 0
+                    }}>⏸</div>
+                    <div>
+                      <div style={{ fontWeight: 900, color: "#fbbf24", fontSize: "0.8rem", letterSpacing: "0.02em" }}>
+                        ZONA TUNGGU (WAIT / NO INSTANT EDGE)
+                      </div>
+                      <div style={{ fontSize: "0.62rem", color: "var(--text-muted)" }}>
+                        Confluence {pct}% ({score}/{maxScore}) — tunggu harga menjemput zona likuiditas/trigger.
+                      </div>
+                    </div>
                   </div>
+
+                  {/* Key Reference Levels while Waiting */}
+                  <div style={{
+                    background: "rgba(0,0,0,0.28)", borderRadius: 8, padding: "8px 10px",
+                    border: "1px solid rgba(255,255,255,0.06)", marginBottom: 8
+                  }}>
+                    <div style={{ fontSize: "0.54rem", fontWeight: 800, color: "#94a3b8", letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 4 }}>
+                      📍 Level Referensi Kunci Saat Ini
+                    </div>
+                    {ind.va_high != null && ind.poc != null && ind.va_low != null && (
+                      <PriceRow label="Volume Profile (VAL / POC / VAH)" value={`${fmt(ind.va_low, 2)} / ${fmt(ind.poc, 2)} / ${fmt(ind.va_high, 2)}`} color="#38bdf8" />
+                    )}
+                    {ind.vwap != null && (
+                      <PriceRow label="Session VWAP" value={fmt(ind.vwap)} color="#a78bfa" />
+                    )}
+                    {(ind.ema20 != null || ind.ema50 != null) && (
+                      <PriceRow label="EMA 20 / EMA 50 / EMA 200" value={`${fmt(ind.ema20, 2)} / ${fmt(ind.ema50, 2)} / ${fmt(ind.ema200, 2)}`} color="#cbd5e1" />
+                    )}
+                    {ind.fib_nearest_level && (
+                      <PriceRow label="Nearest Fibonacci" value={`${ind.fib_nearest_level} (${ind.fib_nearest_dist_pct ?? 0}%)`} color="#fbbf24" />
+                    )}
+                  </div>
+
+                  <button
+                    onClick={() => { setTab("analysis"); setAnalysisNewContent(false); }}
+                    style={{
+                      width: "100%", padding: "8px 12px", borderRadius: 8, cursor: "pointer",
+                      background: "linear-gradient(135deg, rgba(139,92,246,0.22), rgba(56,189,248,0.18))",
+                      border: "1px solid rgba(167,139,250,0.4)", color: "#e2e8f0",
+                      fontSize: "0.66rem", fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", gap: 6
+                    }}
+                  >
+                    <span>🧠</span>
+                    <span>Buka Skenario Trigger BUY &amp; SELL di Tab Analisis →</span>
+                  </button>
                 </div>
               )}
 
@@ -1414,7 +1647,7 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose, on
                     <span style={{ fontSize: "0.7rem" }}>🧠</span>
                   )}
                   <span style={{ fontSize: "0.65rem", color: "#38bdf8", fontWeight: 700, flex: 1 }}>
-                    {status === "thinking" ? "DeepSeek-R1 Chain-of-Thought…" : `DeepSeek-R1 Reasoning (${reasoning.length} chars)`}
+                    {status === "thinking" ? "DeepSeek-R1 sedang menyusun analisis…" : `Proses Berpikir Internal AI (${reasoning.length} karakter)`}
                   </span>
                   <span style={{ fontSize: "0.6rem", color: "var(--text-muted)" }}>{showThinking ? "▲" : "▼"}</span>
                 </div>
@@ -1430,29 +1663,56 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose, on
             )}
 
             {answer ? (
-              status === "done" ? (
-                <ParsedAnalysis text={answer} />
-              ) : (
-                <div className="stream-bubble">
-                  <div className="stream-header">AI Analyst <span style={{ color: "#a78bfa" }}>·</span> Streaming…</div>
-                  <div style={{ fontSize: "0.72rem", color: "var(--text-secondary)", lineHeight: 1.75, whiteSpace: "pre-wrap" }}>
-                    {answer}<span id="ai-cursor">▌</span>
+              <ParsedAnalysis text={answer} isStreaming={status === "streaming" || status === "thinking"} />
+            ) : isPulsing ? (
+              <div style={{
+                padding: "16px 14px", borderRadius: 12,
+                background: "linear-gradient(145deg, rgba(30,41,59,0.5), rgba(15,23,42,0.75))",
+                border: "1px solid rgba(139,92,246,0.25)",
+                display: "flex", flexDirection: "column", gap: 12
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div className="ai-spinner" style={{ width: 22, height: 22, flexShrink: 0 }} />
+                  <div>
+                    <div style={{ fontSize: "0.74rem", fontWeight: 800, color: "#f8fafc" }}>
+                      DeepSeek-R1 Sedang Merumuskan Analisis…
+                    </div>
+                    <div style={{ fontSize: "0.6rem", color: "var(--text-muted)" }}>
+                      Laporan 5 bagian dalam Bahasa Indonesia akan tampil otomatis.
+                    </div>
                   </div>
                 </div>
-              )
-            ) : isPulsing ? (
-              <div id="ai-thinking-indicator">
-                <div className="ai-dots"><span /><span /><span /></div>
-                <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontWeight: 600 }}>
-                  {status === "thinking" ? "AI deep reasoning in progress…" : "Streaming expert analysis…"}
-                </span>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: "0.63rem" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#4ade80" }}>
+                    <span>✓</span>
+                    <span>1. Telemetri Multi-Timeframe (1D/4H/1H/15M), EMA Stack &amp; Volume Profile</span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#4ade80" }}>
+                    <span>✓</span>
+                    <span>2. Pemetaan Fibonacci OTE, Order Block, FVG &amp; Liquidity Sweep</span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#38bdf8", fontWeight: 700 }}>
+                    <span style={{ animation: "blink 1s infinite" }}>⚡</span>
+                    <span>3. Menyusun Rencana Eksekusi &amp; Skenario Invalidasi…</span>
+                  </div>
+                </div>
               </div>
             ) : null}
 
             {chatHistory.map((msg, idx) => (
               <div key={idx} className={`chat-bubble ${msg.role === "user" ? "user-bubble" : "ai-bubble"}`}>
-                <div className="bubble-header">{msg.role === "user" ? "You" : "AI Analyst"}</div>
-                <div className="bubble-content">{msg.content || <span className="ai-cursor">▌</span>}</div>
+                <div className="bubble-header">{msg.role === "user" ? "🧑 Anda" : "🤖 DeepSeek Quant Analyst"}</div>
+                <div className="bubble-content">
+                  {msg.content ? (
+                    msg.role === "assistant" ? (
+                      <FormattedBlock content={msg.content} accent="#a78bfa" />
+                    ) : (
+                      msg.content
+                    )
+                  ) : (
+                    <span className="ai-cursor">▌</span>
+                  )}
+                </div>
               </div>
             ))}
             <div ref={chatEndRef} />
@@ -1471,8 +1731,9 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose, on
                   <button
                     key={label}
                     className="quick-ask-btn"
-                    onClick={() => { setChatInput(q); }}
+                    onClick={() => { submitChat(q); }}
                     disabled={isChatting}
+                    title={q}
                   >
                     <span>{icon}</span>{label}
                   </button>
@@ -1486,7 +1747,7 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose, on
                   onKeyDown={e => { if (e.key === "Enter") submitChat(); }}
                   disabled={isChatting} className="ai-chat-input"
                 />
-                <button onClick={submitChat} disabled={isChatting || !chatInput.trim()} className="ai-send-btn">
+                <button onClick={() => submitChat()} disabled={isChatting || !chatInput.trim()} className="ai-send-btn">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
                     <path d="M22 2L11 13M22 2L15 22l-4-9-9-4 20-7z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
@@ -1557,8 +1818,9 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose, on
 
         /* ── HTF row ── */
         #ai-htf-row {
-          display: flex; gap: 8px; padding: 7px 12px; border-bottom: 1px solid var(--border);
-          flex-shrink: 0; background: rgba(0,0,0,0.18); flex-wrap: wrap; align-items: center;
+          display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px;
+          padding: 7px 10px; border-bottom: 1px solid var(--border);
+          flex-shrink: 0; background: rgba(0,0,0,0.2); align-items: center;
         }
 
         /* ── Error ── */
