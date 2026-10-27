@@ -77,6 +77,7 @@ class ConfluenceEngine:
         self.structure_analyzer = MarketStructureAnalyzer()
         self.smc_engine = SmartMoneyConceptsEngine()
         self.min_confluence_score = min_confluence_score
+        self._htf_bias_cache: Dict[tuple, str] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -112,13 +113,19 @@ class ConfluenceEngine:
                 details=details, recommendation="NEUTRAL",
             )
 
-        # Determine dominant HTF bias (for alignment checks)
+        # Determine dominant HTF bias (cached by last closed candle timestamp for fast backtest/scanner)
         htf_biases: Dict[str, str] = {}
         for tf in ["1d", "4h"]:
             df_tf = candles_by_tf.get(tf, pd.DataFrame())
             if not df_tf.empty:
-                bias_obj = self.structure_analyzer.analyze(df_tf, symbol, tf)
-                htf_biases[tf] = bias_obj.bias
+                cache_key = (symbol, tf, len(df_tf), df_tf.iloc[-1]["open_time"], float(df_tf.iloc[-1]["close"]))
+                cached_bias = self._htf_bias_cache.get(cache_key)
+                if cached_bias is None:
+                    if len(self._htf_bias_cache) > 512:
+                        self._htf_bias_cache.clear()
+                    cached_bias = self.structure_analyzer.analyze(df_tf, symbol, tf).bias
+                    self._htf_bias_cache[cache_key] = cached_bias
+                htf_biases[tf] = cached_bias
 
         # ── FIX #1 (KRITIS): Dominant bias dengan strict HTF conflict check ──
         # Rule: jika 1D dan 4H KEDUANYA directional tapi BERLAWANAN → paksa SIDEWAYS.

@@ -46,6 +46,7 @@ class MarketStructureAnalyzer:
         """Identify swing highs and lows using local extremes without plateau duplicates."""
         highs = df["high"].astype(float).values
         lows = df["low"].astype(float).values
+        times = df["open_time"].tolist() if "open_time" in df.columns else None
         n = len(df)
         lb = self.swing_lookback
         swings: List[SwingPoint] = []
@@ -70,7 +71,10 @@ class MarketStructureAnalyzer:
                 and (i - last_low_idx) >= lb
             )
 
-            time_val = df.iloc[i]["open_time"] if "open_time" in df.columns else None
+            if not is_high and not is_low:
+                continue
+
+            time_val = times[i] if times is not None else None
             if is_high and is_low:
                 # Resolve same-bar outside bar by alternating against prior candidate
                 if candidates and candidates[-1].type == "HIGH":
@@ -125,7 +129,7 @@ class MarketStructureAnalyzer:
             return labels
 
         closes = df["close"].astype(float).values
-        has_time = "open_time" in df.columns
+        times = df["open_time"].tolist() if "open_time" in df.columns else None
         n = len(df)
 
         prev_high: Optional[SwingPoint] = None
@@ -148,7 +152,7 @@ class MarketStructureAnalyzer:
                         )
                         if brk_idx is not None:
                             broken_high_idx.add(prev_high.index)
-                            brk_time = df.iloc[brk_idx]["open_time"] if has_time else sw.time
+                            brk_time = times[brk_idx] if times is not None else sw.time
                             brk_label = "CHOCH" if trend == "BEARISH" else "BOS"
                             labels.append(StructureLabel(
                                 index=brk_idx,
@@ -176,7 +180,7 @@ class MarketStructureAnalyzer:
                         )
                         if brk_idx is not None:
                             broken_low_idx.add(prev_low.index)
-                            brk_time = df.iloc[brk_idx]["open_time"] if has_time else sw.time
+                            brk_time = times[brk_idx] if times is not None else sw.time
                             brk_label = "CHOCH" if trend == "BULLISH" else "BOS"
                             labels.append(StructureLabel(
                                 index=brk_idx,
@@ -197,7 +201,7 @@ class MarketStructureAnalyzer:
                 closes, prev_high.index + 1, n - 1, prev_high.price, "UP"
             )
             if brk_idx is not None:
-                brk_time = df.iloc[brk_idx]["open_time"] if has_time else prev_high.time
+                brk_time = times[brk_idx] if times is not None else prev_high.time
                 brk_label = "CHOCH" if trend == "BEARISH" else "BOS"
                 labels.append(StructureLabel(
                     index=brk_idx, label=brk_label, price=prev_high.price, time=brk_time,
@@ -209,7 +213,7 @@ class MarketStructureAnalyzer:
                 closes, prev_low.index + 1, n - 1, prev_low.price, "DOWN"
             )
             if brk_idx is not None:
-                brk_time = df.iloc[brk_idx]["open_time"] if has_time else prev_low.time
+                brk_time = times[brk_idx] if times is not None else prev_low.time
                 brk_label = "CHOCH" if trend == "BULLISH" else "BOS"
                 labels.append(StructureLabel(
                     index=brk_idx, label=brk_label, price=prev_low.price, time=brk_time,

@@ -15,9 +15,8 @@ import { MarketStructurePanel } from "@/components/pro/MarketStructurePanel";
 import { WyckoffPanel } from "@/components/pro/WyckoffPanel";
 import { OptionsPerpsPanel } from "@/components/pro/OptionsPerpsPanel";
 import { ConditionalAlertWidget } from "@/components/pro/ConditionalAlertWidget";
+import { API_URL } from "@/lib/utils";
 import { useState, useCallback } from "react";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://ucilkecil387-trading-api.hf.space";
 
 // ── Symbols & Search ──────────────────────────────────────────────────────────
 const TOP_SYMBOLS = ["BTCUSDT", "ETHUSDT", "XAUUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "AVAXUSDT", "LINKUSDT", "ADAUSDT"];

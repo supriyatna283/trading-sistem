@@ -12,6 +12,8 @@ Endpoints:
   GET  /api/v1/pro/session-pairs     — Top volume pairs per killzone
 """
 
+import asyncio
+import time
 import logging
 from fastapi import APIRouter, Query, HTTPException
 from pydantic import BaseModel, Field
@@ -75,6 +77,9 @@ _smt_engine   = SMTDivergenceEngine()
 _vp_engine    = VolumeProfileEngine()
 _sentiment_engine = SentimentEngine()
 
+_PERP_SNAPSHOT_CACHE: dict = {}
+_PERP_SNAPSHOT_TTL = 45.0  # seconds
+
 
 async def _fetch_live_perp_snapshot(symbol: str, spot_price: float, df_daily) -> dict:
     """
@@ -84,6 +89,11 @@ async def _fetch_live_perp_snapshot(symbol: str, spot_price: float, df_daily) ->
     sym = symbol.upper()
     if not sym.endswith("USDT"):
         sym = f"{sym}USDT"
+    now = time.time()
+    cached_snap = _PERP_SNAPSHOT_CACHE.get(sym)
+    if cached_snap and (now - cached_snap["ts"]) < _PERP_SNAPSHOT_TTL:
+        return cached_snap["data"]
+
     base = sym[:-4]
     okx_inst = f"{base}-USDT-SWAP"
 
@@ -121,55 +131,46 @@ async def _fetch_live_perp_snapshot(symbol: str, spot_price: float, df_daily) ->
     except Exception as e:
         logger.debug(f"Binance perp snapshot fallback for {sym}: {e}")
 
-    # 2. Fallback to OKX Public V5 Swap API for any missing metrics
+    # 2. Fallback to OKX Public V5 Swap API in PARALLEL for any missing metrics
     if funding_8h_pct is None or oi_usd is None or ls_ratio is None:
         try:
-            async with httpx.AsyncClient(timeout=6.0) as client:
-                if funding_8h_pct is None:
-                    r_f = await client.get(
-                        "https://www.okx.com/api/v5/public/funding-rate",
-                        params={"instId": okx_inst},
-                    )
-                    if r_f.status_code == 200:
-                        d_f = r_f.json().get("data", [])
-                        if d_f:
-                            funding_8h_pct = float(d_f[0].get("fundingRate", 0.0)) * 100.0
-                            source = source or "okx"
+            async with httpx.AsyncClient(timeout=4.0) as client:
+                r_f, r_mp, r_oi, r_ls = await asyncio.gather(
+                    client.get("https://www.okx.com/api/v5/public/funding-rate", params={"instId": okx_inst})
+                    if funding_8h_pct is None else asyncio.sleep(0),
+                    client.get("https://www.okx.com/api/v5/public/mark-price", params={"instType": "SWAP", "instId": okx_inst})
+                    if mark_price is None else asyncio.sleep(0),
+                    client.get("https://www.okx.com/api/v5/public/open-interest", params={"instType": "SWAP", "instId": okx_inst})
+                    if oi_usd is None else asyncio.sleep(0),
+                    client.get("https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio", params={"ccy": base, "period": "1H"})
+                    if ls_ratio is None else asyncio.sleep(0),
+                    return_exceptions=True,
+                )
+                if hasattr(r_f, "status_code") and r_f.status_code == 200:
+                    d_f = r_f.json().get("data", [])
+                    if d_f:
+                        funding_8h_pct = float(d_f[0].get("fundingRate", 0.0)) * 100.0
+                        source = source or "okx"
 
-                if mark_price is None:
-                    r_mp = await client.get(
-                        "https://www.okx.com/api/v5/public/mark-price",
-                        params={"instType": "SWAP", "instId": okx_inst},
-                    )
-                    if r_mp.status_code == 200:
-                        d_mp = r_mp.json().get("data", [])
-                        if d_mp and float(d_mp[0].get("markPx", 0) or 0) > 0:
-                            mark_price = float(d_mp[0]["markPx"])
+                if hasattr(r_mp, "status_code") and r_mp.status_code == 200:
+                    d_mp = r_mp.json().get("data", [])
+                    if d_mp and float(d_mp[0].get("markPx", 0) or 0) > 0:
+                        mark_price = float(d_mp[0]["markPx"])
 
-                if oi_usd is None:
-                    r_oi = await client.get(
-                        "https://www.okx.com/api/v5/public/open-interest",
-                        params={"instType": "SWAP", "instId": okx_inst},
-                    )
-                    if r_oi.status_code == 200:
-                        d_oi = r_oi.json().get("data", [])
-                        if d_oi:
-                            oi_ccy = float(d_oi[0].get("oiCcy", 0.0) or 0.0)
-                            oi_usd_val = float(d_oi[0].get("oiUsd", 0.0) or 0.0)
-                            oi_coins = oi_ccy if oi_ccy > 0 else None
-                            oi_usd = oi_usd_val if oi_usd_val > 0 else (oi_ccy * (mark_price or spot_price) if oi_ccy > 0 else None)
-                            source = source or "okx"
+                if hasattr(r_oi, "status_code") and r_oi.status_code == 200:
+                    d_oi = r_oi.json().get("data", [])
+                    if d_oi:
+                        oi_ccy = float(d_oi[0].get("oiCcy", 0.0) or 0.0)
+                        oi_usd_val = float(d_oi[0].get("oiUsd", 0.0) or 0.0)
+                        oi_coins = oi_ccy if oi_ccy > 0 else None
+                        oi_usd = oi_usd_val if oi_usd_val > 0 else (oi_ccy * (mark_price or spot_price) if oi_ccy > 0 else None)
+                        source = source or "okx"
 
-                if ls_ratio is None:
-                    r_ls = await client.get(
-                        "https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio",
-                        params={"ccy": base, "period": "1H"},
-                    )
-                    if r_ls.status_code == 200:
-                        d_ls = r_ls.json().get("data", [])
-                        if d_ls and len(d_ls[0]) >= 2:
-                            ls_ratio = float(d_ls[0][1])
-                            source = source or "okx"
+                if hasattr(r_ls, "status_code") and r_ls.status_code == 200:
+                    d_ls = r_ls.json().get("data", [])
+                    if d_ls and len(d_ls[0]) >= 2:
+                        ls_ratio = float(d_ls[0][1])
+                        source = source or "okx"
         except Exception as e:
             logger.debug(f"OKX perp snapshot fallback failed for {sym}: {e}")
 
@@ -186,7 +187,7 @@ async def _fetch_live_perp_snapshot(symbol: str, spot_price: float, df_daily) ->
             else:
                 oi_trend = "STABLE"
 
-    return {
+    snap = {
         "funding_8h_pct": funding_8h_pct,
         "mark_price": mark_price,
         "oi_coins": oi_coins,
@@ -195,6 +196,9 @@ async def _fetch_live_perp_snapshot(symbol: str, spot_price: float, df_daily) ->
         "ls_ratio": ls_ratio,
         "source": source,
     }
+    if source:
+        _PERP_SNAPSHOT_CACHE[sym] = {"data": snap, "ts": now}
+    return snap
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Pydantic request/response models
@@ -354,9 +358,11 @@ async def get_pd_zones(req: PDZoneRequest):
     Fetches HTF candles and determines if price is in BUY (discount) or SELL (premium) zone.
     """
     try:
-        # Fetch HTF data for range calculation
-        df_htf_raw = await _data_engine.get_candles(req.symbol, req.htf, limit=100)
-        df_entry_raw = await _data_engine.get_candles(req.symbol, req.timeframe, limit=10)
+        # Fetch HTF + entry candles in parallel
+        df_htf_raw, df_entry_raw = await asyncio.gather(
+            _data_engine.get_candles(req.symbol, req.htf, limit=100),
+            _data_engine.get_candles(req.symbol, req.timeframe, limit=10),
+        )
 
         if df_entry_raw is None or df_entry_raw.empty:
             raise HTTPException(status_code=404, detail=f"No candle data available for {req.symbol}")
@@ -438,8 +444,10 @@ async def get_ob_strength(req: OBStrengthRequest):
     Score all active Order Blocks by institutional quality (A+ to D).
     """
     try:
-        df_entry_raw = await _data_engine.get_candles(req.symbol, req.timeframe, limit=200)
-        df_htf_raw   = await _data_engine.get_candles(req.symbol, req.htf, limit=100)
+        df_entry_raw, df_htf_raw = await asyncio.gather(
+            _data_engine.get_candles(req.symbol, req.timeframe, limit=200),
+            _data_engine.get_candles(req.symbol, req.htf, limit=100),
+        )
 
         if df_entry_raw is None or df_entry_raw.empty:
             raise HTTPException(status_code=404, detail=f"No candle data for {req.symbol}")
@@ -545,16 +553,22 @@ async def get_full_sprint1_analysis(req: FullAnalysisRequest):
     """
     try:
         symbol = req.symbol.upper()
+        correlated_sym = "ETHUSDT" if symbol == "BTCUSDT" else "BTCUSDT"
 
-        # Fetch data (drop unclosed forming bar & preserve provenance)
-        df_entry_raw = await _data_engine.get_candles(symbol, req.timeframe, limit=200)
-        df_htf_raw   = await _data_engine.get_candles(symbol, req.htf, limit=100)
+        # Fetch all required candles + macro news in PARALLEL (1 network round-trip instead of 4!)
+        df_entry_raw, df_htf_raw, df_corr_raw, macro_status = await asyncio.gather(
+            _data_engine.get_candles(symbol, req.timeframe, limit=200),
+            _data_engine.get_candles(symbol, req.htf, limit=100),
+            _data_engine.get_candles(correlated_sym, req.timeframe, limit=200),
+            _macro_engine.check_news_proximity_async(warning_minutes=60),
+        )
 
         if df_entry_raw is None or df_entry_raw.empty:
             raise HTTPException(status_code=404, detail=f"No candle data for {symbol}")
 
         df_entry, data_source, is_synthetic = _prep_df(df_entry_raw, req.timeframe)
         df_htf, _, _ = _prep_df(df_htf_raw, req.htf)
+        df_corr, _, _ = _prep_df(df_corr_raw, req.timeframe)
 
         current_price = float(df_entry["close"].iloc[-1])
 
@@ -584,14 +598,11 @@ async def get_full_sprint1_analysis(req: FullAnalysisRequest):
         # 6. Market Structure & MMFlow for enhanced scoring
         ms_result = _ms_engine.analyze(df_entry, symbol, req.timeframe)
         structure_score = 3 if any(l.label in ["BOS", "CHOCH"] for l in ms_result.structure_labels[-5:]) else 0
-        
+
         mm_result = _mm_engine.analyze(df_entry)
         mm_score = mm_result.confluence_score
 
         # 8. SMT Divergence Check (Sprint D)
-        correlated_sym = "ETHUSDT" if symbol == "BTCUSDT" else "BTCUSDT"
-        df_corr_raw = await _data_engine.get_candles(correlated_sym, req.timeframe, limit=200)
-        df_corr, _, _ = _prep_df(df_corr_raw, req.timeframe)
         if df_corr is not None and not df_corr.empty:
             smt_result = _smt_engine.analyze(df_entry, df_corr, symbol, correlated_sym)
         else:
@@ -599,10 +610,6 @@ async def get_full_sprint1_analysis(req: FullAnalysisRequest):
 
         # 9. Volume Profile Check (Sprint D)
         vp_result = _vp_engine.analyze(df_entry)
-        if vp_result:
-            # If POC is inside FVG or OB zone, that's heavy confluence
-            # For simplicity, we just add it to the payload
-            pass
 
         # ── Aggregate confluence score (0–24 scale from backend) ────────────
         bias_direction  = sweep_result.get("bias_from_sweep") or fvg_data["signals"]["entry_bias"] or "NEUTRAL"
@@ -610,13 +617,10 @@ async def get_full_sprint1_analysis(req: FullAnalysisRequest):
         sweep_score     = sweep_result.get("score", 0)
         ob_score        = min(5, ((scored_obs[0].score + 10) // 20) if scored_obs else 0)
         kz_score        = 3 if kz_status["is_killzone_active"] else (1 if kz_status["current_kz"] else 0)
-        
+
         total_score     = pd_score + sweep_score + ob_score + kz_score + structure_score + mm_score
         max_score       = 24
         score_pct       = round((total_score / max_score) * 100, 1)
-
-        # 7. Macro News Check (Sprint D — backed by real NewsCalendarEngine)
-        macro_status = await _macro_engine.check_news_proximity_async(warning_minutes=60)
         macro_restricted = macro_status["is_restricted"]
 
         # Cap the score and force WAIT/NEUTRAL during high-impact news or synthetic fallback data.
@@ -1098,12 +1102,14 @@ async def get_options_perps(req: OptionsPerpsRequest):
 
 @router.post("/mtf-alignment")
 async def get_mtf_alignment(req: MTFAlignmentRequest):
-    """True Multi-Timeframe Alignment Check (1d, 4h, 1h, 15m, 5m)."""
+    """True Multi-Timeframe Alignment Check (1d, 4h, 1h, 15m, 5m) fetched in parallel."""
     try:
         tfs = ["1d", "4h", "1h", "15m", "5m"]
+        raw_dfs = await asyncio.gather(
+            *[_data_engine.get_candles(req.symbol, tf, limit=100) for tf in tfs]
+        )
         candles_by_tf = {}
-        for tf in tfs:
-            df_raw = await _data_engine.get_candles(req.symbol, tf, limit=100)
+        for tf, df_raw in zip(tfs, raw_dfs):
             df, _, _ = _prep_df(df_raw, tf)
             candles_by_tf[tf] = df
             

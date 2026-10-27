@@ -58,29 +58,22 @@ class MarketScanner:
             symbols = [s["symbol"] for s in all_syms]
 
         # --- PERPETUAL LIQUIDITY FILTER ---
-        # Curated Top 50 Most Liquid Binance Futures Pairs
+        # Curated Top 24 Most Liquid Institutional Perpetual Pairs for fast, high-signal scanning
         PRIORITY_PERPETUALS = [
-            "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", 
-            "ADAUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT", "TRXUSDT", "1000SHIBUSDT", 
-            "TONUSDT", "NEARUSDT", "UNIUSDT", "LTCUSDT", "BCHUSDT", "APTUSDT", 
-            "ARBUSDT", "OPUSDT", "SUIUSDT", "SEIUSDT", "TIAUSDT", "INJUSDT", 
-            "FETUSDT", "RENDERUSDT", "TAOUSDT", "WIFUSDT", "1000PEPEUSDT", "1000BONKUSDT", 
-            "1000FLOKIUSDT", "POLUSDT", "MATICUSDT", "AAVEUSDT", "ATOMUSDT", "STXUSDT", 
-            "IMXUSDT", "HBARUSDT", "XLMUSDT", "VETUSDT", "FILUSDT", "MKRUSDT", 
-            "GRTUSDT", "ONDOUSDT", "PYTHUSDT", "JUPUSDT", "ENAUSDT", "PENDLEUSDT", 
-            "STRKUSDT", "FTMUSDT"
+            "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT",
+            "ADAUSDT", "AVAXUSDT", "LINKUSDT", "SUIUSDT", "TONUSDT", "DOTUSDT",
+            "NEARUSDT", "LTCUSDT", "APTUSDT", "ARBUSDT", "OPUSDT", "INJUSDT",
+            "FETUSDT", "RENDERUSDT", "TAOUSDT", "WIFUSDT", "AAVEUSDT", "ONDOUSDT",
         ]
-        # Intersect: keep only pairs that are both in the fetched list AND in our priority list
         fetched_set = set(symbols)
         filtered = [s for s in PRIORITY_PERPETUALS if s in fetched_set]
-        # If filter yields nothing, use the raw list capped at 50
-        symbols = filtered if filtered else symbols[:50]
+        symbols = filtered if filtered else symbols[:24]
 
-        # Fetch macro context once for all symbols (shared data)
-        sentiment_data, news_events, btc_dominance = await self._fetch_macro_context()
+        # Fetch macro context + batch market caps once for all symbols (shared data)
+        sentiment_data, news_events, btc_dominance = await self._fetch_macro_context(symbols)
 
-        # FIX #9: Limit to 6 concurrent to avoid Binance rate-limit on HF Spaces
-        semaphore = asyncio.Semaphore(6)
+        # Higher concurrency (12) since OKX handles parallel candle fetches smoothly
+        semaphore = asyncio.Semaphore(12)
 
         async def _sc(sym):
             async with semaphore:
@@ -107,15 +100,16 @@ class MarketScanner:
 
         return final_results
 
-    async def _fetch_macro_context(self):
-        """Fetch sentiment, news, and BTC dominance data once (shared across all symbols)."""
+    async def _fetch_macro_context(self, symbols: Optional[List[str]] = None):
+        """Fetch sentiment, news, BTC dominance, and batch market caps once (shared across all symbols)."""
         try:
             sentiment_task = self.sentiment_engine.get_full_sentiment()
             news_task = self.news_engine.get_events()
             btc_dom_task = self.intel_engine.get_btc_dominance()
+            mcap_batch_task = self.intel_engine.prefetch_market_caps(symbols)
 
-            sentiment_data, news_events, btc_dominance = await asyncio.gather(
-                sentiment_task, news_task, btc_dom_task, return_exceptions=True
+            sentiment_data, news_events, btc_dominance, _ = await asyncio.gather(
+                sentiment_task, news_task, btc_dom_task, mcap_batch_task, return_exceptions=True
             )
             if isinstance(sentiment_data, Exception):
                 logger.warning(f"Sentiment fetch failed: {sentiment_data}")
@@ -193,36 +187,23 @@ class MarketScanner:
         # Price and 24h Change
         latest_price = float(entry_df.iloc[-1]["close"]) if not entry_df.empty else 0
 
-        # ---- Market Intelligence (V4) ----
-        # Fetch per-symbol data: order book, S/R, liquidation, market cap
-        try:
-            orderbook_task = self.intel_engine.get_order_book_depth(symbol)
-            mcap_task = self.intel_engine.get_market_cap(symbol)
-            orderbook_data, mcap_data = await asyncio.gather(
-                orderbook_task, mcap_task, return_exceptions=True
-            )
-            if isinstance(orderbook_data, Exception):
-                orderbook_data = {}
-            if isinstance(mcap_data, Exception):
-                mcap_data = {}
-        except Exception:
-            orderbook_data = {}
-            mcap_data = {}
+        # ---- Market Intelligence (V4 — Fast Zero-Stall Lookup) ----
+        # Market cap is already batch-cached in _fetch_macro_context (0ms lookup)
+        mcap_data = await self.intel_engine.get_market_cap(symbol)
 
-        # Calculate S/R and liquidation levels (no API call needed)
+        # Calculate S/R and liquidation levels locally (0ms, no API call needed)
         sr_data = self.intel_engine.calculate_support_resistance(entry_df, symbol)
         liq_data = self.intel_engine.calculate_liquidation_levels(latest_price, symbol)
 
-        # Build market_intel_data dict for confluence scoring
         market_intel_data = {
             "btc_dominance": btc_dominance or {},
-            "orderbook": orderbook_data,
+            "orderbook": {},
             "liquidation": liq_data,
             "market_cap": mcap_data,
             "support_resistance": sr_data,
         }
 
-        # Confluence scoring (V4 — 24-point system with market intelligence)
+        # Confluence scoring (V5)
         conf = self.confluence.score(
             candles_by_tf, symbol, entry_tf,
             sentiment_data=sentiment_data,
@@ -230,6 +211,15 @@ class MarketScanner:
             mtf_result=mtf_result,
             market_intel_data=market_intel_data,
         )
+
+        # Only fetch live L2 orderbook depth when confluence is actionable (>= 10)
+        orderbook_data = {}
+        if conf.total_score >= 10:
+            try:
+                orderbook_data = await self.intel_engine.get_order_book_depth(symbol)
+                market_intel_data["orderbook"] = orderbook_data
+            except Exception:
+                orderbook_data = {}
 
         # Liquidity status (check genuine wick-sweep from V3 liquidity levels first)
         swept = any(getattr(l, "swept", False) for l in smc.liquidity_levels) or self.smc.check_liquidity_sweep(entry_df, smc.liquidity_levels)

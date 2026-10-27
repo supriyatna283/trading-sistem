@@ -12,15 +12,35 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Tuple
+import asyncio
 import json
 import time
 import logging
 
 logger = logging.getLogger(__name__)
 
-# In-memory cache: {key: {"df": DataFrame, "ts": float}}
+# In-memory cache: {key: {"df": DataFrame, "ts": float, "source": str}}
 _MEM_CACHE: Dict[str, dict] = {}
-_MEM_CACHE_TTL = 30  # seconds
+_MEM_CACHE_TTL = 60  # default fallback TTL in seconds
+
+# Timeframe-aware TTL: higher timeframes change much less frequently
+TIMEFRAME_CACHE_TTL: Dict[str, int] = {
+    "1m": 20,
+    "5m": 35,
+    "15m": 60,
+    "30m": 90,
+    "1h": 120,
+    "4h": 240,
+    "1d": 300,
+    "1w": 600,
+}
+
+# In-flight locks to deduplicate concurrent identical (symbol, timeframe) requests
+_INFLIGHT_LOCKS: Dict[str, asyncio.Lock] = {}
+
+# Historical backtest candle cache: {key: {"df": DataFrame, "ts": float}}
+_HIST_CACHE: Dict[str, dict] = {}
+_HIST_CACHE_TTL = 900  # 15 minutes
 
 # Timeframe mapping
 TIMEFRAME_MAP = {
@@ -358,96 +378,49 @@ class MarketDataEngine:
         self, symbol: str, interval: str, start_ts: int, end_ts: int
     ) -> pd.DataFrame:
         """
-        Fetch a large historical range for backtesting from Binance.
-        start_ts and end_ts must be in milliseconds.
-        Binance paginates forward in time.
+        Fetch historical candles for backtesting with 15-minute caching and fast OKX-first lookup.
+        Caps bar count to 500 bars so widget backtests complete in <500ms without multi-page stalls.
         """
-        binance_interval_map = {
-            "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
-            "1h": "1h", "4h": "4h", "1d": "1d", "1w": "1w",
+        sym = symbol.upper()
+        interval_ms_map = {
+            "1m": 60000, "5m": 300000, "15m": 900000, "30m": 1800000,
+            "1h": 3600000, "4h": 14400000, "1d": 86400000, "1w": 604800000,
         }
+        interval_ms = interval_ms_map.get(interval, 3600000)
+        requested_bars = max(240, int((end_ts - start_ts) / interval_ms))
+        target_bars = min(500, requested_bars)
 
-        bi = binance_interval_map.get(interval, "1h")
+        days_bucket = max(1, round((end_ts - start_ts) / 86400000))
+        cache_key = f"hist:{sym}:{interval}:{days_bucket}"
+        now = time.time()
 
-        async def _fetch_historical(baseUrl: str):
-            all_data = []
-            current_start = start_ts
-            url = f"{baseUrl}/klines"
-            
-            while current_start < end_ts:
-                params = {
-                    "symbol": symbol.upper(),
-                    "interval": bi,
-                    "limit": 1000,
-                    "startTime": current_start,
-                    "endTime": end_ts,
-                }
-                
-                resp = await self.client.get(url, params=params)
-                resp.raise_for_status()
-                data = resp.json()
+        cached_hist = _HIST_CACHE.get(cache_key)
+        if cached_hist and (now - cached_hist["ts"]) < _HIST_CACHE_TTL:
+            return cached_hist["df"].copy()
 
-                if not data:
-                    break
+        # Check if regular candle cache already has enough bars
+        mem_cached = await self._get_cache(sym, interval, max_age=300)
+        if mem_cached is not None and len(mem_cached) >= min(target_bars, 260):
+            _HIST_CACHE[cache_key] = {"df": mem_cached.copy(), "ts": now}
+            return mem_cached.copy()
 
-                all_data.extend(data)
-                
-                if len(data) < 1000:
-                    break
-                    
-                current_start = int(data[-1][0]) + 1
-            return all_data
+        # 1. Primary: Fast OKX paginated fetch (at most 2 requests for 500 bars)
+        df = await self.fetch_okx_candles(sym, interval, limit=target_bars)
 
-        try:
-            try:
-                all_data = await _fetch_historical(self.BINANCE_BASE)
-            except httpx.HTTPStatusError as e:
-                # Fallback to futures if bad request
-                if e.response.status_code == 400:
-                    all_data = await _fetch_historical(self.BINANCE_FUTURES_BASE)
-                else:
-                    raise e
-
-            if not all_data:
-                df = self._empty_df()
-            else:
-                rows = []
-                for r in all_data:
-                    try:
-                        rows.append({
-                            "open_time": int(r[0]),
-                            "open": r[1],
-                            "high": r[2],
-                            "low": r[3],
-                            "close": r[4],
-                            "volume": r[5],
-                        })
-                    except Exception:
-                        continue
-
-                df = pd.DataFrame(rows)
-                df = self._normalize(df, symbol, interval)
-                # Sort chronologically
-                df = df.sort_values("open_time").reset_index(drop=True)
-
-        except Exception as e:
-            logger.error(f"Failed to fetch historical Binance data for {symbol}: {e}")
-            df = self._empty_df()
-            
-        # Fallback to sample data if fetch failed (e.g. HF Space IP block)
+        # 2. Secondary fallback: Binance klines
         if df.empty:
-            logger.warning(f"Using sample data for historical backtest: {symbol}")
-            interval_ms_map = {
-                "1m": 60000, "5m": 300000, "15m": 900000, "30m": 1800000,
-                "1h": 3600000, "4h": 14400000, "1d": 86400000, "1w": 604800000
-            }
-            interval_ms = interval_ms_map.get(interval, 3600000)
-            periods = int((end_ts - start_ts) / interval_ms)
-            if periods < 200:
-                periods = 200
-            base = await self._get_fallback_base_price(symbol.upper())
-            df = self.generate_sample_data(symbol.upper(), interval, periods, base)
-            
+            df = await self.fetch_binance_candles(sym, interval, limit=target_bars)
+
+        # 3. Final fallback to sample data if all exchanges are unreachable
+        if df.empty:
+            logger.warning(f"Using sample data for historical backtest: {sym}")
+            base = await self._get_fallback_base_price(sym)
+            df = self.generate_sample_data(sym, interval, target_bars, base)
+            df.attrs["data_source"] = SOURCE_SYNTHETIC
+            df.attrs["is_synthetic"] = True
+        else:
+            _HIST_CACHE[cache_key] = {"df": df.copy(), "ts": now}
+
         return df
 
     async def _get_fallback_base_price(self, symbol: str) -> float:
@@ -495,39 +468,67 @@ class MarketDataEngine:
         self, symbol: str, timeframe: str = "1h", limit: int = 200
     ) -> Tuple[pd.DataFrame, str]:
         """
-        Fetch candles and report where they came from.
+        Fetch candles with timeframe-aware caching and in-flight request deduplication.
 
         Returns (df, source) with source in {"okx", "binance", "synthetic"}.
-        "synthetic" means every real source failed and the data is a random walk —
-        callers MUST NOT present it as real market data.
         """
-        # 1. Check cache (use short 3s TTL for live-polling requests with limit <= 5)
-        max_age = 3 if limit <= 5 else _MEM_CACHE_TTL
-        cached = await self._get_cache(symbol, timeframe, max_age=max_age)
+        sym = symbol.upper()
+        tf_ttl = 3 if limit <= 5 else TIMEFRAME_CACHE_TTL.get(timeframe, _MEM_CACHE_TTL)
+
+        # 1. Fast path: check in-memory cache before acquiring any lock
+        cached = await self._get_cache(sym, timeframe, max_age=tf_ttl)
         if cached is not None and len(cached) >= limit:
-            entry = self._mem_cache.get(f"candles:{symbol}:{timeframe}") or {}
-            return cached.tail(limit).reset_index(drop=True), entry.get("source", SOURCE_OKX)
+            entry = self._mem_cache.get(f"candles:{sym}:{timeframe}") or {}
+            src = entry.get("source", SOURCE_OKX)
+            out = cached.tail(limit).reset_index(drop=True)
+            out.attrs["data_source"] = src
+            out.attrs["is_synthetic"] = (src == SOURCE_SYNTHETIC)
+            return out, src
 
-        # 2. Try OKX (Primary for HF)
-        source = SOURCE_OKX
-        df = await self.fetch_okx_candles(symbol, timeframe, limit)
-        
-        # 3. Try Binance (Secondary Fallback)
-        if df.empty:
-            source = SOURCE_BINANCE
-            df = await self.fetch_binance_candles(symbol, timeframe, limit)
+        # 2. Deduplicate concurrent in-flight fetches for the same (symbol, timeframe)
+        lock_key = f"{sym}:{timeframe}"
+        lock = _INFLIGHT_LOCKS.get(lock_key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _INFLIGHT_LOCKS[lock_key] = lock
 
-        # 4. Final fallback to sample data
-        if df.empty:
-            logger.warning(f"All data sources failed for {symbol}, using sample data")
-            source = SOURCE_SYNTHETIC
-            base = await self._get_fallback_base_price(symbol.upper())
-            df = self.generate_sample_data(
-                symbol=symbol.upper(), timeframe=timeframe, 
-                periods=limit, base_price=base,
-            )
+        async with lock:
+            # Re-check cache after acquiring lock in case another coroutine just populated it
+            cached = await self._get_cache(sym, timeframe, max_age=tf_ttl)
+            if cached is not None and len(cached) >= limit:
+                entry = self._mem_cache.get(f"candles:{sym}:{timeframe}") or {}
+                src = entry.get("source", SOURCE_OKX)
+                out = cached.tail(limit).reset_index(drop=True)
+                out.attrs["data_source"] = src
+                out.attrs["is_synthetic"] = (src == SOURCE_SYNTHETIC)
+                return out, src
 
-        return df, source
+            # Fetch at least 200 candles on standard calls so subsequent smaller-limit calls hit cache
+            fetch_limit = limit if limit <= 5 else max(limit, 200)
+
+            # Try OKX (Primary)
+            source = SOURCE_OKX
+            df = await self.fetch_okx_candles(sym, timeframe, fetch_limit)
+
+            # Try Binance (Secondary Fallback)
+            if df.empty:
+                source = SOURCE_BINANCE
+                df = await self.fetch_binance_candles(sym, timeframe, fetch_limit)
+
+            # Final fallback to sample data
+            if df.empty:
+                logger.warning(f"All data sources failed for {sym}, using sample data")
+                source = SOURCE_SYNTHETIC
+                base = await self._get_fallback_base_price(sym)
+                df = self.generate_sample_data(
+                    symbol=sym, timeframe=timeframe,
+                    periods=fetch_limit, base_price=base,
+                )
+
+            out = df.tail(limit).reset_index(drop=True) if len(df) > limit else df
+            out.attrs["data_source"] = source
+            out.attrs["is_synthetic"] = (source == SOURCE_SYNTHETIC)
+            return out, source
 
     async def get_candles(
         self, symbol: str, timeframe: str = "1h", limit: int = 200
@@ -632,12 +633,13 @@ class MarketDataEngine:
         Never overwrite a larger fresh cached DataFrame with a tiny polling fetch
         (e.g. limit=2), Instead merge the latest tail into the existing frame.
         """
-        key = f"candles:{symbol}:{timeframe}"
+        key = f"candles:{symbol.upper()}:{timeframe}"
         now = time.time()
+        tf_ttl = TIMEFRAME_CACHE_TTL.get(timeframe, _MEM_CACHE_TTL)
         existing = self._mem_cache.get(key)
         if (
             existing
-            and (now - existing["ts"]) < _MEM_CACHE_TTL
+            and (now - existing["ts"]) < tf_ttl
             and len(existing["df"]) > len(df)
         ):
             merged = (
@@ -664,7 +666,7 @@ class MarketDataEngine:
         self, symbol: str, timeframe: str, max_age: float = _MEM_CACHE_TTL
     ) -> Optional[pd.DataFrame]:
         """Read cached candle data from Redis (primary) or in-memory (fallback)."""
-        key = f"candles:{symbol}:{timeframe}"
+        key = f"candles:{symbol.upper()}:{timeframe}"
         entry = self._mem_cache.get(key)
         if entry and (time.time() - entry["ts"]) < max_age:
             logger.info(f"In-memory cache hit for {key}")

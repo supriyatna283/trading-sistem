@@ -43,9 +43,16 @@ class MarketIntelEngine:
         "ZECUSDT": "zcash", "ASTERUSDT": "aster", "HYPEUSDT": "hyperliquid"
     }
 
+    # Static market-cap tier fallback so scanner never blocks on CoinGecko rate limits
+    LARGE_CAP_SYMBOLS = {
+        "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT",
+        "ADAUSDT", "TRXUSDT", "AVAXUSDT", "TONUSDT", "LINKUSDT", "SHIBUSDT",
+        "1000SHIBUSDT", "SUIUSDT", "DOTUSDT", "BCHUSDT", "LTCUSDT", "NEARUSDT",
+    }
+
     def __init__(self):
         self.client = httpx.AsyncClient(
-            timeout=10.0,
+            timeout=3.5,
             verify=False,
             headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -54,7 +61,10 @@ class MarketIntelEngine:
         # Caches
         self._btc_dom_cache: Dict[str, Any] = {"data": None, "ts": 0}
         self._mcap_cache: Dict[str, Dict] = {}
-        self._CACHE_TTL = 300  # 5 minutes
+        self._ob_cache: Dict[str, Dict] = {}
+        self._batch_mcap_ts: float = 0.0
+        self._CACHE_TTL = 600  # 10 minutes
+        self._OB_CACHE_TTL = 45  # 45 seconds
 
     # -----------------------------------------------------------------
     # 1. BTC Dominance (CoinGecko /global)
@@ -93,15 +103,36 @@ class MarketIntelEngine:
     # 2. Order Book Depth (Binance /depth)
     # -----------------------------------------------------------------
     async def get_order_book_depth(self, symbol: str, limit: int = 20) -> Dict[str, Any]:
-        """Fetch order book and calculate buy/sell wall ratio."""
-        try:
-            url = f"{self.BINANCE_BASE}/depth"
-            resp = await self.client.get(url, params={"symbol": symbol.upper(), "limit": limit})
-            resp.raise_for_status()
-            data = resp.json()
+        """Fetch order book (OKX primary + Binance fallback) with 45s cache."""
+        sym = symbol.upper()
+        now = time.time()
+        cached_ob = self._ob_cache.get(sym)
+        if cached_ob and (now - cached_ob["ts"]) < self._OB_CACHE_TTL:
+            return cached_ob["data"]
 
-            bids = data.get("bids", [])
-            asks = data.get("asks", [])
+        bids = []
+        asks = []
+        try:
+            # 1. Try OKX public orderbook first (fast, non-geo-blocked)
+            okx_inst = sym.replace("USDT", "-USDT")
+            r_okx = await self.client.get(
+                "https://www.okx.com/api/v5/market/books",
+                params={"instId": okx_inst, "sz": limit},
+            )
+            if r_okx.status_code == 200:
+                okx_data = r_okx.json().get("data", [])
+                if okx_data:
+                    bids = okx_data[0].get("bids", [])
+                    asks = okx_data[0].get("asks", [])
+
+            # 2. Fallback to Binance /depth
+            if not bids and not asks:
+                url = f"{self.BINANCE_BASE}/depth"
+                resp = await self.client.get(url, params={"symbol": sym, "limit": limit})
+                resp.raise_for_status()
+                data = resp.json()
+                bids = data.get("bids", [])
+                asks = data.get("asks", [])
 
             # Sum bid and ask volumes
             total_bid_vol = sum(float(b[1]) for b in bids)
@@ -119,8 +150,8 @@ class MarketIntelEngine:
             largest_bid_wall = max(bids, key=lambda x: float(x[1])) if bids else [0, 0]
             largest_ask_wall = max(asks, key=lambda x: float(x[1])) if asks else [0, 0]
 
-            return {
-                "symbol": symbol,
+            res_ob = {
+                "symbol": sym,
                 "bid_volume": round(total_bid_vol, 4),
                 "ask_volume": round(total_ask_vol, 4),
                 "buy_sell_ratio": round(ratio, 4),
@@ -131,6 +162,8 @@ class MarketIntelEngine:
                 "largest_ask_wall": {"price": float(largest_ask_wall[0]), "qty": float(largest_ask_wall[1])},
                 "bias": "BULLISH" if ratio > 1.3 else "BEARISH" if ratio < 0.7 else "NEUTRAL",
             }
+            self._ob_cache[sym] = {"data": res_ob, "ts": now}
+            return res_ob
         except Exception as e:
             logger.warning(f"Order book fetch failed for {symbol}: {e}")
             return {
@@ -195,45 +228,70 @@ class MarketIntelEngine:
     # -----------------------------------------------------------------
     # 4. Market Cap & Supply (CoinGecko)
     # -----------------------------------------------------------------
+    async def prefetch_market_caps(self, symbols: Optional[List[str]] = None) -> None:
+        """Batch-fetch market caps for all symbols in a SINGLE CoinGecko /coins/markets call."""
+        now = time.time()
+        if (now - self._batch_mcap_ts) < self._CACHE_TTL and self._mcap_cache:
+            return
+
+        target_syms = [s.upper() for s in (symbols or list(self.SYMBOL_TO_COINGECKO.keys()))]
+        id_to_syms: Dict[str, List[str]] = {}
+        for s in target_syms:
+            cid = self.SYMBOL_TO_COINGECKO.get(s)
+            if cid:
+                id_to_syms.setdefault(cid, []).append(s)
+
+        if not id_to_syms:
+            return
+
+        try:
+            resp = await self.client.get(
+                f"{self.COINGECKO_BASE}/coins/markets",
+                params={
+                    "vs_currency": "usd",
+                    "ids": ",".join(id_to_syms.keys()),
+                    "per_page": 250,
+                    "page": 1,
+                    "sparkline": "false",
+                },
+            )
+            if resp.status_code == 200:
+                items = resp.json()
+                for item in items:
+                    cid = item.get("id")
+                    mcap_val = float(item.get("market_cap") or 0)
+                    for sym in id_to_syms.get(cid, []):
+                        res = {
+                            "symbol": sym,
+                            "market_cap_usd": mcap_val,
+                            "circulating_supply": float(item.get("circulating_supply") or 0),
+                            "total_supply": float(item.get("total_supply") or 0),
+                            "max_supply": item.get("max_supply"),
+                            "fully_diluted_valuation": float(item.get("fully_diluted_valuation") or 0),
+                            "market_cap_rank": item.get("market_cap_rank") or 999,
+                            "tier": self._classify_mcap_tier(mcap_val),
+                        }
+                        self._mcap_cache[sym] = {"data": res, "ts": now}
+                self._batch_mcap_ts = now
+        except Exception as e:
+            logger.debug(f"CoinGecko batch market cap prefetch skipped: {e}")
+
     async def get_market_cap(self, symbol: str) -> Dict[str, Any]:
-        """Fetch market cap and circulating supply for a symbol."""
+        """Return cached market cap or static tier classification without N+1 HTTP stalls."""
         now = time.time()
         cache_key = symbol.upper()
         if cache_key in self._mcap_cache and (now - self._mcap_cache[cache_key].get("ts", 0)) < self._CACHE_TTL:
             return self._mcap_cache[cache_key]["data"]
 
-        coin_id = self.SYMBOL_TO_COINGECKO.get(symbol.upper())
-        if not coin_id:
-            return self._default_mcap(symbol)
+        # Trigger batch prefetch once if cache is cold
+        if (now - self._batch_mcap_ts) >= self._CACHE_TTL:
+            await self.prefetch_market_caps([cache_key])
+            if cache_key in self._mcap_cache:
+                return self._mcap_cache[cache_key]["data"]
 
-        try:
-            url = f"{self.COINGECKO_BASE}/coins/{coin_id}"
-            resp = await self.client.get(url, params={
-                "localization": "false",
-                "tickers": "false",
-                "community_data": "false",
-                "developer_data": "false",
-                "sparkline": "false",
-            })
-            resp.raise_for_status()
-            data = resp.json()
-            market = data.get("market_data", {})
-
-            result = {
-                "symbol": symbol,
-                "market_cap_usd": market.get("market_cap", {}).get("usd", 0),
-                "circulating_supply": market.get("circulating_supply", 0),
-                "total_supply": market.get("total_supply", 0),
-                "max_supply": market.get("max_supply"),
-                "fully_diluted_valuation": market.get("fully_diluted_valuation", {}).get("usd", 0),
-                "market_cap_rank": data.get("market_cap_rank", 999),
-                "tier": self._classify_mcap_tier(market.get("market_cap", {}).get("usd", 0)),
-            }
-            self._mcap_cache[cache_key] = {"data": result, "ts": now}
-            return result
-        except Exception as e:
-            logger.warning(f"CoinGecko market cap fetch failed for {symbol}: {e}")
-            return self._default_mcap(symbol)
+        fallback = self._default_mcap(cache_key)
+        self._mcap_cache[cache_key] = {"data": fallback, "ts": now}
+        return fallback
 
     def _classify_mcap_tier(self, mcap_usd: float) -> str:
         """Classify market cap tier."""
@@ -247,10 +305,17 @@ class MarketIntelEngine:
             return "MICRO"
 
     def _default_mcap(self, symbol: str) -> Dict[str, Any]:
+        sym = symbol.upper()
+        tier = "LARGE" if sym in self.LARGE_CAP_SYMBOLS else ("MID" if sym in self.SYMBOL_TO_COINGECKO else "SMALL")
         return {
-            "symbol": symbol, "market_cap_usd": 0, "circulating_supply": 0,
-            "total_supply": 0, "max_supply": None, "fully_diluted_valuation": 0,
-            "market_cap_rank": 999, "tier": "UNKNOWN",
+            "symbol": sym,
+            "market_cap_usd": 15_000_000_000 if tier == "LARGE" else (2_000_000_000 if tier == "MID" else 250_000_000),
+            "circulating_supply": 0,
+            "total_supply": 0,
+            "max_supply": None,
+            "fully_diluted_valuation": 0,
+            "market_cap_rank": 10 if tier == "LARGE" else 50,
+            "tier": tier,
         }
 
     # -----------------------------------------------------------------

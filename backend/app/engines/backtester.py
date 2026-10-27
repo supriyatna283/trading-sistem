@@ -15,6 +15,7 @@ trade execution with:
 import pandas as pd
 import numpy as np
 import asyncio
+import time
 import logging
 from datetime import datetime
 from typing import List, Dict, Any, Optional
@@ -34,8 +35,12 @@ FEE_RATE = 0.001  # 0.1% roundtrip (0.05% per side typical for crypto)
 HTF_TIMEFRAMES = ["1d", "4h"]
 HTF_CANDLE_LIMIT = 300
 
-# Phase 3 aligned threshold
-MIN_SCORE = 16
+# V5 aligned threshold (MAX_SCORE is 18 in ConfluenceEngine V5; 11/18 = 61%)
+MIN_SCORE = 11
+
+# In-memory cache for backtest runs so repeated widget loads return in <2ms
+_BACKTEST_CACHE: Dict[str, dict] = {}
+_BACKTEST_CACHE_TTL = 900  # 15 minutes
 
 # HTF candle interval durations (for look-ahead-free point-in-time filtering)
 HTF_INTERVALS = {"1d": pd.Timedelta(days=1), "4h": pd.Timedelta(hours=4)}
@@ -77,19 +82,52 @@ class BacktestEngine:
         V4: Phase 3 aligned thresholds (min_score=16, max_score=36).
         Produces professional-grade statistics: Sharpe, Sortino, Expectancy, Calmar.
         """
-        # 1. Fetch entry timeframe data
-        df = await self.data_engine.fetch_historical_candles(
-            symbol=symbol, interval=timeframe, start_ts=start_ts, end_ts=end_ts
+        sym = symbol.upper()
+        days_bucket = max(1, round((end_ts - start_ts) / 86400000))
+        cache_key = f"{sym}:{timeframe}:{days_bucket}:{initial_capital}:{risk_per_trade_pct}"
+        now = time.time()
+
+        cached_bt = _BACKTEST_CACHE.get(cache_key)
+        if cached_bt and (now - cached_bt["ts"]) < _BACKTEST_CACHE_TTL:
+            return cached_bt["data"]
+
+        # 1. Fetch entry timeframe + HTF (1D, 4H) candles in PARALLEL
+        df, htf_dfs = await asyncio.gather(
+            self.data_engine.fetch_historical_candles(
+                symbol=sym, interval=timeframe, start_ts=start_ts, end_ts=end_ts
+            ),
+            self._fetch_htf_candles(sym, start_ts, end_ts),
         )
 
         if df.empty or len(df) < 200:
             raise ValueError("Insufficient historical data for backtesting. Need at least 200 candles.")
 
-        logger.info(f"Starting V4 backtest for {symbol} on {timeframe} with {len(df)} candles.")
+        logger.info(f"Starting V4 backtest for {sym} on {timeframe} with {len(df)} candles.")
 
-        # Pre-fetch HTF candles (1D, 4H) for the same period
-        htf_dfs = await self._fetch_htf_candles(symbol, start_ts, end_ts)
+        # 2. Run CPU-intensive bar-by-bar simulation in a worker thread so FastAPI event loop never blocks
+        result = await asyncio.to_thread(
+            self._run_simulation_sync,
+            sym,
+            timeframe,
+            df,
+            htf_dfs,
+            initial_capital,
+            risk_per_trade_pct,
+        )
 
+        _BACKTEST_CACHE[cache_key] = {"data": result, "ts": now}
+        return result
+
+    def _run_simulation_sync(
+        self,
+        symbol: str,
+        timeframe: str,
+        df: pd.DataFrame,
+        htf_dfs: Dict[str, pd.DataFrame],
+        initial_capital: float,
+        risk_per_trade_pct: float,
+    ) -> Dict[str, Any]:
+        """Synchronous bar-by-bar simulation executed inside a background worker thread."""
         trades = []
         equity = initial_capital
         equity_curve = [{"time": int(df.iloc[0]["open_time"].timestamp() * 1000), "equity": equity}]
@@ -109,7 +147,6 @@ class BacktestEngine:
                 entry_price = float(current_bar["open"])
                 stop_distance = abs(entry_price - float(pending_setup.stop_loss))
                 position_size = risk_amount / stop_distance if stop_distance > 0 else 0.0
-                # Fee is a % of NOTIONAL (position value), not of price.
                 entry_fee = position_size * entry_price * (FEE_RATE / 2)
 
                 active_trade = {
@@ -189,9 +226,9 @@ class BacktestEngine:
                     active_trade = None
                     continue
 
-            # --- 3. Look for New Setups ---
+            # --- 3. Look for New Setups (Lazy evaluation: only run SMC/Structure if Confluence passes!) ---
             if not active_trade and not pending_setup:
-                window_df = df.iloc[i - window_size:i].copy()
+                window_df = df.iloc[i - window_size:i]
 
                 candles_by_tf = self._build_candles_by_tf(
                     entry_tf=timeframe,
@@ -200,9 +237,12 @@ class BacktestEngine:
                     as_of_time=current_bar_time,
                 )
 
+                confluence = self.confluence_engine.score(candles_by_tf, symbol, timeframe)
+                if confluence.total_score < self.setup_gen.min_score or confluence.recommendation == "NEUTRAL":
+                    continue
+
                 structure = self.structure_analyzer.analyze(window_df, symbol, timeframe)
                 smc = self.smc_engine.analyze(window_df, symbol, timeframe)
-                confluence = self.confluence_engine.score(candles_by_tf, symbol, timeframe)
 
                 setup = self.setup_gen.generate(
                     symbol, timeframe, confluence, smc, structure, window_df
@@ -211,13 +251,17 @@ class BacktestEngine:
                 if setup:
                     pending_setup = setup
 
+        tp_rates = self._compute_tp_reach_rates(trades, df)
+        grade_breakdown = self._build_grade_breakdown(trades)
         summary = self._calculate_summary(trades, initial_capital, equity, equity_curve)
-        summary["tp_rates"] = self._compute_tp_reach_rates(trades, df)
-        summary["grade_breakdown"] = self._build_grade_breakdown(trades)
+        summary["tp_rates"] = tp_rates
+        summary["grade_breakdown"] = grade_breakdown
         breakdown = self._build_breakdown(trades)
 
         return {
             "summary": summary,
+            "tp_rates": tp_rates,
+            "grade_breakdown": grade_breakdown,
             "trades": trades,
             "equity_curve": equity_curve,
             "breakdown": breakdown,
