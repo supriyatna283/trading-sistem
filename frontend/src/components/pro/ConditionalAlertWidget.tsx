@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { API_URL } from "@/lib/utils";
+import { useState, useEffect, useCallback } from "react";
+import { API_URL, apiHeaders } from "@/lib/utils";
 
 export function ConditionalAlertWidget({ symbol }: { symbol: string }) {
   const [phone, setPhone] = useState("");
-  const [enabled, setEnabled] = useState(false);
+  const [enabled, setEnabled] = useState(true);
+  const [watchedSymbols, setWatchedSymbols] = useState<string[]>([symbol]);
   const [loading, setLoading] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
@@ -20,14 +21,65 @@ export function ConditionalAlertWidget({ symbol }: { symbol: string }) {
     only_killzone: true
   });
 
-  // Load from local storage or backend if possible
+  const loadConfigForPhone = useCallback(async (targetPhone: string) => {
+    const cleaned = targetPhone.trim();
+    if (!cleaned || cleaned.length < 6) return;
+    try {
+      const res = await fetch(`${API_URL}/api/v1/alerts/config/${encodeURIComponent(cleaned)}`);
+      if (!res.ok) return;
+      const json = await res.json();
+      if (json?.found && json?.config) {
+        const cfg = json.config;
+        setEnabled(Boolean(cfg.enabled ?? true));
+        if (Array.isArray(cfg.symbols) && cfg.symbols.length > 0) {
+          setWatchedSymbols(Array.from(new Set([...cfg.symbols, symbol])));
+        }
+        setSettings(s => ({
+          ...s,
+          killzone_start: Boolean(cfg.killzone_start ?? s.killzone_start),
+          fvg_hit: Boolean(cfg.fvg_hit ?? s.fvg_hit),
+          sweep_confirmed: Boolean(cfg.sweep_confirmed ?? s.sweep_confirmed),
+          composite_score: Boolean(cfg.composite_score ?? s.composite_score),
+          min_score: Number(cfg.min_score ?? s.min_score),
+          min_grade: String(cfg.min_grade ?? s.min_grade),
+          only_killzone: Boolean(cfg.only_killzone ?? s.only_killzone),
+        }));
+      }
+    } catch {
+      // Ignore network error on initial load
+    }
+  }, [symbol]);
+
+  // Load from localStorage and fetch existing backend config on mount
   useEffect(() => {
     const savedPhone = localStorage.getItem("wa_alert_phone");
+    const savedSyms = localStorage.getItem("wa_alert_symbols");
+    if (savedSyms) {
+      try {
+        const parsed = JSON.parse(savedSyms);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setWatchedSymbols(Array.from(new Set([...parsed, symbol])));
+        }
+      } catch {}
+    }
     if (savedPhone) {
       setPhone(savedPhone);
-      // Optional: Fetch config from backend using phone number
+      loadConfigForPhone(savedPhone);
     }
-  }, []);
+  }, [loadConfigForPhone, symbol]);
+
+  // Ensure current symbol is included in watchedSymbols when global symbol changes
+  useEffect(() => {
+    setWatchedSymbols(prev => prev.includes(symbol) ? prev : [...prev, symbol]);
+  }, [symbol]);
+
+  const toggleWatchedSymbol = (sym: string) => {
+    setWatchedSymbols(prev =>
+      prev.includes(sym)
+        ? (prev.length > 1 ? prev.filter(s => s !== sym) : prev)
+        : [...prev, sym]
+    );
+  };
 
   const handleSave = async () => {
     if (!phone) {
@@ -39,18 +91,20 @@ export function ConditionalAlertWidget({ symbol }: { symbol: string }) {
     setSaved(false);
 
     try {
+      const finalSymbols = watchedSymbols.length > 0 ? watchedSymbols : [symbol];
       localStorage.setItem("wa_alert_phone", phone);
+      localStorage.setItem("wa_alert_symbols", JSON.stringify(finalSymbols));
       
       const payload = {
         phone,
         enabled,
-        symbols: [symbol], // Specific to this panel's context, but could be global
+        symbols: finalSymbols,
         ...settings
       };
 
       const res = await fetch(`${API_URL}/api/v1/alerts/config`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: apiHeaders(),
         body: JSON.stringify(payload)
       });
       
@@ -123,6 +177,37 @@ export function ConditionalAlertWidget({ symbol }: { symbol: string }) {
             <span style={{ fontSize: "0.75rem", color: "#fff" }}>Min Score:</span>
             <input type="number" min="0" max="100" value={settings.min_score} onChange={e => setSettings(s => ({ ...s, min_score: parseInt(e.target.value) || 0 }))} style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", color: "#fff", padding: "4px 8px", borderRadius: 6, outline: "none", fontSize: "0.75rem", width: 60 }} />
           </div>
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: "0.62rem", textTransform: "uppercase", color: "var(--text-muted)", fontWeight: 800, marginBottom: 6 }}>
+          Watched Pairs ({watchedSymbols.length})
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {Array.from(new Set(["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", symbol, ...watchedSymbols])).map(sym => {
+            const active = watchedSymbols.includes(sym);
+            return (
+              <button
+                key={sym}
+                type="button"
+                onClick={() => toggleWatchedSymbol(sym)}
+                style={{
+                  padding: "4px 10px",
+                  borderRadius: 6,
+                  fontSize: "0.68rem",
+                  fontWeight: 700,
+                  cursor: "pointer",
+                  fontFamily: "monospace",
+                  background: active ? "rgba(16,185,129,0.15)" : "rgba(255,255,255,0.03)",
+                  border: `1px solid ${active ? "rgba(16,185,129,0.4)" : "rgba(255,255,255,0.08)"}`,
+                  color: active ? "#10b981" : "var(--text-muted)",
+                }}
+              >
+                {active ? "✓ " : "+ "}{sym}
+              </button>
+            );
+          })}
         </div>
       </div>
 

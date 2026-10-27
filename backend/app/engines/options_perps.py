@@ -106,6 +106,7 @@ class OptionsPerpsEngine:
         funding_rate_8h: float = 0.01,  # Current 8h funding rate (%)
         long_short_ratio: float = 1.0,
         perp_price: float = None,
+        oi_trend: str = "STABLE",
         expiry_days_list: List[float] = None,
         strike_pct_range: float = 0.15,   # How far OTM to compute (15%)
     ) -> OptionsAnalysisResult:
@@ -151,11 +152,25 @@ class OptionsPerpsEngine:
         if otm_puts and otm_calls:
             skew = (otm_puts[1].theoretical_price - otm_calls[1].theoretical_price) / spot_price * 100
 
-        # Max pain (simplified: ATM strike ± nearest whole number)
-        max_pain = round(spot_price / 1000) * 1000 if spot_price > 1000 else round(spot_price / 100) * 100
+        # Max pain: dynamic strike step scaled to asset price tier (works from $100,000 down to $0.00001)
+        if spot_price <= 0:
+            max_pain = 0.0
+        elif spot_price >= 10000:
+            max_pain = float(round(spot_price / 500) * 500)
+        elif spot_price >= 1000:
+            max_pain = float(round(spot_price / 50) * 50)
+        elif spot_price >= 100:
+            max_pain = float(round(spot_price / 5) * 5)
+        elif spot_price >= 10:
+            max_pain = round(round(spot_price / 0.5) * 0.5, 2)
+        elif spot_price >= 1:
+            max_pain = round(round(spot_price / 0.05) * 0.05, 4)
+        else:
+            mag = 10 ** (math.floor(math.log10(spot_price)) - 1)
+            max_pain = round(round(spot_price / mag) * mag, 8)
 
         # Perp metrics
-        perp = self._analyze_perp(funding_rate_8h, long_short_ratio, spot_price, perp_price)
+        perp = self._analyze_perp(funding_rate_8h, long_short_ratio, spot_price, perp_price, oi_trend=oi_trend)
 
         # Signals + Bias
         signals = []
@@ -262,13 +277,15 @@ class OptionsPerpsEngine:
         else:
             moneyness = "OTM"
 
+        prec = 2 if K >= 10 else (4 if K >= 0.1 else 8)
+        price_prec = 4 if S >= 1 else 8
         return OptionContract(
-            strike=round(K, 2),
+            strike=round(K, prec),
             option_type=opt_type,
             expiry_days=round(T * 365, 1),
-            theoretical_price=round(max(0, price), 4),
-            intrinsic_value=round(intrinsic, 4),
-            time_value=round(time_value, 4),
+            theoretical_price=round(max(0, price), price_prec),
+            intrinsic_value=round(intrinsic, price_prec),
+            time_value=round(time_value, price_prec),
             greeks=OptionGreeks(
                 delta=round(delta, 4),
                 gamma=round(gamma, 6),
@@ -282,7 +299,7 @@ class OptionsPerpsEngine:
         )
 
     def _analyze_perp(
-        self, funding_8h: float, ls_ratio: float, spot: float, perp_price: float = None
+        self, funding_8h: float, ls_ratio: float, spot: float, perp_price: float = None, oi_trend: str = "STABLE"
     ) -> PerpMetrics:
         # Funding rate analysis
         annual = funding_8h * 3 * 365  # 3 periods per day, 365 days
@@ -306,9 +323,13 @@ class OptionsPerpsEngine:
         else:
             ls_signal = "NEUTRAL"
 
-        # OI trend proxy
-        oi_trend = "STABLE"
-        oi_signal = "No strong OI directional signal"
+        # OI trend & interpretation
+        if oi_trend == "RISING":
+            oi_signal = "Rising OI — new leverage entering current move"
+        elif oi_trend == "FALLING":
+            oi_signal = "Falling OI — position unwinding / short covering"
+        else:
+            oi_signal = "No strong OI directional signal"
 
         # Basis
         basis = 0.0

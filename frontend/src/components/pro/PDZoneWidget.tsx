@@ -159,19 +159,23 @@ export function PDZoneWidget({
           </div>
 
           {/* OTE Zone highlight */}
-          {levels && (
+          {levels && levels.range_high > levels.range_low && (
             <div style={{
               position: "absolute",
-              top: `${Math.min(90, 100 - ((levels.ote_high - levels.range_low) / (levels.range_high - levels.range_low)) * 100)}%`,
-              bottom: `${Math.min(90, ((levels.ote_low - levels.range_low) / (levels.range_high - levels.range_low)) * 100)}%`,
+              top: `${Math.max(0, Math.min(95, 100 - ((levels.ote_high - levels.range_low) / (levels.range_high - levels.range_low)) * 100))}%`,
+              bottom: `${Math.max(0, Math.min(95, ((levels.ote_low - levels.range_low) / (levels.range_high - levels.range_low)) * 100))}%`,
               left: 0, right: 0,
-              background: "rgba(139,92,246,0.15)",
-              borderTop: "1px solid rgba(139,92,246,0.5)",
-              borderBottom: "1px solid rgba(139,92,246,0.5)",
+              background: "rgba(139,92,246,0.18)",
+              borderTop: "1px solid rgba(139,92,246,0.55)",
+              borderBottom: "1px solid rgba(139,92,246,0.55)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "flex-end",
+              paddingRight: 6,
             }}>
-              {data.is_in_ote && (
-                <span style={{ fontSize: "0.55rem", color: "#a78bfa", padding: "2px 6px", fontWeight: 800 }}>★ OTE</span>
-              )}
+              <span style={{ fontSize: "0.52rem", color: "#c4b5fd", fontWeight: 800 }}>
+                {data.is_in_ote ? "★ IN OTE" : "OTE"}
+              </span>
             </div>
           )}
 

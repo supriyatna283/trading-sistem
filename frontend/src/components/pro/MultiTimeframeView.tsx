@@ -156,14 +156,16 @@ export function MultiTimeframeView({ symbol }: MTFProps) {
         nearestFVG = data.nearest?.bearish_fvg;
       }
 
+      const rawScore = Number(data.signals?.confluence_score || 0);
+      const normalizedScore = rawScore <= 10 ? Math.min(100, Math.round(rawScore * 10)) : Math.min(100, Math.round(rawScore));
       setTFData(prev => prev.map(d =>
         d.tf === cfg.tf ? {
           ...d,
           bias: bias,
           grade: data.ict_setup?.grade || "D",
-          score: data.signals?.confluence_score || 0,
+          score: normalizedScore,
           freshFVGs,
-          nearestEntry: nearestFVG?.entry_zone?.entry || null,
+          nearestEntry: nearestFVG?.entry_zone?.entry || nearestFVG?.entry_zone?.entry_price || null,
           nearestSL: nearestFVG?.entry_zone?.stop_loss || null,
           loading: false,
         } : d
@@ -235,8 +237,8 @@ export function MultiTimeframeView({ symbol }: MTFProps) {
   // Compute fallback alignment if trueMTF fails
   useEffect(() => {
     const biases = tfData.filter(d => d.bias && d.bias !== "NEUTRAL").map(d => d.bias);
-    const bullish = biases.filter(b => b?.includes("BUY")).length;
-    const bearish = biases.filter(b => b?.includes("SELL")).length;
+    const bullish = biases.filter(b => b?.includes("BUY") || b?.includes("BULL")).length;
+    const bearish = biases.filter(b => b?.includes("SELL") || b?.includes("BEAR")).length;
     if (bullish === 3) setAlignment("bullish");
     else if (bearish === 3) setAlignment("bearish");
     else if (bullish > bearish) setAlignment("bullish");
@@ -260,11 +262,26 @@ export function MultiTimeframeView({ symbol }: MTFProps) {
       </div>
 
       {/* Alignment Banner */}
-      {trueMTF && trueMTF.per_tf ? (
-        <div style={{ padding: "12px 18px", borderRadius: 12, background: trueMTF.confirmed ? (trueMTF.dominant_bias.includes("BUY") ? "rgba(16,185,129,0.1)" : "rgba(239,68,68,0.1)") : "rgba(245,158,11,0.1)", border: `1px solid ${trueMTF.confirmed ? (trueMTF.dominant_bias.includes("BUY") ? "rgba(16,185,129,0.3)" : "rgba(239,68,68,0.3)") : "rgba(245,158,11,0.3)"}`, marginBottom: 16 }}>
+      {trueMTF && trueMTF.per_tf ? (() => {
+        const domBias = String(trueMTF.dominant_bias || "SIDEWAYS").toUpperCase();
+        const isDomBull = domBias.includes("BULL") || domBias.includes("BUY");
+        const isDomBear = domBias.includes("BEAR") || domBias.includes("SELL");
+        const bannerBg = trueMTF.confirmed
+          ? (isDomBull ? "rgba(16,185,129,0.1)" : isDomBear ? "rgba(239,68,68,0.1)" : "rgba(245,158,11,0.1)")
+          : "rgba(245,158,11,0.1)";
+        const bannerBorder = trueMTF.confirmed
+          ? (isDomBull ? "rgba(16,185,129,0.3)" : isDomBear ? "rgba(239,68,68,0.3)" : "rgba(245,158,11,0.3)")
+          : "rgba(245,158,11,0.3)";
+        const bannerColor = trueMTF.confirmed
+          ? (isDomBull ? "#10b981" : isDomBear ? "#ef4444" : "#f59e0b")
+          : "#f59e0b";
+        return (
+        <div style={{ padding: "12px 18px", borderRadius: 12, background: bannerBg, border: `1px solid ${bannerBorder}`, marginBottom: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div style={{ fontSize: "0.85rem", fontWeight: 800, color: trueMTF.confirmed ? (trueMTF.dominant_bias.includes("BUY") ? "#10b981" : "#ef4444") : "#f59e0b" }}>
-              {trueMTF.confirmed ? (trueMTF.dominant_bias.includes("BUY") ? "🟢 TRUE BULLISH ALIGNMENT" : "🔴 TRUE BEARISH ALIGNMENT") : "🟡 MIXED / UNCONFIRMED ALIGNMENT"}
+            <div style={{ fontSize: "0.85rem", fontWeight: 800, color: bannerColor }}>
+              {trueMTF.confirmed
+                ? (isDomBull ? "🟢 TRUE BULLISH ALIGNMENT" : isDomBear ? "🔴 TRUE BEARISH ALIGNMENT" : "🟡 SIDEWAYS ALIGNMENT")
+                : "🟡 MIXED / UNCONFIRMED ALIGNMENT"}
             </div>
             <div style={{ fontSize: "0.7rem", fontWeight: 800, color: "#fff", background: "rgba(255,255,255,0.1)", padding: "2px 8px", borderRadius: 4 }}>
               Score: {trueMTF.agreement_score}/5
@@ -272,11 +289,13 @@ export function MultiTimeframeView({ symbol }: MTFProps) {
           </div>
           <div style={{ fontSize: "0.65rem", color: "var(--text-muted)", marginTop: 6, display: "flex", gap: 12, flexWrap: "wrap" }}>
             {["1d", "4h", "1h", "15m", "5m"].map(tf => {
-              const b = trueMTF.per_tf[tf]?.bias || "SIDEWAYS";
+              const b = String(trueMTF.per_tf[tf]?.bias || "SIDEWAYS").toUpperCase();
+              const isBull = b.includes("BULL") || b.includes("BUY");
+              const isBear = b.includes("BEAR") || b.includes("SELL");
               return (
                 <span key={tf}>
                   <strong>{tf.toUpperCase()}</strong>: 
-                  <span style={{ color: b.includes("BUY") ? "#10b981" : b.includes("SELL") ? "#ef4444" : "#64748b", marginLeft: 4 }}>{b}</span>
+                  <span style={{ color: isBull ? "#10b981" : isBear ? "#ef4444" : "#64748b", fontWeight: 700, marginLeft: 4 }}>{b}</span>
                 </span>
               );
             })}
@@ -287,7 +306,8 @@ export function MultiTimeframeView({ symbol }: MTFProps) {
               : "→ Wait for ≥2 consecutive timeframes to align before entry."}
           </div>
         </div>
-      ) : (
+        );
+      })() : (
         <div style={{ padding: "10px 16px", borderRadius: 10, background: `${alignmentColor}10`, border: `1px solid ${alignmentColor}30`, marginBottom: 16, fontSize: "0.78rem", fontWeight: 800, color: alignmentColor }}>
           {alignmentLabel}
           {alignment === "bullish" && <span style={{ fontSize: "0.62rem", fontWeight: 400, color: "var(--text-muted)", marginLeft: 8 }}>→ All timeframes confirm BUY. Highest probability setup.</span>}

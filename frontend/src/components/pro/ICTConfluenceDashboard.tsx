@@ -40,6 +40,8 @@ interface FullAnalysisData {
   timeframe: string;
   htf: string;
   current_price: number;
+  data_source?: string;
+  is_synthetic?: boolean;
   pd_zone: {
     zone: string;
     zone_pct: number;
@@ -430,6 +432,17 @@ export function ICTConfluenceDashboard({
         </div>
       )}
 
+      {/* ── Synthetic Data Fallback Alert (Anti-Fake Trade Guard) ── */}
+      {data?.is_synthetic && (
+        <div style={{ padding: "12px 18px", borderRadius: 12, background: "rgba(245,158,11,0.15)", border: "1px solid rgba(245,158,11,0.45)", color: "#fde68a", fontSize: "0.8rem", marginBottom: 16, display: "flex", alignItems: "center", gap: 12 }}>
+          <span style={{ fontSize: "1.5rem" }}>⚠️</span>
+          <div>
+            <div style={{ fontWeight: 900, color: "#f59e0b", marginBottom: 4 }}>SYNTHETIC DATA FALLBACK — LIVE EXCHANGE UNREACHABLE</div>
+            <div style={{ fontSize: "0.7rem", color: "#fef3c7" }}>Data feed sedang memakai simulasi sintetis karena koneksi bursa gagal. Rencana entry otomatis & sinyal live dinonaktifkan demi keamanan.</div>
+          </div>
+        </div>
+      )}
+
       {/* ── Macro News Alert (Sprint D) ── */}
       {data?.confluence.macro_restricted && (
         <div style={{ padding: "12px 18px", borderRadius: 12, background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.4)", color: "#fca5a5", fontSize: "0.8rem", marginBottom: 16, display: "flex", alignItems: "center", gap: 12 }}>
@@ -485,7 +498,7 @@ export function ICTConfluenceDashboard({
             {/* Score breakdown bars */}
             <ScoreBreakdown
               breakdown={data.confluence.breakdown}
-              maxPer={{ pd_zone: 4, sweep: 5, ob: 5, killzone: 3, structure: 3, mm_flow: 5 }}
+              maxPer={{ pd_zone: 4, sweep: 5, ob: 5, killzone: 3, structure: 3, mm_flow: 4 }}
             />
           </div>
 
@@ -600,7 +613,7 @@ export function ICTConfluenceDashboard({
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <MiniBar v={data.ob_strength.best_ob.score} color={GRADE_COLOR[data.ob_strength.best_ob.grade] || "#64748b"} />
-                    <span style={{ fontSize: "0.6rem", color: "var(--text-muted)", whiteSpace: "nowrap" }}>{data.ob_strength.best_ob.score}/30</span>
+                    <span style={{ fontSize: "0.6rem", color: "var(--text-muted)", whiteSpace: "nowrap" }}>{data.ob_strength.best_ob.score}/100</span>
                   </div>
                 </div>
               ) : (

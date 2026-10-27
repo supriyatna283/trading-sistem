@@ -15,10 +15,10 @@ export function BacktestWinRateWidget({ symbol, timeframe }: { symbol: string; t
     // Dynamic lookback period based on timeframe to ensure statistical significance
     let days = 30;
     if (timeframe === "1m" || timeframe === "5m") days = 15;
-    else if (timeframe === "15m") days = 30;
+    else if (timeframe === "15m" || timeframe === "30m") days = 30;
     else if (timeframe === "1h") days = 90;
     else if (timeframe === "4h") days = 180;
-    else if (timeframe === "1d") days = 365;
+    else if (timeframe === "1d" || timeframe === "1w") days = 365;
 
     try {
       const res = await fetch(`${API_URL}/api/v1/backtest/run`, {
@@ -37,9 +37,8 @@ export function BacktestWinRateWidget({ symbol, timeframe }: { symbol: string; t
   };
 
   useEffect(() => {
-    // Only fetch if symbol changes, don't auto fetch on mount unless triggered, but here we can just auto-fetch
     if (symbol) fetchBacktest();
-  }, [symbol]);
+  }, [symbol, timeframe]);
 
   if (loading) {
     return <div style={{ padding: 16, borderRadius: 12, background: "rgba(255,255,255,0.02)", border: "1px dashed rgba(255,255,255,0.1)", color: "var(--text-muted)", fontSize: "0.75rem", display: "flex", gap: 8, alignItems: "center" }}>

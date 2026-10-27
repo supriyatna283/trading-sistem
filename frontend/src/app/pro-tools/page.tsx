@@ -27,8 +27,8 @@ const ALL_SYMBOLS = [
   "TIAUSDT", "SEIUSDT", "FTMUSDT", "PEPEUSDT", "WIFUSDT", "JUPUSDT", "ASTERUSDT", "ZECUSDT", "HYPEUSDT"
 ].sort();
 
-const TIMEFRAMES = ["5m", "15m", "1h", "4h", "1d"];
-const HTF_MAP: Record<string, string> = { "5m": "15m", "15m": "1h", "1h": "4h", "4h": "1d", "1d": "1d" };
+const TIMEFRAMES = ["5m", "15m", "30m", "1h", "4h", "1d", "1w"];
+const HTF_MAP: Record<string, string> = { "5m": "15m", "15m": "1h", "30m": "4h", "1h": "4h", "4h": "1d", "1d": "1w", "1w": "1w" };
 
 // ── Tabs ─────────────────────────────────────────────────────────────────────
 type Tab = "confluence" | "mtf" | "wyckoff" | "options-perps" | "alerts" | "market-structure" | "killzone" | "pd-zones" | "sweep" | "ob-strength" | "fvg-breaker" | "position" | "scanner";
@@ -135,14 +135,28 @@ export default function ProToolsPage() {
   const handleSetWAAlert = useCallback(async (data: any) => {
     setSendingWA(true);
     try {
-      const msg = `🚨 *ICT Alert — ${data.symbol}*\n\n` +
-        `📊 Grade: *${data.grade}* | Score: ${data.score}/100\n` +
-        `📈 Bias: *${data.bias || data.signals?.join(", ")}*\n` +
-        (data.entry ? `\n🎯 Entry: ${data.entry.entry?.toLocaleString("en", { maximumFractionDigits: 5 })}\n` +
-          `🛑 SL: ${data.entry.stop_loss?.toLocaleString("en", { maximumFractionDigits: 5 })}\n` +
-          `✅ TP1: ${data.entry.tp1?.toLocaleString("en", { maximumFractionDigits: 5 })}\n` +
-          `✅ TP2: ${data.entry.tp2?.toLocaleString("en", { maximumFractionDigits: 5 })}\n` +
-          `📐 R:R = 1:${data.entry.rr_tp2}` : "") +
+      const sym = data.symbol || symbol;
+      const grade = data.grade || data.signal_grade || "VALID";
+      const rawScore = data.score ?? data.signal_score ?? 0;
+      const score = rawScore <= 10 && rawScore > 0 && !data.signal_score ? Math.round(rawScore * 10) : Math.round(rawScore);
+      const bias = data.bias || data.trend || (Array.isArray(data.signals) ? data.signals.join(", ") : "NEUTRAL");
+
+      // Normalize entry details across ICTConfluenceDashboard, FVGBreakerPanel, OBStrengthPanel, and ProScannerPanel
+      const rawEntry = data.entry || data.setup || null;
+      const entryPrice = rawEntry?.entry ?? rawEntry?.entry_price ?? rawEntry?.entry_low ?? (data.ob ? (data.ob.low + data.ob.high) / 2 : undefined);
+      const slPrice = rawEntry?.stop_loss ?? (data.ob ? (data.ob.type === "BULLISH" ? data.ob.low : data.ob.high) : undefined);
+      const tp1Price = rawEntry?.tp1 ?? rawEntry?.take_profit_1;
+      const tp2Price = rawEntry?.tp2 ?? rawEntry?.take_profit_2;
+      const rrVal = rawEntry?.rr_tp2 ?? rawEntry?.rr_tp1 ?? rawEntry?.risk_reward;
+
+      const msg = `🚨 *ICT Alert — ${sym}*\n\n` +
+        `📊 Grade: *${grade}* | Score: ${score}/100\n` +
+        `📈 Bias: *${bias}*\n` +
+        (entryPrice != null ? `\n🎯 Entry: ${Number(entryPrice).toLocaleString("en", { maximumFractionDigits: 5 })}\n` +
+          (slPrice != null ? `🛑 SL: ${Number(slPrice).toLocaleString("en", { maximumFractionDigits: 5 })}\n` : "") +
+          (tp1Price != null ? `✅ TP1: ${Number(tp1Price).toLocaleString("en", { maximumFractionDigits: 5 })}\n` : "") +
+          (tp2Price != null ? `✅ TP2: ${Number(tp2Price).toLocaleString("en", { maximumFractionDigits: 5 })}\n` : "") +
+          (rrVal != null ? `📐 R:R = 1:${rrVal}` : "") : "") +
         `\n\n_Sent from Pro Tools ICT Dashboard_`;
 
       const res = await fetch("/api/send-wa", {
@@ -152,7 +166,7 @@ export default function ProToolsPage() {
       });
       const json = await res.json();
       if (json.ok) {
-        setToast(`Alert untuk ${data.symbol} (Grade ${data.grade}) berhasil dikirim!`);
+        setToast(`Alert untuk ${sym} (Grade ${grade}) berhasil dikirim!`);
         setTimeout(() => setToast(null), 5000);
       } else {
         setToast(`Gagal kirim: ${json.detail || "unknown error"}`);
@@ -271,16 +285,21 @@ export default function ProToolsPage() {
       </div>
 
       {/* ══════════════════════════════════════════════
-          LIVE SCANNER TAB (NEW)
+          LIVE SCANNER TAB (Kept mounted for instant return, paused when hidden)
       ══════════════════════════════════════════════ */}
       <div style={{ display: activeTab === "scanner" ? "block" : "none" }}>
-        <ProScannerPanel defaultTf={timeframe} onSetWAAlert={handleSetWAAlert} />
+        <ProScannerPanel
+          defaultTf={timeframe}
+          isActive={activeTab === "scanner"}
+          onSetWAAlert={handleSetWAAlert}
+          onSelectSymbol={(sym) => { setSymbol(sym); setActiveTab("confluence"); }}
+        />
       </div>
 
       {/* ══════════════════════════════════════════════
-          CONFLUENCE TAB (NEW)
+          CONFLUENCE TAB (Active-only mount to prevent 13-tab Thundering Herd)
       ══════════════════════════════════════════════ */}
-      <div style={{ display: activeTab === "confluence" ? "block" : "none" }}>
+      {activeTab === "confluence" && (
         <ICTConfluenceDashboard
           symbol={symbol}
           timeframe={timeframe}
@@ -290,47 +309,47 @@ export default function ProToolsPage() {
           onSetWAAlert={handleSetWAAlert}
           onLoadPosCalc={handleLoadTradePlan}
         />
-      </div>
+      )}
 
       {/* ══════════════════════════════════════════════
-          MULTI-TIMEFRAME TAB (NEW)
+          MULTI-TIMEFRAME TAB
       ══════════════════════════════════════════════ */}
-      <div style={{ display: activeTab === "mtf" ? "block" : "none" }}>
+      {activeTab === "mtf" && (
         <MultiTimeframeView symbol={symbol} />
-      </div>
+      )}
 
       {/* ══════════════════════════════════════════════
-          WYCKOFF TAB (SPRINT B)
+          WYCKOFF TAB
       ══════════════════════════════════════════════ */}
-      <div style={{ display: activeTab === "wyckoff" ? "block" : "none" }}>
+      {activeTab === "wyckoff" && (
         <WyckoffPanel symbol={symbol} timeframe={htf} />
-      </div>
+      )}
 
       {/* ══════════════════════════════════════════════
-          OPTIONS & PERPS TAB (SPRINT B)
+          OPTIONS & PERPS TAB
       ══════════════════════════════════════════════ */}
-      <div style={{ display: activeTab === "options-perps" ? "block" : "none" }}>
+      {activeTab === "options-perps" && (
         <OptionsPerpsPanel symbol={symbol} />
-      </div>
+      )}
 
       {/* ══════════════════════════════════════════════
-          CONDITIONAL ALERTS TAB (SPRINT C)
+          CONDITIONAL ALERTS TAB
       ══════════════════════════════════════════════ */}
-      <div style={{ display: activeTab === "alerts" ? "block" : "none" }}>
+      {activeTab === "alerts" && (
         <ConditionalAlertWidget symbol={symbol} />
-      </div>
+      )}
 
       {/* ══════════════════════════════════════════════
-          MARKET STRUCTURE TAB (NEW)
+          MARKET STRUCTURE TAB
       ══════════════════════════════════════════════ */}
-      <div style={{ display: activeTab === "market-structure" ? "block" : "none" }}>
+      {activeTab === "market-structure" && (
         <MarketStructurePanel symbol={symbol} timeframe={timeframe} />
-      </div>
+      )}
 
       {/* ══════════════════════════════════════════════
           KILLZONE TAB
       ══════════════════════════════════════════════ */}
-      <div style={{ display: activeTab === "killzone" ? "block" : "none" }}>
+      {activeTab === "killzone" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr", gap: 20, alignItems: "start" }}>
             <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -359,16 +378,16 @@ export default function ProToolsPage() {
                 <span>📈 Active Pairs — {symbol}</span>
                 <span style={{ fontSize: "0.6rem", padding: "2px 8px", borderRadius: 5, background: "rgba(16,185,129,0.12)", color: "#10b981", fontWeight: 700, border: "1px solid rgba(16,185,129,0.25)" }}>LIVE</span>
               </div>
-              <SessionPairsWidget />
+              <SessionPairsWidget onSymbolSelect={setSymbol} />
             </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* ══════════════════════════════════════════════
           PD ZONES TAB
       ══════════════════════════════════════════════ */}
-      <div style={{ display: activeTab === "pd-zones" ? "block" : "none" }}>
+      {activeTab === "pd-zones" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 20 }}>
             <PDZoneWidget symbol={symbol} htf={htf} timeframe={timeframe} />
@@ -402,26 +421,26 @@ export default function ProToolsPage() {
             </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* ══════════════════════════════════════════════
           SWEEP TAB
       ══════════════════════════════════════════════ */}
-      <div style={{ display: activeTab === "sweep" ? "block" : "none" }}>
+      {activeTab === "sweep" && (
         <LiquiditySweepPanel symbol={symbol} timeframe={timeframe} autoLoad={true} />
-      </div>
+      )}
 
       {/* ══════════════════════════════════════════════
           OB STRENGTH TAB
       ══════════════════════════════════════════════ */}
-      <div style={{ display: activeTab === "ob-strength" ? "block" : "none" }}>
+      {activeTab === "ob-strength" && (
         <OBStrengthPanel symbol={symbol} timeframe={timeframe} htfTimeframe={htf} autoLoad={true} onSetWAAlert={handleSetWAAlert} />
-      </div>
+      )}
 
       {/* ══════════════════════════════════════════════
           FVG + BREAKER TAB
       ══════════════════════════════════════════════ */}
-      <div style={{ display: activeTab === "fvg-breaker" ? "block" : "none" }}>
+      {activeTab === "fvg-breaker" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
           <FVGBreakerPanel symbol={symbol} timeframe={timeframe} autoLoad={true} onSetWAAlert={handleSetWAAlert} />
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
@@ -457,12 +476,12 @@ export default function ProToolsPage() {
             </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* ══════════════════════════════════════════════
           POSITION SIZING TAB
       ══════════════════════════════════════════════ */}
-      <div style={{ display: activeTab === "position" ? "block" : "none" }}>
+      {activeTab === "position" && (
         <div>
           <PositionSizingCalculator symbol={symbol} timeframe={timeframe} initialData={tradePlanContext} />
           <div style={{ marginTop: 20, padding: 24, borderRadius: 16, background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)" }}>
@@ -482,7 +501,7 @@ export default function ProToolsPage() {
             </div>
           </div>
         </div>
-      </div>
+      )}
     </MainLayout>
   );
 }

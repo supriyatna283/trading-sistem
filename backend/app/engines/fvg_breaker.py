@@ -349,28 +349,41 @@ class FVGBreakerEngine:
         return max(0, min(100, s))
 
     def _update_fvg_status(self, fvgs: List[FVG], h, l, c) -> List[FVG]:
+        """
+        ICT FVG lifecycle:
+          - INVERTED (IFVG): a subsequent candle CLOSES beyond the opposite boundary
+            (close < gap_low for BULLISH FVG; close > gap_high for BEARISH FVG).
+          - FILLED: wick reaches/pierces the opposite boundary without a candle closing beyond it.
+          - PARTIAL: wick enters the gap without reaching the opposite boundary.
+          - FRESH: untouched.
+        """
         for fvg in fvgs:
             si = fvg.bar_idx + 2
             if si >= len(c):
                 continue
             sh = h[si:]
             sl = l[si:]
+            sc = c[si:]
             if fvg.type == "BULLISH":
-                mn = float(sl.min()) if len(sl) else fvg.gap_high
-                if mn <= fvg.gap_low:
-                    fvg.status, fvg.fill_pct = "FILLED", 1.0
-                elif mn < fvg.gap_high:
-                    fvg.fill_pct = (fvg.gap_high - mn) / fvg.size
-                    fvg.status = "INVERTED" if fvg.fill_pct > 0.8 else "PARTIAL"
-                    if fvg.fill_pct > 0.8: fvg.is_inverted = True
+                mn_low   = float(sl.min()) if len(sl) else fvg.gap_high
+                mn_close = float(sc.min()) if len(sc) else fvg.gap_high
+                if mn_close < fvg.gap_low:
+                    fvg.status, fvg.fill_pct, fvg.is_inverted = "INVERTED", 1.0, True
+                elif mn_low <= fvg.gap_low:
+                    fvg.status, fvg.fill_pct, fvg.is_inverted = "FILLED", 1.0, False
+                elif mn_low < fvg.gap_high:
+                    fvg.fill_pct = round((fvg.gap_high - mn_low) / fvg.size, 4) if fvg.size > 0 else 0.0
+                    fvg.status, fvg.is_inverted = "PARTIAL", False
             else:
-                mx = float(sh.max()) if len(sh) else fvg.gap_low
-                if mx >= fvg.gap_high:
-                    fvg.status, fvg.fill_pct = "FILLED", 1.0
-                elif mx > fvg.gap_low:
-                    fvg.fill_pct = (mx - fvg.gap_low) / fvg.size
-                    fvg.status = "INVERTED" if fvg.fill_pct > 0.8 else "PARTIAL"
-                    if fvg.fill_pct > 0.8: fvg.is_inverted = True
+                mx_high  = float(sh.max()) if len(sh) else fvg.gap_low
+                mx_close = float(sc.max()) if len(sc) else fvg.gap_low
+                if mx_close > fvg.gap_high:
+                    fvg.status, fvg.fill_pct, fvg.is_inverted = "INVERTED", 1.0, True
+                elif mx_high >= fvg.gap_high:
+                    fvg.status, fvg.fill_pct, fvg.is_inverted = "FILLED", 1.0, False
+                elif mx_high > fvg.gap_low:
+                    fvg.fill_pct = round((mx_high - fvg.gap_low) / fvg.size, 4) if fvg.size > 0 else 0.0
+                    fvg.status, fvg.is_inverted = "PARTIAL", False
         return fvgs
 
     def _add_fvg_entry_zones(self, fvgs: List[FVG], price: float, atr: float) -> List[FVG]:
@@ -473,9 +486,16 @@ class FVGBreakerEngine:
             tc  = len(returns)
             hr  = tc > 0
 
-            # OTE entry: 62% retrace of the flipped supply→demand zone
-            ob_h = sh_price + atr * 0.3
-            ob_l = sh_price - atr * 0.15
+            # Anchor Breaker Block to the actual failed supply/OB candle at the swing high
+            ob_idx = sh_idx
+            for k in range(sh_idx, max(-1, sh_idx - 3), -1):
+                if c[k] >= o[k]:
+                    ob_idx = k
+                    break
+            ob_h = float(max(h[ob_idx], sh_price))
+            ob_l = float(min(l[ob_idx], ob_h - atr * 0.15))
+            if (ob_h - ob_l) > atr * 1.5:
+                ob_l = ob_h - atr * 0.6
             ote  = ob_l + (ob_h - ob_l) * 0.62
 
             vol_mult = float(v[bi]) / avg_v if avg_v > 0 else 1
@@ -508,8 +528,16 @@ class FVGBreakerEngine:
             tc  = len(returns)
             hr  = tc > 0
 
-            ob_h = sl_price + atr * 0.15
-            ob_l = sl_price - atr * 0.3
+            # Anchor Breaker Block to the actual failed demand/OB candle at the swing low
+            ob_idx = sl_idx
+            for k in range(sl_idx, max(-1, sl_idx - 3), -1):
+                if c[k] <= o[k]:
+                    ob_idx = k
+                    break
+            ob_l = float(min(l[ob_idx], sl_price))
+            ob_h = float(max(h[ob_idx], ob_l + atr * 0.15))
+            if (ob_h - ob_l) > atr * 1.5:
+                ob_h = ob_l + atr * 0.6
             ote  = ob_h - (ob_h - ob_l) * 0.62
 
             vol_mult = float(v[bi]) / avg_v if avg_v > 0 else 1

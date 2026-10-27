@@ -34,7 +34,17 @@ const SCORE_LABELS: Record<string, string> = {
   VOL: "Volume", TIM: "Timing", RR: "Risk:Reward",
 };
 
-export function ProScannerPanel({ defaultTf = "1h", onSetWAAlert }: { defaultTf?: string; onSetWAAlert?: (data: any) => void }) {
+export function ProScannerPanel({
+  defaultTf = "1h",
+  isActive = true,
+  onSetWAAlert,
+  onSelectSymbol,
+}: {
+  defaultTf?: string;
+  isActive?: boolean;
+  onSetWAAlert?: (data: any) => void;
+  onSelectSymbol?: (symbol: string) => void;
+}) {
   const router = useRouter();
   const [data, setData] = useState<ScanResult[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -85,15 +95,16 @@ export function ProScannerPanel({ defaultTf = "1h", onSetWAAlert }: { defaultTf?
 
   useEffect(() => { fetchData(); fetchKZ(); }, [fetchData, fetchKZ]);
 
-  // Auto-refresh every minute for scanner, every 30s for killzone
+  // Auto-refresh every minute for scanner, every 30s for killzone (only when tab is active)
   useEffect(() => {
+    if (!isActive) return;
     autoRefreshRef.current = setInterval(() => fetchData(true), 60000);
     const kzInterval = setInterval(fetchKZ, 30000);
     return () => {
       if (autoRefreshRef.current) clearInterval(autoRefreshRef.current);
       clearInterval(kzInterval);
     };
-  }, [fetchData, fetchKZ]);
+  }, [fetchData, fetchKZ, isActive]);
 
   // Multi-filter: grade + trend
   const filteredPairs = data.filter(r => {
@@ -311,12 +322,17 @@ export function ProScannerPanel({ defaultTf = "1h", onSetWAAlert }: { defaultTf?
                 </div>
 
                 {/* Actions */}
-                <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-                  <button onClick={(e) => { e.stopPropagation(); onSetWAAlert?.(row); }} style={{ flex: 1, padding: "8px 0", borderRadius: 8, background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.2)", color: "#10b981", fontSize: "0.7rem", fontWeight: 800, cursor: "pointer", transition: "all 0.2s" }} onMouseEnter={e => e.currentTarget.style.background = "rgba(16,185,129,0.2)"} onMouseLeave={e => e.currentTarget.style.background = "rgba(16,185,129,0.1)"}>
+                <div style={{ display: "flex", gap: 6, marginTop: 16 }}>
+                  {onSelectSymbol && (
+                    <button onClick={(e) => { e.stopPropagation(); onSelectSymbol(row.symbol); }} style={{ flex: 1, padding: "8px 0", borderRadius: 8, background: "rgba(99,102,241,0.14)", border: "1px solid rgba(99,102,241,0.3)", color: "#818cf8", fontSize: "0.68rem", fontWeight: 800, cursor: "pointer", transition: "all 0.2s" }}>
+                      ⚡ ICT Analyze
+                    </button>
+                  )}
+                  <button onClick={(e) => { e.stopPropagation(); onSetWAAlert?.(row); }} style={{ flex: 1, padding: "8px 0", borderRadius: 8, background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.2)", color: "#10b981", fontSize: "0.68rem", fontWeight: 800, cursor: "pointer", transition: "all 0.2s" }} onMouseEnter={e => e.currentTarget.style.background = "rgba(16,185,129,0.2)"} onMouseLeave={e => e.currentTarget.style.background = "rgba(16,185,129,0.1)"}>
                     🔔 WA Alert
                   </button>
-                  <button onClick={(e) => { e.stopPropagation(); router.push(`/charts?symbol=${row.symbol}`); }} style={{ flex: 1, padding: "8px 0", borderRadius: 8, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", color: "#fff", fontSize: "0.7rem", fontWeight: 800, cursor: "pointer", transition: "all 0.2s" }} onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.1)"} onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.05)"}>
-                    📈 Open Chart
+                  <button onClick={(e) => { e.stopPropagation(); router.push(`/charts?symbol=${row.symbol}`); }} style={{ flex: 1, padding: "8px 0", borderRadius: 8, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", color: "#fff", fontSize: "0.68rem", fontWeight: 800, cursor: "pointer", transition: "all 0.2s" }} onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.1)"} onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.05)"}>
+                    📈 Chart
                   </button>
                 </div>
 

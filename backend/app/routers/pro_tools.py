@@ -35,9 +35,25 @@ from app.engines.mtf_confirmation import MTFConfirmationEngine
 from app.engines.macro_news import MacroNewsEngine
 from app.engines.smt_divergence import SMTDivergenceEngine
 from app.engines.volume_profile import VolumeProfileEngine
+from app.engines.sentiment import SentimentEngine
+import httpx
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/pro", tags=["Pro Tools"])
+
+def _prep_df(df, timeframe: str):
+    """Extract data provenance and drop the unclosed forming candle to prevent repainting."""
+    if df is None or df.empty:
+        return df, "unavailable", False
+    data_source = str(df.attrs.get("data_source", "live"))
+    is_synthetic = bool(df.attrs.get("is_synthetic", False)) or data_source == "synthetic"
+    cleaned = MarketDataEngine.drop_unclosed(df, timeframe)
+    if cleaned.empty:
+        cleaned = df
+    cleaned.attrs["data_source"] = data_source
+    cleaned.attrs["is_synthetic"] = is_synthetic
+    return cleaned, data_source, is_synthetic
+
 
 # Engine singletons
 _pd_engine    = PDZoneEngine()
@@ -57,6 +73,128 @@ _mtf_engine   = MTFConfirmationEngine()
 _macro_engine = MacroNewsEngine()
 _smt_engine   = SMTDivergenceEngine()
 _vp_engine    = VolumeProfileEngine()
+_sentiment_engine = SentimentEngine()
+
+
+async def _fetch_live_perp_snapshot(symbol: str, spot_price: float, df_daily) -> dict:
+    """
+    Fetch live perpetual futures metrics (Funding Rate, Mark Price, Open Interest,
+    Long/Short Account Ratio) from Binance Futures with OKX V5 Swap fallback.
+    """
+    sym = symbol.upper()
+    if not sym.endswith("USDT"):
+        sym = f"{sym}USDT"
+    base = sym[:-4]
+    okx_inst = f"{base}-USDT-SWAP"
+
+    funding_8h_pct: Optional[float] = None
+    mark_price: Optional[float] = None
+    oi_coins: Optional[float] = None
+    oi_usd: Optional[float] = None
+    oi_trend: str = "STABLE"
+    ls_ratio: Optional[float] = None
+    source: Optional[str] = None
+
+    # 1. Try Binance Futures via SentimentEngine
+    try:
+        f_list, oi_list, ls_data = await __import__("asyncio").gather(
+            _sentiment_engine.get_funding_rates([sym]),
+            _sentiment_engine.get_open_interest([sym]),
+            _sentiment_engine.get_long_short_ratio(sym, period="1h"),
+            return_exceptions=True,
+        )
+        if isinstance(f_list, list) and f_list:
+            # Binance lastFundingRate is decimal (e.g. 0.0001 = 0.01%)
+            funding_8h_pct = float(f_list[0].get("funding_rate", 0.0)) * 100.0
+            mp = float(f_list[0].get("mark_price", 0.0))
+            if mp > 0:
+                mark_price = mp
+            source = "binance"
+        if isinstance(oi_list, list) and oi_list:
+            oi_coins = float(oi_list[0].get("open_interest_coin", 0.0))
+            if oi_coins > 0:
+                oi_usd = oi_coins * (mark_price or spot_price)
+                source = source or "binance"
+        if isinstance(ls_data, dict) and ls_data.get("ratio") is not None:
+            ls_ratio = float(ls_data["ratio"])
+            source = source or "binance"
+    except Exception as e:
+        logger.debug(f"Binance perp snapshot fallback for {sym}: {e}")
+
+    # 2. Fallback to OKX Public V5 Swap API for any missing metrics
+    if funding_8h_pct is None or oi_usd is None or ls_ratio is None:
+        try:
+            async with httpx.AsyncClient(timeout=6.0) as client:
+                if funding_8h_pct is None:
+                    r_f = await client.get(
+                        "https://www.okx.com/api/v5/public/funding-rate",
+                        params={"instId": okx_inst},
+                    )
+                    if r_f.status_code == 200:
+                        d_f = r_f.json().get("data", [])
+                        if d_f:
+                            funding_8h_pct = float(d_f[0].get("fundingRate", 0.0)) * 100.0
+                            source = source or "okx"
+
+                if mark_price is None:
+                    r_mp = await client.get(
+                        "https://www.okx.com/api/v5/public/mark-price",
+                        params={"instType": "SWAP", "instId": okx_inst},
+                    )
+                    if r_mp.status_code == 200:
+                        d_mp = r_mp.json().get("data", [])
+                        if d_mp and float(d_mp[0].get("markPx", 0) or 0) > 0:
+                            mark_price = float(d_mp[0]["markPx"])
+
+                if oi_usd is None:
+                    r_oi = await client.get(
+                        "https://www.okx.com/api/v5/public/open-interest",
+                        params={"instType": "SWAP", "instId": okx_inst},
+                    )
+                    if r_oi.status_code == 200:
+                        d_oi = r_oi.json().get("data", [])
+                        if d_oi:
+                            oi_ccy = float(d_oi[0].get("oiCcy", 0.0) or 0.0)
+                            oi_usd_val = float(d_oi[0].get("oiUsd", 0.0) or 0.0)
+                            oi_coins = oi_ccy if oi_ccy > 0 else None
+                            oi_usd = oi_usd_val if oi_usd_val > 0 else (oi_ccy * (mark_price or spot_price) if oi_ccy > 0 else None)
+                            source = source or "okx"
+
+                if ls_ratio is None:
+                    r_ls = await client.get(
+                        "https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio",
+                        params={"ccy": base, "period": "1H"},
+                    )
+                    if r_ls.status_code == 200:
+                        d_ls = r_ls.json().get("data", [])
+                        if d_ls and len(d_ls[0]) >= 2:
+                            ls_ratio = float(d_ls[0][1])
+                            source = source or "okx"
+        except Exception as e:
+            logger.debug(f"OKX perp snapshot fallback failed for {sym}: {e}")
+
+    # Infer OI / participation trend from recent volume & close expansion when live OI is present
+    if df_daily is not None and len(df_daily) >= 7 and "volume" in df_daily.columns:
+        vols = df_daily["volume"].astype(float).values
+        recent_v = float(vols[-1])
+        avg_v = float(vols[-7:-1].mean()) if len(vols) >= 7 else float(vols.mean())
+        if avg_v > 0:
+            if recent_v >= avg_v * 1.15:
+                oi_trend = "RISING"
+            elif recent_v <= avg_v * 0.85:
+                oi_trend = "FALLING"
+            else:
+                oi_trend = "STABLE"
+
+    return {
+        "funding_8h_pct": funding_8h_pct,
+        "mark_price": mark_price,
+        "oi_coins": oi_coins,
+        "oi_usd": oi_usd,
+        "oi_trend": oi_trend if source else "UNAVAILABLE",
+        "ls_ratio": ls_ratio,
+        "source": source,
+    }
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Pydantic request/response models
@@ -217,12 +355,14 @@ async def get_pd_zones(req: PDZoneRequest):
     """
     try:
         # Fetch HTF data for range calculation
-        df_htf = await _data_engine.get_candles(req.symbol, req.htf, limit=100)
-        df_entry = await _data_engine.get_candles(req.symbol, req.timeframe, limit=5)
+        df_htf_raw = await _data_engine.get_candles(req.symbol, req.htf, limit=100)
+        df_entry_raw = await _data_engine.get_candles(req.symbol, req.timeframe, limit=10)
 
-        if df_entry is None or df_entry.empty:
+        if df_entry_raw is None or df_entry_raw.empty:
             raise HTTPException(status_code=404, detail=f"No candle data available for {req.symbol}")
 
+        df_entry, data_source, is_synthetic = _prep_df(df_entry_raw, req.timeframe)
+        df_htf, _, _ = _prep_df(df_htf_raw, req.htf)
         current_price = float(df_entry["close"].iloc[-1])
 
         if df_htf is None or df_htf.empty:
@@ -235,6 +375,8 @@ async def get_pd_zones(req: PDZoneRequest):
             "timeframe":    req.timeframe,
             "htf":          req.htf,
             "current_price": current_price,
+            "data_source":  data_source,
+            "is_synthetic": is_synthetic,
             "pd_zone": {
                 "zone":                result.zone,
                 "zone_pct":            result.zone_pct,
@@ -269,15 +411,18 @@ async def get_liquidity_sweep(req: LiquiditySweepRequest):
     Returns pools, sweep events, and directional bias.
     """
     try:
-        df = await _data_engine.get_candles(req.symbol, req.timeframe, limit=req.lookback + 20)
-        if df is None or df.empty:
+        df_raw = await _data_engine.get_candles(req.symbol, req.timeframe, limit=req.lookback + 20)
+        if df_raw is None or df_raw.empty:
             raise HTTPException(status_code=404, detail=f"No candle data for {req.symbol}")
 
+        df, data_source, is_synthetic = _prep_df(df_raw, req.timeframe)
         result = _sweep_engine.analyze(df)
 
         return {
             "symbol":       req.symbol,
             "timeframe":    req.timeframe,
+            "data_source":  data_source,
+            "is_synthetic": is_synthetic,
             **result,
         }
     except HTTPException:
@@ -293,11 +438,14 @@ async def get_ob_strength(req: OBStrengthRequest):
     Score all active Order Blocks by institutional quality (A+ to D).
     """
     try:
-        df_entry = await _data_engine.get_candles(req.symbol, req.timeframe, limit=200)
-        df_htf   = await _data_engine.get_candles(req.symbol, req.htf, limit=100)
+        df_entry_raw = await _data_engine.get_candles(req.symbol, req.timeframe, limit=200)
+        df_htf_raw   = await _data_engine.get_candles(req.symbol, req.htf, limit=100)
 
-        if df_entry is None or df_entry.empty:
+        if df_entry_raw is None or df_entry_raw.empty:
             raise HTTPException(status_code=404, detail=f"No candle data for {req.symbol}")
+
+        df_entry, data_source, is_synthetic = _prep_df(df_entry_raw, req.timeframe)
+        df_htf, _, _ = _prep_df(df_htf_raw, req.htf)
 
         # Get OBs and FVGs from SMC engine
         smc_entry = _smc_engine.analyze(df_entry, req.symbol, req.timeframe)
@@ -316,6 +464,8 @@ async def get_ob_strength(req: OBStrengthRequest):
             "symbol":        req.symbol,
             "timeframe":     req.timeframe,
             "htf":           req.htf,
+            "data_source":   data_source,
+            "is_synthetic":  is_synthetic,
             "total_obs":     len(scored),
             "a_plus_count":  sum(1 for s in scored if s.grade == "A+"),
             "order_blocks":  [_ob_meter.to_dict(s) for s in scored],
@@ -396,12 +546,15 @@ async def get_full_sprint1_analysis(req: FullAnalysisRequest):
     try:
         symbol = req.symbol.upper()
 
-        # Fetch data
-        df_entry = await _data_engine.get_candles(symbol, req.timeframe, limit=200)
-        df_htf   = await _data_engine.get_candles(symbol, req.htf, limit=100)
+        # Fetch data (drop unclosed forming bar & preserve provenance)
+        df_entry_raw = await _data_engine.get_candles(symbol, req.timeframe, limit=200)
+        df_htf_raw   = await _data_engine.get_candles(symbol, req.htf, limit=100)
 
-        if df_entry is None or df_entry.empty:
+        if df_entry_raw is None or df_entry_raw.empty:
             raise HTTPException(status_code=404, detail=f"No candle data for {symbol}")
+
+        df_entry, data_source, is_synthetic = _prep_df(df_entry_raw, req.timeframe)
+        df_htf, _, _ = _prep_df(df_htf_raw, req.htf)
 
         current_price = float(df_entry["close"].iloc[-1])
 
@@ -437,7 +590,8 @@ async def get_full_sprint1_analysis(req: FullAnalysisRequest):
 
         # 8. SMT Divergence Check (Sprint D)
         correlated_sym = "ETHUSDT" if symbol == "BTCUSDT" else "BTCUSDT"
-        df_corr = await _data_engine.get_candles(correlated_sym, req.timeframe, limit=200)
+        df_corr_raw = await _data_engine.get_candles(correlated_sym, req.timeframe, limit=200)
+        df_corr, _, _ = _prep_df(df_corr_raw, req.timeframe)
         if df_corr is not None and not df_corr.empty:
             smt_result = _smt_engine.analyze(df_entry, df_corr, symbol, correlated_sym)
         else:
@@ -461,13 +615,16 @@ async def get_full_sprint1_analysis(req: FullAnalysisRequest):
         max_score       = 24
         score_pct       = round((total_score / max_score) * 100, 1)
 
-        # 7. Macro News Check (Sprint D)
-        macro_status = _macro_engine.check_news_proximity(warning_minutes=60)
+        # 7. Macro News Check (Sprint D — backed by real NewsCalendarEngine)
+        macro_status = await _macro_engine.check_news_proximity_async(warning_minutes=60)
         macro_restricted = macro_status["is_restricted"]
 
-        # Cap the score and force WAIT/NEUTRAL during high-impact news. Grade
-        # and signal are computed exactly once here (single source of truth).
-        if macro_restricted:
+        # Cap the score and force WAIT/NEUTRAL during high-impact news or synthetic fallback data.
+        if is_synthetic:
+            score_pct = min(score_pct, 35)
+            grade = "WAIT"
+            signal = "SYNTHETIC DATA — NO LIVE TRADE"
+        elif macro_restricted:
             score_pct = min(score_pct, 40)
             grade = "WAIT"
             signal = "NEUTRAL"
@@ -500,7 +657,7 @@ async def get_full_sprint1_analysis(req: FullAnalysisRequest):
             if breaker:
                 entry_zone = breaker.get("entry_zone")
 
-        if entry_zone and not macro_restricted:
+        if entry_zone and not macro_restricted and not is_synthetic:
             trade_plan = {
                 "bias":         bias_direction,
                 "entry":        entry_zone.get("entry"),
@@ -529,6 +686,8 @@ async def get_full_sprint1_analysis(req: FullAnalysisRequest):
             "timeframe":     req.timeframe,
             "htf":           req.htf,
             "current_price": current_price,
+            "data_source":   data_source,
+            "is_synthetic":  is_synthetic,
 
             "pd_zone": {
                 "zone":           pd_result.zone,
@@ -644,14 +803,17 @@ async def get_fvg_breaker(req: FVGRequest):
     - Returns nearest key levels to current price
     """
     try:
-        df = await _data_engine.get_candles(req.symbol, req.timeframe, limit=req.limit)
-        if df is None or df.empty:
+        df_raw = await _data_engine.get_candles(req.symbol, req.timeframe, limit=req.limit)
+        if df_raw is None or df_raw.empty:
             raise HTTPException(status_code=404, detail=f"No candle data for {req.symbol}")
 
+        df, data_source, is_synthetic = _prep_df(df_raw, req.timeframe)
         result = _fvg_engine.analyze(df)
         return {
-            "symbol":    req.symbol,
-            "timeframe": req.timeframe,
+            "symbol":       req.symbol,
+            "timeframe":    req.timeframe,
+            "data_source":  data_source,
+            "is_synthetic": is_synthetic,
             **_fvg_engine.to_dict(result),
         }
     except HTTPException:
@@ -680,41 +842,74 @@ async def get_market_structure(req: MarketStructureRequest):
     Returns overall market bias based on recent structure.
     """
     try:
-        df = await _data_engine.get_candles(req.symbol, req.timeframe, limit=req.lookback)
-        if df is None or df.empty:
+        df_raw = await _data_engine.get_candles(req.symbol, req.timeframe, limit=req.lookback)
+        if df_raw is None or df_raw.empty:
             raise HTTPException(status_code=404, detail=f"No candle data for {req.symbol}")
-            
+
+        df, data_source, is_synthetic = _prep_df(df_raw, req.timeframe)
+
         # Re-initialize engine if swing_lookback differs from default
         engine = _ms_engine if req.swing_lookback == 5 else MarketStructureAnalyzer(swing_lookback=req.swing_lookback)
         result = engine.analyze(df, symbol=req.symbol, timeframe=req.timeframe)
-        
-        # Combine labels for the same index (e.g. HH and BOS are emitted separately in market_structure.py)
-        processed_labels = {}
+
+        # Map swing indices -> swing labels (HH, HL, LH, LL)
+        swing_label_by_idx = {}
         for l in result.structure_labels:
-            if l.index not in processed_labels:
-                processed_labels[l.index] = {"index": l.index, "label": "Unknown", "is_break": False, "break_type": None}
-            
-            if l.label in ["BOS", "CHOCH"]:
-                processed_labels[l.index]["is_break"] = True
-                processed_labels[l.index]["break_type"] = l.label
+            if l.label in ("HH", "HL", "LH", "LL"):
+                swing_label_by_idx[l.index] = l.label
+
+        # Build enriched structure events (both swing labels and close-break BOS/CHOCH)
+        final_labels = []
+        for l in result.structure_labels:
+            if l.label in ("BOS", "CHOCH"):
+                # Match the swing point whose level was broken (l.price is the broken swing level)
+                broken_sw = None
+                for sw in reversed(result.swing_points):
+                    if sw.index < l.index and abs(sw.price - l.price) <= max(1e-8, abs(l.price) * 1e-6):
+                        broken_sw = sw
+                        break
+                if broken_sw is not None:
+                    sw_lbl = swing_label_by_idx.get(broken_sw.index, "Swing High" if broken_sw.type == "HIGH" else "Swing Low")
+                    direction = "BULLISH" if broken_sw.type == "HIGH" else "BEARISH"
+                else:
+                    sw_lbl = "Structure Level"
+                    direction = result.bias if result.bias in ("BULLISH", "BEARISH") else "BULLISH"
+                final_labels.append({
+                    "index": l.index,
+                    "label": sw_lbl,
+                    "is_break": True,
+                    "break_type": l.label,
+                    "direction": direction,
+                    "broken_level": l.price,
+                    "time": str(l.time) if l.time else None,
+                })
             else:
-                processed_labels[l.index]["label"] = l.label
-                
-        final_labels = list(processed_labels.values())
+                final_labels.append({
+                    "index": l.index,
+                    "label": l.label,
+                    "is_break": False,
+                    "break_type": None,
+                    "direction": "BULLISH" if l.label in ("HH", "HL") else "BEARISH",
+                    "broken_level": l.price,
+                    "time": str(l.time) if l.time else None,
+                })
 
         return {
             "symbol": result.symbol,
             "timeframe": result.timeframe,
+            "data_source": data_source,
+            "is_synthetic": is_synthetic,
             "bias": result.bias,
             "swing_points": [
                 {
                     "index": s.index,
                     "price": s.price,
                     "type": s.type,
-                    "time": str(s.time) if s.time else None
-                } for s in result.swing_points[-20:] # Return last 20 swings
+                    "swing_label": swing_label_by_idx.get(s.index, s.type),
+                    "time": str(s.time) if s.time else None,
+                } for s in result.swing_points[-20:]
             ],
-            "structure_labels": final_labels[-10:] # Return last 10 structure events
+            "structure_labels": final_labels[-25:],
         }
     except HTTPException:
         raise
@@ -810,10 +1005,10 @@ async def get_volatility(req: VolatilityRequest):
 async def get_wyckoff(req: WyckoffRequest):
     """Detect Wyckoff phases (Accumulation / Distribution) for macro context."""
     try:
-        df = await _data_engine.get_candles(req.symbol, req.timeframe, limit=req.limit)
-        if df is None or df.empty:
+        df_raw = await _data_engine.get_candles(req.symbol, req.timeframe, limit=req.limit)
+        if df_raw is None or df_raw.empty:
             raise HTTPException(status_code=404, detail=f"No candle data for {req.symbol}")
-        
+        df, data_source, is_synthetic = _prep_df(df_raw, req.timeframe)
         result = _wyckoff_engine.analyze(df, lookback=req.limit)
         return {
             "symbol": req.symbol,
@@ -834,55 +1029,67 @@ async def get_wyckoff(req: WyckoffRequest):
 
 @router.post("/options-perps")
 async def get_options_perps(req: OptionsPerpsRequest):
-    """Options & perps analysis.
-
-    Funding rate, open interest and long/short ratio are NOT connected to a
-    live data source, so they are reported as unavailable rather than
-    fabricating placeholder values. Option pricing uses realized (historical)
-    volatility as a stand-in for implied volatility.
-    """
+    """Options & perps analysis connected to live Binance/OKX perpetual futures feeds."""
     try:
-        df = await _data_engine.get_candles(req.symbol, "1d", limit=30)
-        if df is None or df.empty:
+        df_raw = await _data_engine.get_candles(req.symbol, "1d", limit=35)
+        if df_raw is None or df_raw.empty:
             raise HTTPException(status_code=404, detail=f"No candle data for {req.symbol}")
 
+        df, data_source, is_synthetic = _prep_df(df_raw, "1d")
         spot_price = float(df["close"].iloc[-1])
 
-        # Realized (historical) volatility as a stand-in for implied volatility.
+        # Realized 30-day annualized volatility
         returns = df["close"].pct_change().dropna()
-        hist_vol = float(returns.std() * (365 ** 0.5)) if len(returns) > 1 else 0.0
+        hist_vol = float(returns.std() * (365 ** 0.5)) if len(returns) > 1 else 0.5
 
-        # Neutral placeholders keep the options engine running, but the response
-        # reports perp metrics as unavailable instead of inventing values.
+        # Fetch live perpetual futures metrics (Binance Futures -> OKX Swap fallback)
+        perp_snap = await _fetch_live_perp_snapshot(req.symbol, spot_price, df)
+        live_funding = perp_snap["funding_8h_pct"]
+        live_ls = perp_snap["ls_ratio"]
+        live_mark = perp_snap["mark_price"]
+        live_oi_trend = perp_snap["oi_trend"]
+
         result = _options_engine.analyze(
             spot_price=spot_price,
-            iv_30d=hist_vol,
-            funding_rate_8h=0.0,
-            long_short_ratio=1.0,
-            perp_price=None,
+            iv_30d=hist_vol if hist_vol > 0 else 0.5,
+            funding_rate_8h=live_funding if live_funding is not None else 0.0,
+            long_short_ratio=live_ls if live_ls is not None else 1.0,
+            perp_price=live_mark,
+            oi_trend=live_oi_trend if live_oi_trend != "UNAVAILABLE" else "STABLE",
+        )
+
+        has_live_perp = perp_snap["source"] is not None
+        disclaimer = (
+            None
+            if has_live_perp
+            else "Live exchange derivatives feed sedang tidak terjangkau; metrik perpetual ditampilkan sebagai N/A."
         )
 
         return {
-            "symbol": req.symbol,
+            "symbol": req.symbol.upper(),
+            "data_source": data_source,
+            "is_synthetic": is_synthetic,
+            "perp_source": perp_snap["source"] or "unavailable",
             "spot_price": result.spot_price,
-            "iv_30d_pct": result.iv_30d,  # realized vol, in percent
+            "mark_price": live_mark,
+            "iv_30d_pct": round(result.iv_30d, 2),
             "put_call_ratio": result.put_call_ratio,
             "max_pain": result.max_pain_strike,
             "skew_pct": result.skew,
             "options_bias": result.options_bias,
-            # Perp metrics are not wired to a live feed — report honestly.
-            "funding_rate_8h": None,
-            "funding_sentiment": "UNAVAILABLE",
-            "oi_trend": "UNAVAILABLE",
-            "long_short_ratio": None,
-            "ls_signal": "UNAVAILABLE",
-            "basis_pct": None,
-            "data_disclaimer": (
-                "Funding rate, open interest, dan long/short ratio belum tersambung "
-                "ke data source live; ditampilkan sebagai UNAVAILABLE, bukan angka "
-                "perkiraan. Volatilitas memakai realized volatility (historis), bukan "
-                "implied volatility pasar."
-            ),
+            "signals": result.signals,
+            "confluence_score": result.confluence_score,
+            "funding_rate_8h": round(live_funding, 4) if live_funding is not None else None,
+            "funding_annualized": result.perp.funding_annualized if (result.perp and live_funding is not None) else None,
+            "funding_sentiment": result.perp.funding_sentiment if (result.perp and live_funding is not None) else "UNAVAILABLE",
+            "oi_trend": live_oi_trend,
+            "open_interest_usd": round(perp_snap["oi_usd"], 2) if perp_snap["oi_usd"] is not None else None,
+            "open_interest_coins": round(perp_snap["oi_coins"], 2) if perp_snap["oi_coins"] is not None else None,
+            "long_short_ratio": round(live_ls, 3) if live_ls is not None else None,
+            "ls_signal": result.perp.ls_signal if (result.perp and live_ls is not None) else "UNAVAILABLE",
+            "basis_pct": result.perp.basis_pct if (result.perp and live_mark is not None) else None,
+            "carry_signal": result.perp.carry_signal if (result.perp and live_mark is not None) else "FLAT",
+            "data_disclaimer": disclaimer,
         }
     except Exception as e:
         logger.exception("Options/Perps error")
@@ -896,7 +1103,8 @@ async def get_mtf_alignment(req: MTFAlignmentRequest):
         tfs = ["1d", "4h", "1h", "15m", "5m"]
         candles_by_tf = {}
         for tf in tfs:
-            df = await _data_engine.get_candles(req.symbol, tf, limit=100)
+            df_raw = await _data_engine.get_candles(req.symbol, tf, limit=100)
+            df, _, _ = _prep_df(df_raw, tf)
             candles_by_tf[tf] = df
             
         result = _mtf_engine.analyze(candles_by_tf, req.symbol)

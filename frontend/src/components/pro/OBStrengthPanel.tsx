@@ -117,11 +117,11 @@ export function OBStrengthPanel({ symbol, timeframe, htfTimeframe, autoLoad = tr
             style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: "6px 10px", color: "#fff", fontSize: "0.78rem", width: 110, fontFamily: "monospace" }} />
           <select value={tf} onChange={e => setTf(e.target.value)}
             style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: "6px 10px", color: "#fff", fontSize: "0.78rem" }}>
-            {["5m","15m","1h","4h","1d"].map(t => <option key={t}>{t}</option>)}
+            {["5m","15m","30m","1h","4h","1d","1w"].map(t => <option key={t}>{t}</option>)}
           </select>
           <select value={htf} onChange={e => setHtf(e.target.value)}
             style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: "6px 10px", color: "#fff", fontSize: "0.78rem" }}>
-            {["15m","1h","4h","1d","1w"].map(t => <option key={t}>{t}</option>)}
+            {["15m","30m","1h","4h","1d","1w"].map(t => <option key={t}>{t}</option>)}
           </select>
           <button onClick={() => fetch()} disabled={loading} style={{
             padding: "6px 16px", borderRadius: 8, background: "rgba(245,158,11,0.15)",

@@ -338,7 +338,7 @@ export function FVGBreakerPanel({ symbol, timeframe, autoLoad = true, onSetWAAle
           style={{ background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:8, padding:"8px 12px", color:"#fff", fontSize:"0.8rem", width:120, fontFamily:"monospace", fontWeight:700 }} />
         <select value={tf} onChange={e => setTf(e.target.value)}
           style={{ background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:8, padding:"8px 12px", color:"#fff", fontSize:"0.8rem" }}>
-          {["5m","15m","1h","4h","1d"].map(t => <option key={t}>{t}</option>)}
+          {["5m","15m","30m","1h","4h","1d","1w"].map(t => <option key={t}>{t}</option>)}
         </select>
         <button onClick={scan} disabled={loading} style={{ padding:"8px 20px", borderRadius:8, background:"rgba(99,102,241,0.15)", border:"1px solid rgba(99,102,241,0.35)", color:"#6366f1", fontWeight:800, fontSize:"0.78rem", cursor:"pointer", display:"flex", alignItems:"center", gap:6 }}>
           {loading ? <><span style={{ display:"inline-block", animation:"spin .9s linear infinite" }}>⟳</span> Scanning...</> : "Scan FVG + Breakers"}
@@ -357,7 +357,7 @@ export function FVGBreakerPanel({ symbol, timeframe, autoLoad = true, onSetWAAle
           return (
             <button
               onClick={() => {
-                onSetWAAlert({ symbol: sym, score: data.signals?.confluence_score, grade: data.ict_setup?.grade, entry, bias });
+                onSetWAAlert({ symbol: sym, score: data.ict_setup?.total ?? Math.min(100, (data.signals?.confluence_score || 0) * 10), grade: data.ict_setup?.grade, entry, bias });
               }}
               style={{ padding:"8px 16px", borderRadius:8, background:"rgba(16,185,129,0.12)", border:"1px solid rgba(16,185,129,0.3)", color:"#10b981", fontWeight:800, fontSize:"0.75rem", cursor:"pointer", display:"flex", alignItems:"center", gap:6 }}
             >

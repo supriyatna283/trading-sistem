@@ -127,10 +127,33 @@ class LiquiditySweepEngine:
 
     # ────────────────── Pool Detection ──────────────────
 
+    def _find_swing_pivots(
+        self, prices: np.ndarray, n: int, pool_type: str, window: int = 2
+    ) -> List[int]:
+        """Return indices of local swing highs or swing lows separated by at least `window` bars."""
+        pivots: List[int] = []
+        for i in range(window, n - 1):
+            right_end = min(n, i + window + 1)
+            left_slice = prices[i - window : i]
+            right_slice = prices[i + 1 : right_end]
+            if len(left_slice) == 0 or len(right_slice) == 0:
+                continue
+            val = prices[i]
+            if pool_type == "EQUAL_HIGH":
+                if val >= float(np.max(left_slice)) and val >= float(np.max(right_slice)):
+                    if val > float(np.min(left_slice)) or val > float(np.min(right_slice)):
+                        if not pivots or (i - pivots[-1]) >= window:
+                            pivots.append(i)
+            else:
+                if val <= float(np.min(left_slice)) and val <= float(np.min(right_slice)):
+                    if val < float(np.max(left_slice)) or val < float(np.max(right_slice)):
+                        if not pivots or (i - pivots[-1]) >= window:
+                            pivots.append(i)
+        return pivots
+
     def _detect_liquidity_pools(self, df: pd.DataFrame) -> List[LiquidityPool]:
         """
-        Find equal highs and equal lows that form liquidity pools.
-        Equal = within eq_tolerance_pct of each other.
+        Find equal swing highs and equal swing lows that form institutional liquidity pools.
         """
         highs  = df["high"].astype(float).values
         lows   = df["low"].astype(float).values
@@ -138,51 +161,55 @@ class LiquiditySweepEngine:
 
         pools: List[LiquidityPool] = []
 
-        # Equal Highs
+        # Equal Swing Highs
         pools += self._cluster_equal_levels(highs, n, "EQUAL_HIGH")
-        # Equal Lows
+        # Equal Swing Lows
         pools += self._cluster_equal_levels(lows, n, "EQUAL_LOW")
 
-        # Keep only pools with minimum touches
         pools = [p for p in pools if p.strength >= self.min_touches]
-
         return pools
 
     def _cluster_equal_levels(
         self, prices: np.ndarray, n: int, pool_type: str
     ) -> List[LiquidityPool]:
-        """Group price levels into clusters of equal levels."""
+        """Group swing pivot levels into clusters of equal highs/lows."""
         pools: List[LiquidityPool] = []
-        used = [False] * n
+        pivots = self._find_swing_pivots(prices, n, pool_type, window=2)
+        used = [False] * len(pivots)
 
-        for i in range(n):
-            if used[i]:
+        for idx_a, i in enumerate(pivots):
+            if used[idx_a]:
                 continue
-            base_price = prices[i]
+            base_price = float(prices[i])
             tolerance  = base_price * self.eq_tolerance_pct
             cluster_indices = [i]
             cluster_prices  = [base_price]
 
-            for j in range(i + 1, n):
-                if used[j]:
+            for idx_b in range(idx_a + 1, len(pivots)):
+                if used[idx_b]:
                     continue
-                if abs(prices[j] - base_price) <= tolerance:
+                j = pivots[idx_b]
+                if j - cluster_indices[-1] < 2:
+                    continue
+                if abs(float(prices[j]) - base_price) <= tolerance:
                     cluster_indices.append(j)
-                    cluster_prices.append(prices[j])
-                    used[j] = True
+                    cluster_prices.append(float(prices[j]))
+                    used[idx_b] = True
 
             if len(cluster_indices) >= self.min_touches:
-                avg_price = float(np.mean(cluster_prices))
+                used[idx_a] = True
+                # Anchor pool formation at the 2nd chronological swing touch so subsequent
+                # sweep wicks are evaluated as sweeps rather than absorbed into last_seen.
+                anchor_touches = cluster_prices[:self.min_touches]
+                avg_price = float(np.mean(anchor_touches))
                 pools.append(LiquidityPool(
                     price=round(avg_price, 8),
                     type=pool_type,
                     strength=len(cluster_indices),
                     bar_indices=cluster_indices,
-                    first_seen=min(cluster_indices),
-                    last_seen=max(cluster_indices),
+                    first_seen=cluster_indices[0],
+                    last_seen=cluster_indices[self.min_touches - 1],
                 ))
-                for idx in cluster_indices:
-                    used[idx] = True
 
         return pools
 
@@ -212,18 +239,20 @@ class LiquiditySweepEngine:
 
                 # ── BUY-SIDE SWEEP (Equal Highs swept then price rejects down)
                 if pool.type == "EQUAL_HIGH":
-                    # A sweep just needs the wick to pierce the level and close back below it.
                     wick_pierces = highs[i] > pool.price and closes[i] < pool.price
                     if wick_pierces:
+                        buf = max(atr * 0.15, highs[i] * 0.0005)
+                        ez_high = float(pool.price)
+                        ez_low  = float(min(closes[i], pool.price - max(atr * 0.2, pool.price * 0.001)))
                         sweep_event = SweepEvent(
                             pool=pool,
                             sweep_type="BUY_SIDE_SWEEP",
                             direction_after="SELL",
                             sweep_bar_idx=i,
-                            sweep_price=highs[i],
-                            entry_zone_low=pool.price * 0.998,
-                            entry_zone_high=pool.price * 1.002,
-                            invalidation=highs[i] * 1.001,
+                            sweep_price=float(highs[i]),
+                            entry_zone_low=min(ez_low, ez_high),
+                            entry_zone_high=max(ez_low, ez_high),
+                            invalidation=float(highs[i] + buf),
                         )
                         pool.swept = True
                         pool.sweep_bar = i
@@ -232,15 +261,18 @@ class LiquiditySweepEngine:
                 elif pool.type == "EQUAL_LOW":
                     wick_pierces = lows[i] < pool.price and closes[i] > pool.price
                     if wick_pierces:
+                        buf = max(atr * 0.15, lows[i] * 0.0005)
+                        ez_low  = float(pool.price)
+                        ez_high = float(max(closes[i], pool.price + max(atr * 0.2, pool.price * 0.001)))
                         sweep_event = SweepEvent(
                             pool=pool,
                             sweep_type="SELL_SIDE_SWEEP",
                             direction_after="BUY",
                             sweep_bar_idx=i,
-                            sweep_price=lows[i],
-                            entry_zone_low=pool.price * 0.998,
-                            entry_zone_high=pool.price * 1.002,
-                            invalidation=lows[i] * 0.999,
+                            sweep_price=float(lows[i]),
+                            entry_zone_low=min(ez_low, ez_high),
+                            entry_zone_high=max(ez_low, ez_high),
+                            invalidation=float(max(0.0, lows[i] - buf)),
                         )
                         pool.swept = True
                         pool.sweep_bar = i
@@ -280,7 +312,7 @@ class LiquiditySweepEngine:
         opens  = df["open"].astype(float).values
         closes = df["close"].astype(float).values
 
-        for j in range(sweep_idx + 1, min(sweep_idx + 4, n)):
+        for j in range(sweep_idx, min(sweep_idx + 4, n)):
             body = closes[j] - opens[j]
             body_abs = abs(body)
 

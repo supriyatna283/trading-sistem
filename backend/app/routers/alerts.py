@@ -6,10 +6,11 @@ Endpoints for configuring and testing WhatsApp trading alerts.
 
 import logging
 from typing import Optional, List
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from app.engines.alert_engine import ICTAlertEngine, AlertConfig, AlertType
+from app.security import require_api_key, rate_limit
 from app.services.whatsapp_service import WhatsAppService, WAMessage
 
 logger = logging.getLogger(__name__)
@@ -67,14 +68,14 @@ async def get_config(phone: str):
     return {"found": True, "config": cfg.__dict__}
 
 
-@router.post("/config")
+@router.post("/config", dependencies=[Depends(require_api_key), Depends(rate_limit("alerts_config", max_calls=15, window_sec=60))])
 async def save_config(req: AlertConfigRequest):
     cfg = AlertConfig(**req.dict())
     _configs[req.phone] = cfg
     return {"ok": True, "message": "Alert config saved.", "config": cfg.__dict__}
 
 
-@router.post("/test")
+@router.post("/test", dependencies=[Depends(require_api_key), Depends(rate_limit("alerts_test", max_calls=5, window_sec=60))])
 async def send_test_alert(phone: str = Query(..., description="Phone e.g. 628123456789")):
     """Send a test WhatsApp message to verify connection."""
     dummy_cfg = AlertConfig(
@@ -107,7 +108,7 @@ async def send_test_alert(phone: str = Query(..., description="Phone e.g. 628123
     return {"ok": result["ok"], "detail": result.get("detail"), "preview": alert.message}
 
 
-@router.post("/send")
+@router.post("/send", dependencies=[Depends(require_api_key), Depends(rate_limit("alerts_send", max_calls=10, window_sec=60))])
 async def send_manual_alert(req: ManualAlertRequest):
     """Manually trigger a specific alert type (bypasses filters)."""
     dummy_cfg = AlertConfig(
@@ -164,7 +165,7 @@ async def preview_alert(
         return {"ok": False, "preview": "Alert suppressed by engine"}
     return {"ok": True, "alert_type": alert_type, "symbol": symbol, "preview": alert.message}
 
-@router.post("/test-broadcast")
+@router.post("/test-broadcast", dependencies=[Depends(require_api_key), Depends(rate_limit("alerts_broadcast", max_calls=5, window_sec=60))])
 async def test_broadcast(
     symbol: str = Query("BTCUSDT"),
     score: float = Query(26.0, description="Score out of 30. e.g. 26 = A+"),
@@ -218,7 +219,7 @@ async def scanner_status():
     from app.services.live_alert_scanner import scan_state
     return scan_state
 
-@router.post("/scanner/trigger")
+@router.post("/scanner/trigger", dependencies=[Depends(require_api_key), Depends(rate_limit("alerts_scan_trigger", max_calls=3, window_sec=60))])
 async def trigger_scan_now():
     """Manually trigger one scan cycle immediately (for testing)."""
     from app.services.live_alert_scanner import _run_scan_cycle, scan_state
@@ -346,7 +347,7 @@ async def get_signal_for_symbol(symbol: str):
         return {"found": False, "message": f"No signal tracked for {symbol.upper()}"}
     return {"found": True, "signal": result}
 
-@router.post("/signal-cancel/{symbol}")
+@router.post("/signal-cancel/{symbol}", dependencies=[Depends(require_api_key), Depends(rate_limit("alerts_cancel", max_calls=10, window_sec=60))])
 async def cancel_signal(symbol: str, reason: str = Query("manual_cancel")):
     """Manually cancel an active signal to allow a new one for that symbol."""
     signal_state_manager.force_cancel(symbol.upper(), reason)

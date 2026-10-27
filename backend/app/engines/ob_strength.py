@@ -233,17 +233,37 @@ class OBStrengthMeter:
     def _count_touches(
         self, ob: OrderBlock, highs, lows, closes, ob_idx: int, n: int
     ) -> tuple[int, int]:
-        """Count how many times price has re-entered the OB zone."""
+        """
+        Count how many distinct times price has returned to test the OB zone
+        after first departing the zone via displacement.
+        """
         touch_count = 0
-        for i in range(ob_idx + 2, n):
+        has_left_zone = False
+        in_touch = False
+
+        for i in range(ob_idx + 1, n):
             if ob.type == "BULLISH":
-                # Price wicking into OB from below
-                if lows[i] <= ob.high and closes[i] > ob.low:
-                    touch_count += 1
+                if not has_left_zone:
+                    if lows[i] > ob.high:
+                        has_left_zone = True
+                    continue
+                if lows[i] <= ob.high and closes[i] >= ob.low:
+                    if not in_touch:
+                        touch_count += 1
+                        in_touch = True
+                elif lows[i] > ob.high:
+                    in_touch = False
             else:
-                # Price wicking into OB from above
-                if highs[i] >= ob.low and closes[i] < ob.high:
-                    touch_count += 1
+                if not has_left_zone:
+                    if highs[i] < ob.low:
+                        has_left_zone = True
+                    continue
+                if highs[i] >= ob.low and closes[i] <= ob.high:
+                    if not in_touch:
+                        touch_count += 1
+                        in_touch = True
+                elif highs[i] < ob.low:
+                    in_touch = False
 
         penalty = min(touch_count * 15, 45)  # Cap at -45 pts
         return touch_count, penalty

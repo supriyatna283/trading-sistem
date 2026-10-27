@@ -154,9 +154,21 @@ class MarketScanner:
         tasks = [self.data_engine.get_candles(symbol, tf, 200) for tf in tfs]
         dfs = await asyncio.gather(*tasks, return_exceptions=True)
 
+        is_synthetic = False
+        data_source = "live"
         for i, df in enumerate(dfs):
-            if not isinstance(df, Exception) and not df.empty:
-                candles_by_tf[tfs[i]] = df
+            if not isinstance(df, Exception) and df is not None and not df.empty:
+                tf_name = tfs[i]
+                src = str(df.attrs.get("data_source", "live"))
+                syn = bool(df.attrs.get("is_synthetic", False)) or src == "synthetic"
+                if tf_name == entry_tf:
+                    data_source = src
+                    is_synthetic = syn
+                cleaned = self.data_engine.drop_unclosed(df, tf_name)
+                cleaned.attrs["data_source"] = src
+                cleaned.attrs["is_synthetic"] = syn
+                if not cleaned.empty:
+                    candles_by_tf[tf_name] = cleaned
 
         if not candles_by_tf:
             return {
@@ -219,8 +231,8 @@ class MarketScanner:
             market_intel_data=market_intel_data,
         )
 
-        # Liquidity status
-        swept = self.smc.check_liquidity_sweep(entry_df, smc.liquidity_levels)
+        # Liquidity status (check genuine wick-sweep from V3 liquidity levels first)
+        swept = any(getattr(l, "swept", False) for l in smc.liquidity_levels) or self.smc.check_liquidity_sweep(entry_df, smc.liquidity_levels)
         if swept:
             liq_status = "Liquidity taken"
         elif smc.liquidity_levels:
@@ -262,14 +274,15 @@ class MarketScanner:
         else:
             setup_status = "No setup"
 
-        price_change_24h = 0
-        if len(entry_df) >= 24:
-            price_24h_ago = float(entry_df.iloc[-24]["close"])
+        price_change_24h = 0.0
+        bars_24h = {"5m": 288, "15m": 96, "30m": 48, "1h": 24, "4h": 6, "1d": 1}.get(entry_tf, 24)
+        if len(entry_df) > bars_24h:
+            price_24h_ago = float(entry_df.iloc[-(bars_24h + 1)]["close"])
             if price_24h_ago > 0:
                 price_change_24h = ((latest_price - price_24h_ago) / price_24h_ago) * 100
 
         # RSI Analysis
-        rsi_1h = calculate_rsi(candles_by_tf.get("1h", pd.DataFrame()), 14)
+        rsi_1h = calculate_rsi(candles_by_tf.get("1h", entry_df), 14)
         rsi_4h = calculate_rsi(candles_by_tf.get("4h", pd.DataFrame()), 14)
         rsi_1d = calculate_rsi(candles_by_tf.get("1d", pd.DataFrame()), 14)
 
@@ -307,16 +320,35 @@ class MarketScanner:
                    + det.get("news", {}).get("score", 0))
         tim_pct = round(tim_raw / 2 * 100)
 
-        # SMC: derive from actual SMC analysis object (not confluence details)
-        smc_points = 0
-        smc_max = 4
-        if hasattr(smc, "unmitigated_ob_count") and smc.unmitigated_ob_count > 0:
-            smc_points += 2
-        if hasattr(smc, "unfilled_fvg_count") and smc.unfilled_fvg_count > 0:
-            smc_points += 1
-        if hasattr(smc, "pd_zone") and smc.pd_zone in ("DISCOUNT", "PREMIUM"):
-            smc_points += 1
-        smc_pct = round(smc_points / smc_max * 100)
+        # SMC: derive from actual SmartMoneyAnalysis V3 attributes
+        smc_points = 0.0
+        smc_max = 4.0
+        active_obs = [ob for ob in getattr(smc, "order_blocks", []) if not getattr(ob, "invalidated", False)]
+        unmitigated_obs = [ob for ob in active_obs if not getattr(ob, "mitigated", False)]
+        if unmitigated_obs:
+            smc_points += 1.5
+        elif active_obs:
+            smc_points += 0.75
+
+        active_fvgs = [f for f in getattr(smc, "fvgs", []) if not getattr(f, "filled", False)]
+        if active_fvgs:
+            smc_points += 1.0
+
+        pd_mid = getattr(smc, "premium_discount_mid", None)
+        if pd_mid and latest_price > 0:
+            in_favorable_pd = (
+                (structure.bias == "BULLISH" and latest_price < pd_mid)
+                or (structure.bias == "BEARISH" and latest_price > pd_mid)
+            )
+            if in_favorable_pd:
+                smc_points += 1.0
+            else:
+                smc_points += 0.5
+
+        if swept:
+            smc_points += 0.5
+
+        smc_pct = round(min(smc_points, smc_max) / smc_max * 100)
 
         # RR: derive from MTF + order book + S/R proximity
         rr_points = 0
@@ -366,6 +398,10 @@ class MarketScanner:
         rejection_reasons = []
         hard_rejected = False
         
+        if is_synthetic:
+            hard_rejected = True
+            rejection_reasons.append("Synthetic fallback data")
+
         if signal_score < 25:
             hard_rejected = True
             rejection_reasons.append("Low confluence")
@@ -392,6 +428,8 @@ class MarketScanner:
 
         return {
             "symbol": symbol,
+            "data_source": data_source,
+            "is_synthetic": is_synthetic,
             "trend": structure.bias,
             "latest_price": latest_price,
             "price_change_24h": price_change_24h,

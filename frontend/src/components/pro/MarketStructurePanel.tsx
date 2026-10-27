@@ -7,8 +7,16 @@ interface MarketStructureData {
   symbol: string;
   timeframe: string;
   bias: "BULLISH" | "BEARISH" | "SIDEWAYS";
-  swing_points: Array<{ index: number; price: number; type: "HIGH" | "LOW"; time: string | null }>;
-  structure_labels: Array<{ index: number; label: "HH" | "HL" | "LH" | "LL"; is_break: boolean; break_type: "BOS" | "CHOCH" | null }>;
+  swing_points: Array<{ index: number; price: number; type: "HIGH" | "LOW"; swing_label?: string; time: string | null }>;
+  structure_labels: Array<{
+    index: number;
+    label: string;
+    is_break: boolean;
+    break_type: "BOS" | "CHOCH" | null;
+    direction?: "BULLISH" | "BEARISH";
+    broken_level?: number;
+    time?: string | null;
+  }>;
 }
 
 export function MarketStructurePanel({ symbol, timeframe }: { symbol: string; timeframe: string }) {
@@ -85,7 +93,7 @@ export function MarketStructurePanel({ symbol, timeframe }: { symbol: string; ti
           <div style={{ fontSize: "0.65rem", fontWeight: 700, color: "var(--text-muted)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.05em" }}>Recent Swing Points</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {latestSwings.map((s, i) => {
-              const label = data.structure_labels.find(l => l.index === s.index)?.label || s.type;
+              const label = s.swing_label || data.structure_labels.find(l => !l.is_break && l.index === s.index)?.label || s.type;
               const isHigh = s.type === "HIGH";
               return (
                 <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 10px", borderRadius: 6, background: "rgba(255,255,255,0.03)" }}>
@@ -111,14 +119,26 @@ export function MarketStructurePanel({ symbol, timeframe }: { symbol: string; ti
               {recentBreaks.map((b, i) => {
                 const isChoch = b.break_type === "CHOCH";
                 const color = isChoch ? "#a78bfa" : "#3b82f6";
+                const isBull = b.direction ? b.direction === "BULLISH" : data.bias === "BULLISH";
+                const dirColor = isBull ? "#10b981" : "#ef4444";
                 return (
-                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", borderRadius: 6, background: `${color}10`, border: `1px solid ${color}30` }}>
-                    <span style={{ padding: "2px 6px", borderRadius: 4, background: color, color: "#fff", fontSize: "0.55rem", fontWeight: 900 }}>
-                      {b.break_type}
-                    </span>
-                    <span style={{ fontSize: "0.65rem", color: "#e2e8f0" }}>
-                      Broken {b.label}
-                    </span>
+                  <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 10px", borderRadius: 6, background: `${color}10`, border: `1px solid ${color}30` }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ padding: "2px 6px", borderRadius: 4, background: color, color: "#fff", fontSize: "0.55rem", fontWeight: 900 }}>
+                        {b.break_type}
+                      </span>
+                      <span style={{ fontSize: "0.65rem", fontWeight: 800, color: dirColor }}>
+                        {isBull ? "▲" : "▼"}
+                      </span>
+                      <span style={{ fontSize: "0.65rem", color: "#e2e8f0" }}>
+                        Broke {b.label && b.label !== "Unknown" ? b.label : (isBull ? "Swing High" : "Swing Low")}
+                      </span>
+                    </div>
+                    {b.broken_level != null && (
+                      <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "0.65rem", color: "var(--text-muted)" }}>
+                        @ {b.broken_level.toLocaleString("en", { maximumFractionDigits: 5 })}
+                      </span>
+                    )}
                   </div>
                 );
               })}

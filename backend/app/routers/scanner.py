@@ -1,7 +1,8 @@
 """Scanner API endpoints — V5 uses real Binance data by default."""
 
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException
 from app.engines.scanner import MarketScanner
+from app.security import require_api_key, rate_limit
 import time
 from datetime import datetime, timezone
 
@@ -43,7 +44,7 @@ async def get_scanner_results(entry_tf: str = "1h"):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/run")
+@router.post("/run", dependencies=[Depends(require_api_key), Depends(rate_limit("scanner_run", max_calls=4, window_sec=60))])
 async def run_scanner(
     symbols: list[str] = None,
     entry_tf: str = "1h",

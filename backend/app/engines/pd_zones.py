@@ -111,15 +111,15 @@ class PDZoneEngine:
         premium_threshold  = range_low + range_size * self.PREMIUM_LEVEL
         discount_threshold = range_low + range_size * self.DISCOUNT_LEVEL
 
-        # OTE levels depend on HTF bias (Fib from swing)
-        # For BULLISH: OTE is a pullback from high (discount retracement)
-        # For BEARISH: OTE is a rally from low (premium retracement)
-        if htf_bias == "BULLISH":
-            ote_low  = range_low + range_size * self.OTE_LOW
-            ote_high = range_low + range_size * self.OTE_HIGH
-        else:
+        # OTE levels depend on HTF bias (62%–79% Fib retracement of the swing)
+        # For BULLISH impulse (range_low -> range_high): pullback down from range_high into DISCOUNT (21%–38% of range)
+        # For BEARISH impulse (range_high -> range_low): rally up from range_low into PREMIUM (62%–79% of range)
+        if htf_bias == "BULLISH" or (htf_bias == "SIDEWAYS" and current_price <= range_mid):
             ote_low  = range_high - range_size * self.OTE_HIGH
             ote_high = range_high - range_size * self.OTE_LOW
+        else:
+            ote_low  = range_low + range_size * self.OTE_LOW
+            ote_high = range_low + range_size * self.OTE_HIGH
 
         # Where is current price?
         zone_pct  = ((current_price - range_low) / range_size) * 100
@@ -140,10 +140,13 @@ class PDZoneEngine:
         # Is price in OTE?
         is_in_ote = ote_low <= current_price <= ote_high
 
-        # Distance to nearest OTE boundary
-        dist_to_ote_low  = abs(current_price - ote_low)  / current_price * 100
-        dist_to_ote_high = abs(current_price - ote_high) / current_price * 100
-        dist_to_ote = min(dist_to_ote_low, dist_to_ote_high)
+        # Distance to nearest OTE boundary (0.0 when already inside OTE)
+        if is_in_ote or current_price <= 0:
+            dist_to_ote = 0.0
+        else:
+            dist_to_ote_low  = abs(current_price - ote_low)  / current_price * 100
+            dist_to_ote_high = abs(current_price - ote_high) / current_price * 100
+            dist_to_ote = min(dist_to_ote_low, dist_to_ote_high)
 
         # Trade signal
         trade_allowed, signal = self._generate_signal(

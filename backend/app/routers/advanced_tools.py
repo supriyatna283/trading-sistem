@@ -116,6 +116,7 @@ async def get_mm_flow(req: SymbolRequest):
         df = await _data_engine.get_candles(req.symbol, req.timeframe, limit=req.lookback)
         if df is None or df.empty:
             return {"error": "No candle data", "symbol": req.symbol}
+        df = MarketDataEngine.drop_unclosed(df, req.timeframe)
         result = _mm_engine.analyze(df)
         return {"symbol": req.symbol, "timeframe": req.timeframe, **_mm_engine.to_dict(result)}
     except Exception as e:
@@ -130,6 +131,7 @@ async def get_wyckoff(req: SymbolRequest):
         df = await _data_engine.get_candles(req.symbol, req.timeframe, limit=req.lookback)
         if df is None or df.empty:
             return {"error": "No candle data", "symbol": req.symbol}
+        df = MarketDataEngine.drop_unclosed(df, req.timeframe)
         result = _wyckoff_engine.analyze(df)
         return {"symbol": req.symbol, "timeframe": req.timeframe, **_wyckoff_engine.to_dict(result)}
     except Exception as e:
