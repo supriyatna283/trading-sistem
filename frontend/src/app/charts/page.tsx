@@ -342,10 +342,10 @@ function ChartsPageContent() {
             <button
               onClick={() => setShowAIPanel(v => !v)}
               className={`icon-btn${showAIPanel ? " icon-btn-active-purple" : ""}`}
-              title="AI Analysis (auto-triggers on symbol/TF change)"
+              title="DeepSeek-R1 AI Agent (Chain-of-Thought Chart Analysis & Chat)"
               id="ai-toggle-btn"
             >
-              <span style={{ fontSize: "0.8rem" }}>🤖</span> AI
+              <span style={{ fontSize: "0.8rem" }}>🧠</span> DeepSeek R1
             </button>
             <button
               onClick={() => setShowICT(v => !v)}

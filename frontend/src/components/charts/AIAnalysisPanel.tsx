@@ -332,6 +332,15 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose, on
   const [accountSize, setAccountSize] = useState<number>(1000);
   const [riskPct, setRiskPct] = useState<number>(1);
 
+  // DeepSeek-R1 API Key management state
+  const [dsKeyInput, setDsKeyInput] = useState("");
+  const [dsKeyConfigured, setDsKeyConfigured] = useState<boolean>(true);
+  const [dsMaskedKey, setDsMaskedKey] = useState<string>("");
+  const [showKeyModal, setShowKeyModal] = useState<boolean>(false);
+  const [savingKey, setSavingKey] = useState<boolean>(false);
+  const [keyStatusMsg, setKeyStatusMsg] = useState<string>("");
+  const dsKeyRef = useRef<string>("");
+
   const esRef = useRef<EventSource | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const answerRef = useRef<HTMLDivElement>(null);
@@ -355,7 +364,9 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose, on
     let retryCount = 0;
     
     const connect = () => {
-      const url = `${API_URL}/api/v1/ai/analyze?symbol=${sym}&timeframe=${tf}${force ? '&force=true' : ''}`;
+      const savedKey = dsKeyRef.current || (typeof window !== "undefined" ? localStorage.getItem("deepseek_api_key") || "" : "");
+      const keyParam = savedKey ? `&api_key=${encodeURIComponent(savedKey)}` : "";
+      const url = `${API_URL}/api/v1/ai/analyze?symbol=${sym}&timeframe=${tf}${force ? '&force=true' : ''}${keyParam}`;
       const es = new EventSource(url);
       esRef.current = es;
 
@@ -440,7 +451,13 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose, on
         
         if (e.data) {
           const msg = (e.data || "").replace(/\\n/g, "\n");
-          setError(msg || "Connection error");
+          if (msg.includes("DEEPSEEK_KEY_MISSING")) {
+            setDsKeyConfigured(false);
+            setShowKeyModal(true);
+            setError(msg.replace("DEEPSEEK_KEY_MISSING: ", ""));
+          } else {
+            setError(msg || "Connection error");
+          }
         } else {
           setError("Stream disconnected");
         }
@@ -458,10 +475,18 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose, on
     setChatInput(""); setIsChatting(true);
     setChatHistory(prev => [...prev, { role: "user", content: msg }]);
     try {
+      const savedKey = dsKeyRef.current || (typeof window !== "undefined" ? localStorage.getItem("deepseek_api_key") || "" : "");
       const resp = await fetch(`${API_URL}/api/v1/ai/chat`, {
         method: "POST",
         headers: aiAuthHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ symbol, timeframe, question: msg, history: chatHistory.slice(-10), market_context: context }),
+        body: JSON.stringify({
+          symbol,
+          timeframe,
+          question: msg,
+          history: chatHistory.slice(-10),
+          market_context: context,
+          api_key: savedKey || undefined,
+        }),
       });
       if (!resp.body) throw new Error("No body");
       const reader = resp.body.getReader();
@@ -495,6 +520,63 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose, on
       setChatHistory(prev => [...prev, { role: "assistant", content: "⚠️ Maaf, server error." }]);
     } finally { setIsChatting(false); }
   }, [chatInput, isChatting, symbol, timeframe, chatHistory, context]);
+
+  // Load stored DeepSeek key & check backend status on open
+  useEffect(() => {
+    if (!isOpen) return;
+    const localKey = typeof window !== "undefined" ? localStorage.getItem("deepseek_api_key") || "" : "";
+    if (localKey) {
+      dsKeyRef.current = localKey;
+      setDsKeyConfigured(true);
+      setDsMaskedKey(`${localKey.slice(0, 5)}••••${localKey.slice(-4)}`);
+    }
+    fetch(`${API_URL}/api/v1/ai/deepseek-status`)
+      .then(r => r.json())
+      .then(d => {
+        if (d.configured) {
+          setDsKeyConfigured(true);
+          if (d.masked_key) setDsMaskedKey(d.masked_key);
+        } else if (!localKey) {
+          setDsKeyConfigured(false);
+          setShowKeyModal(true);
+        }
+      })
+      .catch(() => {});
+  }, [isOpen]);
+
+  const handleSaveDeepSeekKey = useCallback(async () => {
+    const trimmed = dsKeyInput.trim();
+    if (!trimmed || trimmed.length < 10) {
+      setKeyStatusMsg("⚠️ Masukkan DeepSeek API Key yang valid (contoh: sk-...)");
+      return;
+    }
+    setSavingKey(true);
+    setKeyStatusMsg("");
+    try {
+      if (typeof window !== "undefined") {
+        localStorage.setItem("deepseek_api_key", trimmed);
+      }
+      dsKeyRef.current = trimmed;
+      const res = await fetch(`${API_URL}/api/v1/ai/deepseek-key`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ api_key: trimmed }),
+      });
+      const data = await res.json().catch(() => ({}));
+      setDsKeyConfigured(true);
+      setDsMaskedKey(data.masked_key || `${trimmed.slice(0, 5)}••••${trimmed.slice(-4)}`);
+      setDsKeyInput("");
+      setShowKeyModal(false);
+      setKeyStatusMsg("✅ DeepSeek API Key tersimpan!");
+      startAnalysis(symbol, timeframe, true);
+    } catch (err) {
+      setDsKeyConfigured(true);
+      setShowKeyModal(false);
+      startAnalysis(symbol, timeframe, true);
+    } finally {
+      setSavingKey(false);
+    }
+  }, [dsKeyInput, startAnalysis, symbol, timeframe]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -548,8 +630,8 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose, on
   const sampleDataTfs: string[] = setup?.sample_data_tfs || context?.sample_data_tfs || [];
 
   const statusLabel: Record<AIStatus, string> = {
-    idle: "Ready", computing: "Computing pipeline…", thinking: "AI deep reasoning…",
-    streaming: "Streaming analysis…", done: "Complete", error: "Error", cached: "Cached",
+    idle: "DeepSeek-R1 Ready", computing: "Computing quant pipeline…", thinking: "DeepSeek-R1 thinking (CoT)…",
+    streaming: "DeepSeek-R1 streaming…", done: "DeepSeek-R1 Complete", error: "Error", cached: "Cached (DeepSeek-R1)",
   };
 
   const rsiVal = ind.rsi;
@@ -569,7 +651,12 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose, on
               <path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.93 4.93l2.12 2.12M16.95 16.95l2.12 2.12M4.93 19.07l2.12-2.12M16.95 7.05l2.12-2.12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
             </svg>
           </div>
-          <span id="ai-panel-title">AI Analyst</span>
+          <span id="ai-panel-title">DeepSeek R1</span>
+          <span style={{
+            fontSize: "0.52rem", fontWeight: 800, padding: "2px 6px", borderRadius: 4,
+            background: "linear-gradient(135deg, rgba(56,189,248,0.2), rgba(99,102,241,0.2))",
+            color: "#38bdf8", border: "1px solid rgba(56,189,248,0.35)", letterSpacing: "0.04em"
+          }}>REASONER</span>
           <span id="ai-symbol-badge">{symbol.replace("USDT", "")}/{timeframe.toUpperCase()}</span>
           {setup?.session && (
             <span className="ai-session-tag">{setup.session.split("/")[0]}</span>
@@ -617,6 +704,18 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose, on
               </svg>
             )}
           </button>
+          <button
+            onClick={() => setShowKeyModal(v => !v)}
+            className="ai-icon-btn"
+            title={dsKeyConfigured ? `DeepSeek API Key aktif (${dsMaskedKey || "Configured"}) — Klik untuk ubah` : "Masukkan DeepSeek API Key"}
+            style={{
+              color: dsKeyConfigured ? "#38bdf8" : "#fbbf24",
+              borderColor: dsKeyConfigured ? "rgba(56,189,248,0.35)" : "rgba(251,191,36,0.5)",
+              background: dsKeyConfigured ? "rgba(56,189,248,0.12)" : "rgba(251,191,36,0.15)",
+            }}
+          >
+            🔑
+          </button>
           <button onClick={() => {
             // FIX #5: Clear backend cache for this symbol before force refresh
             fetch(`${API_URL}/api/v1/ai/cache?symbol=${symbol}&timeframe=${timeframe}`, { method: 'DELETE', headers: aiAuthHeaders() }).catch(() => {});
@@ -634,6 +733,62 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose, on
           </button>
         </div>
       </div>
+
+      {/* ── DeepSeek API Key Drawer ── */}
+      {showKeyModal && (
+        <div style={{
+          padding: "10px 12px",
+          background: "linear-gradient(135deg, rgba(15,23,42,0.96), rgba(30,41,59,0.92))",
+          borderBottom: "1px solid rgba(56,189,248,0.3)",
+          display: "flex",
+          flexDirection: "column",
+          gap: 7,
+        }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ fontSize: "0.65rem", fontWeight: 800, color: "#38bdf8", letterSpacing: "0.04em" }}>
+              🔑 KONFIGURASI DEEPSEEK-R1 API KEY
+            </span>
+            {dsMaskedKey && (
+              <span style={{ fontSize: "0.58rem", color: "#4ade80", fontFamily: "monospace", fontWeight: 700 }}>
+                Aktif: {dsMaskedKey}
+              </span>
+            )}
+          </div>
+          <div style={{ fontSize: "0.6rem", color: "var(--text-muted)", lineHeight: 1.4 }}>
+            Masukkan API Key dari <strong style={{ color: "#e2e8f0" }}>platform.deepseek.com</strong>. Key akan disimpan otomatis di browser &amp; server (`.env`).
+          </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <input
+              type="password"
+              placeholder="sk-..."
+              value={dsKeyInput}
+              onChange={e => setDsKeyInput(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") handleSaveDeepSeekKey(); }}
+              style={{
+                flex: 1, padding: "6px 10px", borderRadius: 6,
+                background: "rgba(0,0,0,0.35)", border: "1px solid rgba(56,189,248,0.35)",
+                color: "#f8fafc", fontSize: "0.68rem", fontFamily: "monospace", outline: "none",
+              }}
+            />
+            <button
+              onClick={handleSaveDeepSeekKey}
+              disabled={savingKey}
+              style={{
+                padding: "6px 12px", borderRadius: 6, cursor: savingKey ? "not-allowed" : "pointer",
+                background: "linear-gradient(135deg, #0284c7, #4f46e5)",
+                border: "none", color: "#fff", fontSize: "0.65rem", fontWeight: 800,
+              }}
+            >
+              {savingKey ? "Menyimpan…" : "Simpan"}
+            </button>
+          </div>
+          {keyStatusMsg && (
+            <div style={{ fontSize: "0.6rem", color: keyStatusMsg.startsWith("⚠️") ? "#f87171" : "#4ade80", fontWeight: 700 }}>
+              {keyStatusMsg}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── Status bar ── */}
       <div id="ai-status-bar">
@@ -1250,8 +1405,8 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose, on
                   ) : (
                     <span style={{ fontSize: "0.7rem" }}>🧠</span>
                   )}
-                  <span style={{ fontSize: "0.65rem", color: "#a78bfa", fontWeight: 700, flex: 1 }}>
-                    {status === "thinking" ? "Nemotron Deep Reasoning…" : `Reasoning (${reasoning.length} chars)`}
+                  <span style={{ fontSize: "0.65rem", color: "#38bdf8", fontWeight: 700, flex: 1 }}>
+                    {status === "thinking" ? "DeepSeek-R1 Chain-of-Thought…" : `DeepSeek-R1 Reasoning (${reasoning.length} chars)`}
                   </span>
                   <span style={{ fontSize: "0.6rem", color: "var(--text-muted)" }}>{showThinking ? "▲" : "▼"}</span>
                 </div>

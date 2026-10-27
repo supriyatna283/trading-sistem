@@ -22,7 +22,11 @@ class Settings(BaseSettings):
     BINANCE_API_KEY: str = ""
     BINANCE_API_SECRET: str = ""
 
-    # NVIDIA AI (Nemotron)
+    # DeepSeek AI Agent (Primary Chart AI — DeepSeek-R1 Reasoner)
+    DEEPSEEK_API_KEY: str = ""
+    DEEPSEEK_MODEL: str = "deepseek-reasoner"
+
+    # NVIDIA AI (Legacy fallback)
     NVIDIA_API_KEY: str = "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"
 
     # Telegram

@@ -20,11 +20,13 @@ V4 Upgrades:
 import asyncio
 import json
 import logging
+import os
 import time
 import re
+from pathlib import Path
 from typing import AsyncGenerator, Optional, List
 
-from fastapi import APIRouter, Request, Query, Body, Depends
+from fastapi import APIRouter, Request, Query, Body, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -56,13 +58,57 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/ai", tags=["AI Analysis"])
 
-AI_MODEL_NAME = "nvidia/nemotron-3-super-120b-a12b"
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+AI_MODEL_NAME = "deepseek-reasoner"
+_RUNTIME_DEEPSEEK_KEY: str = ""
 
-def _get_nvidia_client() -> AsyncOpenAI:
+
+def _resolve_deepseek_key(override_key: Optional[str] = None) -> str:
+    """Resolve active DeepSeek API key from request override, runtime memory, .env, or Settings."""
+    if override_key and override_key.strip():
+        return override_key.strip()
+    if _RUNTIME_DEEPSEEK_KEY:
+        return _RUNTIME_DEEPSEEK_KEY
+    env_k = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    if env_k:
+        return env_k
     settings = get_settings()
+    return (getattr(settings, "DEEPSEEK_API_KEY", "") or "").strip()
+
+
+def _mask_key(key: str) -> str:
+    if not key or len(key) < 8:
+        return ""
+    return f"{key[:5]}••••{key[-4:]}"
+
+
+def _persist_deepseek_key_to_env(api_key: str) -> None:
+    """Persist DEEPSEEK_API_KEY into backend/.env so it survives server restarts."""
+    try:
+        env_path = Path(__file__).resolve().parents[2] / ".env"
+        lines: list[str] = []
+        if env_path.exists():
+            lines = env_path.read_text(encoding="utf-8").splitlines()
+        updated = False
+        new_lines = []
+        for line in lines:
+            if line.strip().startswith("DEEPSEEK_API_KEY="):
+                new_lines.append(f"DEEPSEEK_API_KEY={api_key}")
+                updated = True
+            else:
+                new_lines.append(line)
+        if not updated:
+            new_lines.append(f"DEEPSEEK_API_KEY={api_key}")
+        env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    except Exception as e:
+        logger.warning(f"[DeepSeek] Could not write DEEPSEEK_API_KEY to .env: {e}")
+
+
+def _get_deepseek_client(override_key: Optional[str] = None) -> AsyncOpenAI:
+    key = _resolve_deepseek_key(override_key)
     return AsyncOpenAI(
-        base_url="https://integrate.api.nvidia.com/v1",
-        api_key=settings.NVIDIA_API_KEY,
+        base_url=DEEPSEEK_BASE_URL,
+        api_key=key or "missing-key",
     )
 
 # ──────────────────────────────────────────────────────────────
@@ -139,6 +185,11 @@ class ChatRequest(BaseModel):
     question: str
     history: List[ChatMessage] = []
     market_context: Optional[dict] = None  # ctx snapshot from /analyze
+    api_key: Optional[str] = None
+
+
+class DeepSeekKeyRequest(BaseModel):
+    api_key: str
 
 
 # ──────────────────────────────────────────────────────────────
@@ -1455,6 +1506,7 @@ async def _stream_ai_analysis(
     timeframe: str,
     request: Request,
     force: bool = False,
+    api_key: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
     """
     V2 SSE events:
@@ -1614,10 +1666,17 @@ async def _stream_ai_analysis(
     except Exception as e:
         logger.warning(f"[AI] DB signal lookup failed: {e}")
 
-    # ── 5. Stream NVIDIA Nemotron ──
+    # ── 5. Stream DeepSeek-R1 (deepseek-reasoner) ──
+    active_ds_key = _resolve_deepseek_key(api_key)
+    if not active_ds_key:
+        yield sse(
+            "error",
+            "DEEPSEEK_KEY_MISSING: API Key DeepSeek belum diatur. Klik ikon 🔑 di sudut kanan atas panel DeepSeek Agent untuk memasukkan API Key Anda.",
+        )
+        return
+
     yield sse("status", "ai_thinking")
 
-    settings = get_settings()
     system_msg, user_msg = _build_prompt(ctx, setup_levels, active_signal=active_signal_ctx)
     full_reasoning = ""
     full_answer = ""
@@ -1626,23 +1685,20 @@ async def _stream_ai_analysis(
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            client = _get_nvidia_client()
+            client = _get_deepseek_client(active_ds_key)
             stream = await client.chat.completions.create(
                 model=AI_MODEL_NAME,
                 messages=[
                     {"role": "system", "content": system_msg},
                     {"role": "user", "content": user_msg},
                 ],
-                temperature=0.68,   # Raised from 0.5 → 0.68 for richer, more nuanced analysis
-                top_p=0.90,
-                max_tokens=2048,
-                extra_body={"chat_template_kwargs": {"enable_thinking": True}},
+                max_tokens=4096,
                 stream=True,
             )
 
             async for chunk in stream:
                 if await request.is_disconnected():
-                    logger.info(f"[AI] Client disconnected — stopping stream for {symbol}/{timeframe}")
+                    logger.info(f"[DeepSeek-R1] Client disconnected — stopping stream for {symbol}/{timeframe}")
                     await stream.close()
                     return
 
@@ -1659,17 +1715,21 @@ async def _stream_ai_analysis(
                 if delta.content:
                     full_answer += delta.content
                     yield sse("token", delta.content)
-            
-            # If we get here, it succeeded
+
             break
 
         except Exception as e:
-            logger.error(f"[AI] NVIDIA API error on attempt {attempt + 1}: {e}")
-            if attempt == max_retries - 1:
-                # Still outputting setup data successfully but error on AI part
-                yield sse("error", f"AI service error after {max_retries} attempts. Analisis narasi gagal dimuat.")
+            logger.error(f"[DeepSeek-R1] API error on attempt {attempt + 1}: {e}")
+            err_str = str(e)
+            if "401" in err_str or "Authentication" in err_str or "invalid_api_key" in err_str.lower():
+                yield sse("error", "API Key DeepSeek tidak valid (401 Unauthorized). Silakan periksa kembali API Key Anda melalui tombol 🔑.")
                 return
-            # Exponential backoff: 2s, 4s
+            if "402" in err_str or "Insufficient Balance" in err_str:
+                yield sse("error", "Saldo akun DeepSeek API tidak mencukupi (402 Insufficient Balance).")
+                return
+            if attempt == max_retries - 1:
+                yield sse("error", f"DeepSeek-R1 error setelah {max_retries} percobaan: {err_str[:160]}")
+                return
             await asyncio.sleep(2 ** (attempt + 1))
             
     t_end_ai = time.time()
@@ -1755,12 +1815,44 @@ async def _stream_ai_analysis(
 # ──────────────────────────────────────────────────────────────
 # Endpoints
 # ──────────────────────────────────────────────────────────────
+@router.get("/deepseek-status")
+async def get_deepseek_status():
+    """Check whether a DeepSeek API key is configured on the backend."""
+    key = _resolve_deepseek_key()
+    return {
+        "configured": bool(key),
+        "masked_key": _mask_key(key),
+        "model": AI_MODEL_NAME,
+        "provider": "deepseek",
+    }
+
+
+@router.post("/deepseek-key", dependencies=[Depends(rate_limit("deepseek-key", 10))])
+async def set_deepseek_key(req: DeepSeekKeyRequest):
+    """Save DeepSeek API Key in runtime memory and backend/.env for immediate use."""
+    global _RUNTIME_DEEPSEEK_KEY
+    cleaned = (req.api_key or "").strip()
+    if not cleaned or len(cleaned) < 10:
+        raise HTTPException(status_code=400, detail="Format DeepSeek API Key tidak valid.")
+    _RUNTIME_DEEPSEEK_KEY = cleaned
+    os.environ["DEEPSEEK_API_KEY"] = cleaned
+    _persist_deepseek_key_to_env(cleaned)
+    _clear_cache()
+    return {
+        "status": "ok",
+        "configured": True,
+        "masked_key": _mask_key(cleaned),
+        "model": AI_MODEL_NAME,
+    }
+
+
 @router.get("/analyze", dependencies=[Depends(rate_limit("ai-analyze", 20))])
 async def analyze_chart(
     request: Request,
     symbol: str = Query("BTCUSDT", description="Trading pair, e.g. BTCUSDT"),
     timeframe: str = Query("1h", description="Timeframe: 1m, 5m, 15m, 1h, 4h, 1d"),
     force: bool = Query(False, description="Force re-analysis, bypass cache"),
+    api_key: Optional[str] = Query(None, description="Optional DeepSeek API key override"),
 ):
     """
     Stream AI chart analysis via Server-Sent Events.
@@ -1784,8 +1876,9 @@ async def analyze_chart(
         "X-Accel-Buffering": "no",
         "Access-Control-Allow-Origin": "*",
     }
+    header_key = request.headers.get("X-DeepSeek-Key") or api_key
     return StreamingResponse(
-        _stream_ai_analysis(symbol.upper(), timeframe, request, force=force),
+        _stream_ai_analysis(symbol.upper(), timeframe, request, force=force, api_key=header_key),
         media_type="text/event-stream",
         headers=headers,
     )
@@ -1851,10 +1944,32 @@ PENTING: Data di atas adalah data REAL-TIME yang disuntikkan kepadamu. JANGAN PE
 
 Jawab pertanyaan trader dengan BAHASA INDONESIA yang jelas, ringkas, dan profesional. Fokus pada pertanyaannya saja. Maksimal 3-4 paragraf."""
 
-    # Build messages array (max 10 turns of history)
+    active_ds_key = _resolve_deepseek_key(req.api_key)
+    if not active_ds_key:
+        yield sse("token", "⚠️ API Key DeepSeek belum diatur. Silakan klik tombol 🔑 di bagian atas panel untuk memasukkan API Key DeepSeek Anda.")
+        yield sse("done", "complete")
+        return
+
+    # Build messages array with strict user/assistant alternation required by deepseek-reasoner
     messages = [{"role": "system", "content": system_prompt}]
-    for msg in req.history[-10:]:  # max 10 messages history
-        messages.append({"role": msg.role, "content": msg.content})
+    sanitized_history: list[dict] = []
+    for msg in req.history[-10:]:
+        role = "user" if msg.role == "user" else "assistant"
+        content = (msg.content or "").strip()
+        if not content or content.startswith("⚠️"):
+            continue
+        if not sanitized_history and role != "user":
+            continue
+        if sanitized_history and sanitized_history[-1]["role"] == role:
+            sanitized_history[-1]["content"] += "\n" + content
+        else:
+            sanitized_history.append({"role": role, "content": content})
+
+    # Ensure last history item before new user question is "assistant"
+    if sanitized_history and sanitized_history[-1]["role"] == "user":
+        sanitized_history.pop()
+
+    messages.extend(sanitized_history)
     messages.append({"role": "user", "content": req.question})
 
     yield sse("status", "thinking")
@@ -1863,17 +1978,11 @@ Jawab pertanyaan trader dengan BAHASA INDONESIA yang jelas, ringkas, dan profesi
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            client = _get_nvidia_client()
+            client = _get_deepseek_client(active_ds_key)
             stream = await client.chat.completions.create(
                 model=AI_MODEL_NAME,
                 messages=messages,
-                temperature=0.6,
-                top_p=0.9,
-                max_tokens=1024,
-                extra_body={
-                    "chat_template_kwargs": {"enable_thinking": True},
-                    "reasoning_budget": 1024,
-                },
+                max_tokens=2048,
                 stream=True,
             )
 
@@ -1881,17 +1990,15 @@ Jawab pertanyaan trader dengan BAHASA INDONESIA yang jelas, ringkas, dan profesi
                 if not chunk.choices:
                     continue
                 delta = chunk.choices[0].delta
-                # Skip reasoning tokens for chat (too verbose)
                 if delta.content:
                     yield sse("token", delta.content)
-            
-            # If successful, break retry loop
+
             break
 
         except Exception as e:
-            logger.error(f"[AI] Chat AI error on attempt {attempt + 1}: {e}")
+            logger.error(f"[DeepSeek-R1] Chat error on attempt {attempt + 1}: {e}")
             if attempt == max_retries - 1:
-                yield sse("error", f"AI error: {str(e)[:200]}")
+                yield sse("error", f"DeepSeek-R1 error: {str(e)[:200]}")
                 return
             await asyncio.sleep(2 ** (attempt + 1))
             
