@@ -66,9 +66,9 @@ export default function DerivativesBar({ symbol }: Props) {
     // Binance Futures symbol = e.g. BTCUSDT
     const sym = symbol.toUpperCase();
     try {
-      const [premRes, oiRes, lsRes] = await Promise.allSettled([
+      const [premRes, oiHistRes, lsRes] = await Promise.allSettled([
         fetch(`https://fapi.binance.com/fapi/v1/premiumIndex?symbol=${sym}`).then(r => r.json()),
-        fetch(`https://fapi.binance.com/fapi/v1/openInterest?symbol=${sym}`).then(r => r.json()),
+        fetch(`https://fapi.binance.com/fapi/v1/openInterestHist?symbol=${sym}&period=5m&limit=2`).then(r => r.json()),
         fetch(`https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=${sym}&period=5m&limit=2`).then(r => r.json()),
       ]);
 
@@ -80,15 +80,23 @@ export default function DerivativesBar({ symbol }: Props) {
         return;
       }
 
-      const oi = oiRes.status === "fulfilled" && !oiRes.value?.code ? oiRes.value : null;
       const ls = lsRes.status === "fulfilled" && Array.isArray(lsRes.value) && lsRes.value.length > 0 ? lsRes.value[0] : null;
 
-      // OI change: compare latest vs previous candle
+      // OI history (openInterestHist) returns an array in ascending time order.
+      // `sumOpenInterestValue` is already the USD notional of open interest.
+      let openInterest: number | null = null;
       let oiChange: number | null = null;
-      if (oiRes.status === "fulfilled" && Array.isArray(oiRes.value) && oiRes.value.length >= 2) {
-        const curr = parseFloat(oiRes.value[0]?.sumOpenInterestValue || "0");
-        const prev = parseFloat(oiRes.value[1]?.sumOpenInterestValue || "0");
-        oiChange = prev > 0 ? ((curr - prev) / prev) * 100 : null;
+      if (oiHistRes.status === "fulfilled" && Array.isArray(oiHistRes.value) && oiHistRes.value.length > 0) {
+        const hist = oiHistRes.value
+          .filter((h: any) => h && !h.code)
+          .sort((a: any, b: any) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
+        const latest = hist[hist.length - 1];
+        openInterest = latest ? parseFloat(latest.sumOpenInterestValue || "0") : null;
+        if (hist.length >= 2) {
+          const curr = parseFloat(hist[hist.length - 1].sumOpenInterestValue || "0");
+          const prev = parseFloat(hist[hist.length - 2].sumOpenInterestValue || "0");
+          oiChange = prev > 0 ? ((curr - prev) / prev) * 100 : null;
+        }
       }
 
       setData({
@@ -97,7 +105,7 @@ export default function DerivativesBar({ symbol }: Props) {
         nextFundingTime: prem ? parseInt(prem.nextFundingTime) : null,
         markPrice: prem ? parseFloat(prem.markPrice) : null,
         indexPrice: prem ? parseFloat(prem.indexPrice) : null,
-        openInterest: oi ? parseFloat(oi.openInterest) * (prem ? parseFloat(prem.markPrice) : 1) : null,
+        openInterest,
         openInterestChange: oiChange,
         longRatio: ls ? parseFloat(ls.longAccount) * 100 : null,
         shortRatio: ls ? parseFloat(ls.shortAccount) * 100 : null,

@@ -133,15 +133,19 @@ async def send_telegram_ai_signal(setup: dict) -> bool:
     tp2 = setup.get("tp2", None)
     tp3 = setup.get("tp3", None)
     
-    tp_probs = setup.get("tp_probability", {})
-    tp1_prob = tp_probs.get("tp1", 75)
-    tp2_prob = tp_probs.get("tp2", 55)
+    tp_probs = setup.get("tp_probability") or {}
+    tp1_prob = tp_probs.get("tp1")
+    tp2_prob = tp_probs.get("tp2")
 
     direction_icon = "🟢 LONG" if direction == "BUY" else "🔴 SHORT"
     
-    tp_lines = f"✅ TP1: <code>{_fmt_price(tp1)}</code> ({tp1_prob}%)"
+    tp_lines = f"✅ TP1: <code>{_fmt_price(tp1)}</code>"
+    if tp1_prob is not None:
+        tp_lines += f" ({tp1_prob}%)"
     if tp2:
-        tp_lines += f"\n✅ TP2: <code>{_fmt_price(tp2)}</code> ({tp2_prob}%)"
+        tp_lines += f"\n✅ TP2: <code>{_fmt_price(tp2)}</code>"
+        if tp2_prob is not None:
+            tp_lines += f" ({tp2_prob}%)"
     if tp3:
         tp_lines += f"\n✅ TP3: <code>{_fmt_price(tp3)}</code>"
 

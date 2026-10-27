@@ -1,4 +1,4 @@
-﻿"""
+"""
 Signal State Manager
 ====================
 Real-time signal deduplication + lifecycle tracking.
@@ -13,7 +13,9 @@ Innovation:
 
 import asyncio
 import hashlib
+import json
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional
@@ -22,6 +24,10 @@ from enum import Enum
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# Persistent closed-loop outcome store (survives restart)
+_DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data")
+_OUTCOMES_FILE = os.path.join(_DATA_DIR, "signal_outcomes.jsonl")
 
 
 class SignalStatus(str, Enum):
@@ -89,9 +95,11 @@ class SignalStateManager:
 
     def __init__(self):
         self._signals: Dict[str, SignalRecord] = {}   # symbol -> active record
-        self._history: List[SignalRecord] = []         # full log
+        self._history: List[SignalRecord] = []         # full log (this process)
+        self._persisted: List[dict] = []               # loaded from disk (prior runs)
         self._watchdog_task: Optional[asyncio.Task] = None
         self._running = False
+        self._load_persisted()
 
     # ── Fingerprint ─────────────────────────────────────────────────────────
 
@@ -150,6 +158,98 @@ class SignalStateManager:
     def get_signal(self, symbol: str):
         rec = self._signals.get(symbol)
         return rec.to_dict() if rec else None
+
+    # ── Closed-loop persistence & performance stats ─────────────────────────
+
+    def _load_persisted(self):
+        """Load prior signal outcomes from disk so stats survive restart."""
+        try:
+            if not os.path.exists(_OUTCOMES_FILE):
+                return
+            with open(_OUTCOMES_FILE, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        self._persisted.append(json.loads(line))
+                    except (ValueError, TypeError):
+                        continue
+            if len(self._persisted) > 2000:
+                self._persisted = self._persisted[-2000:]
+        except Exception as e:
+            logger.warning(f"Failed to load signal history: {e}")
+
+    def _persist_outcome(self, rec: SignalRecord):
+        """Append a resolved signal outcome to the persistent journal."""
+        try:
+            os.makedirs(_DATA_DIR, exist_ok=True)
+            record = {
+                "symbol": rec.symbol,
+                "direction": rec.direction,
+                "timeframe": rec.timeframe,
+                "grade": rec.grade,
+                "score": rec.score,
+                "status": rec.status.value,
+                "created_at": rec.created_at.isoformat(),
+                "resolved_at": rec.updated_at.isoformat(),
+            }
+            with open(_OUTCOMES_FILE, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record) + "\n")
+        except Exception as e:
+            logger.warning(f"Failed to persist signal outcome: {e}")
+
+    def get_performance_stats(self) -> dict:
+        """Aggregate resolved signals into live, closed-loop performance stats."""
+        rows = []  # normalized: {status, grade, symbol}
+        for r in self._history:
+            if r.status in (SignalStatus.ACTIVE, SignalStatus.CANCELLED):
+                continue
+            rows.append({"status": r.status.value, "grade": r.grade, "symbol": r.symbol})
+        for d in self._persisted:
+            st = d.get("status", "")
+            if st in ("ACTIVE", "CANCELLED", ""):
+                continue
+            rows.append({"status": st, "grade": d.get("grade", "C"), "symbol": d.get("symbol", "?")})
+
+        total = len(rows)
+        if total == 0:
+            return {"total_resolved": 0, "win_rate_pct": 0.0, "by_grade": []}
+
+        wins = sum(1 for r in rows if r["status"] in ("HIT_TP1", "HIT_TP2"))
+        tp1 = sum(1 for r in rows if r["status"] == "HIT_TP1")
+        tp2 = sum(1 for r in rows if r["status"] == "HIT_TP2")
+        sl = sum(1 for r in rows if r["status"] == "HIT_SL")
+        expired = sum(1 for r in rows if r["status"] == "EXPIRED")
+
+        grades: Dict[str, dict] = {}
+        for r in rows:
+            g = r["grade"] or "C"
+            grades.setdefault(g, {"total": 0, "wins": 0})
+            grades[g]["total"] += 1
+            if r["status"] in ("HIT_TP1", "HIT_TP2"):
+                grades[g]["wins"] += 1
+
+        by_grade = []
+        for g in ("A+", "A", "B", "C"):
+            if g in grades:
+                s = grades[g]
+                by_grade.append({"grade": g, "total": s["total"], "win_rate_pct": round(s["wins"] / s["total"] * 100, 1)})
+        for g, s in grades.items():
+            if g not in ("A+", "A", "B", "C"):
+                by_grade.append({"grade": g, "total": s["total"], "win_rate_pct": round(s["wins"] / s["total"] * 100, 1)})
+
+        return {
+            "total_resolved": total,
+            "wins": wins,
+            "losses": sl,
+            "expired": expired,
+            "win_rate_pct": round(wins / total * 100, 1),
+            "tp1_hit_pct": round(tp1 / total * 100, 1),
+            "tp2_hit_pct": round(tp2 / total * 100, 1),
+            "sl_hit_pct": round(sl / total * 100, 1),
+            "by_grade": by_grade,
+        }
 
     # ── Watchdog ─────────────────────────────────────────────────────────────
 
@@ -211,7 +311,7 @@ class SignalStateManager:
         rec.status = status
         rec.resolution_note = note
         rec.updated_at = datetime.now(timezone.utc)
-        icon = "TP" in status.value and "OK" or "X"
+        self._persist_outcome(rec)
         logger.info(f"Signal resolved: {rec.symbol} {rec.direction} -> {status} | {note}")
 
     async def _fetch_prices(self, symbols: List[str]) -> Dict[str, float]:

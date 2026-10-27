@@ -464,7 +464,7 @@ export default function ProToolsPage() {
       ══════════════════════════════════════════════ */}
       <div style={{ display: activeTab === "position" ? "block" : "none" }}>
         <div>
-          <PositionSizingCalculator symbol={symbol} initialData={tradePlanContext} />
+          <PositionSizingCalculator symbol={symbol} timeframe={timeframe} initialData={tradePlanContext} />
           <div style={{ marginTop: 20, padding: 24, borderRadius: 16, background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)" }}>
             <div style={{ fontWeight: 800, fontSize: "0.9rem", marginBottom: 14 }}>📚 Kelly Criterion & Risk of Ruin</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>

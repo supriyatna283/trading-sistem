@@ -9,6 +9,7 @@ from app.engines.confluence import ConfluenceEngine
 from app.engines.mtf_confirmation import MTFConfirmationEngine
 from app.engines.sentiment import SentimentEngine
 from app.engines.news_calendar import NewsCalendarEngine
+from app.utils.indicators import detect_candle_pattern, detect_divergence
 
 router = APIRouter(prefix="/api/v1/analysis", tags=["Analysis"])
 
@@ -65,6 +66,35 @@ async def analyze_smc(
 
     result = smc_engine.analyze(df, symbol.upper(), timeframe)
     return result.model_dump()
+
+
+@router.get("/patterns/{symbol}")
+async def analyze_patterns(
+    symbol: str,
+    timeframe: str = Query("1h", regex="^(1m|5m|15m|1h|4h|1d)$"),
+    demo: bool = Query(False),
+):
+    """Get candlestick pattern + RSI/MACD divergence for the latest bars."""
+    base_prices = {
+        "BTCUSDT": 67000, "ETHUSDT": 3400, "BNBUSDT": 580,
+        "SOLUSDT": 145, "XRPUSDT": 0.62,
+    }
+    if demo:
+        df = MarketDataEngine.generate_sample_data(
+            symbol=symbol.upper(), timeframe=timeframe,
+            base_price=base_prices.get(symbol.upper(), 100),
+        )
+    else:
+        df = await data_engine.get_candles(symbol, timeframe)
+
+    candle = detect_candle_pattern(df)
+    divergence = detect_divergence(df)
+    return {
+        "symbol": symbol.upper(),
+        "timeframe": timeframe,
+        "candle_pattern": candle,
+        "divergence": divergence,
+    }
 
 
 @router.get("/confluence/{symbol}")

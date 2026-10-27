@@ -88,6 +88,35 @@ export function BacktestWinRateWidget({ symbol, timeframe }: { symbol: string; t
           <div style={{ fontSize: "0.85rem", fontWeight: 800, color }}>{(summary.net_profit_pct || 0) > 0 ? "+" : ""}{summary.net_profit_pct?.toFixed(2) || "0.00"}%</div>
         </div>
       </div>
+
+      {data.tp_rates && data.tp_rates.n > 0 && (
+        <div style={{ marginTop: 10, padding: "8px 10px", borderRadius: 8, background: "rgba(255,255,255,0.03)", fontSize: "0.6rem", color: "var(--text-muted)" }}>
+          <div style={{ fontWeight: 700, marginBottom: 4, letterSpacing: "0.05em", textTransform: "uppercase" }}>🎯 TP Hit Rate (sebelum SL)</div>
+          <div style={{ display: "flex", gap: 12 }}>
+            <span>TP1 <strong style={{ color: "#10b981" }}>{data.tp_rates.tp1_hit_rate}%</strong></span>
+            <span>TP2 <strong style={{ color: "#60a5fa" }}>{data.tp_rates.tp2_hit_rate}%</strong></span>
+            <span>TP3 <strong style={{ color: "#a78bfa" }}>{data.tp_rates.tp3_hit_rate}%</strong></span>
+          </div>
+        </div>
+      )}
+
+      {data.grade_breakdown && data.grade_breakdown.length > 0 && (
+        <div style={{ marginTop: 10, padding: "8px 10px", borderRadius: 8, background: "rgba(255,255,255,0.03)", fontSize: "0.6rem", color: "var(--text-muted)" }}>
+          <div style={{ fontWeight: 700, marginBottom: 4, letterSpacing: "0.05em", textTransform: "uppercase" }}>🏅 Win Rate per Grade</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+            {data.grade_breakdown.map((g: any) => (
+              <div key={g.grade} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ width: 22, fontWeight: 800, color: g.grade === "A+" ? "#f59e0b" : g.grade === "A" ? "#10b981" : g.grade === "B" ? "#3b82f6" : "#ef4444" }}>{g.grade}</span>
+                <div style={{ flex: 1, height: 5, borderRadius: 2, background: "rgba(255,255,255,0.06)", overflow: "hidden" }}>
+                  <div style={{ width: `${Math.min(100, g.win_rate)}%`, height: "100%", background: g.win_rate >= 60 ? "#10b981" : g.win_rate >= 45 ? "#f59e0b" : "#ef4444" }} />
+                </div>
+                <span style={{ fontWeight: 800, color: "#fff" }}>{g.win_rate}%</span>
+                <span style={{ color: "var(--text-muted)" }}>({g.total})</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       
       {summary.total_trades < 5 && (
         <div style={{ marginTop: 10, fontSize: "0.6rem", color: "#f59e0b", textAlign: "center" }}>

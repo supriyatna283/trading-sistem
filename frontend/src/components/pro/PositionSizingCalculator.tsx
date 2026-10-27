@@ -63,7 +63,7 @@ function GaugeArc({ value, max = 100, color }: { value: number; max?: number; co
   );
 }
 
-export function PositionSizingCalculator({ symbol = "BTCUSDT", initialData }: { symbol?: string; initialData?: any }) {
+export function PositionSizingCalculator({ symbol = "BTCUSDT", timeframe = "1h", initialData }: { symbol?: string; timeframe?: string; initialData?: any }) {
   const [form, setForm] = useState({
     account_balance: typeof window !== "undefined" ? (localStorage.getItem("psCalc_balance") || "") : "",
     risk_pct: "1",
@@ -79,6 +79,7 @@ export function PositionSizingCalculator({ symbol = "BTCUSDT", initialData }: { 
   const [result, setResult] = useState<SizingResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState("");
+  const [btLoading, setBtLoading] = useState(false);
 
   // Persist account balance to localStorage
   useEffect(() => {
@@ -103,6 +104,37 @@ export function PositionSizingCalculator({ symbol = "BTCUSDT", initialData }: { 
   }, [initialData]);
 
   const set = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }));
+
+  // R1: Pull measured win-rate / avg-RR from the (now-valid) backtester
+  const loadBacktest = async () => {
+    const daysMap: Record<string, number> = { "1m": 15, "5m": 15, "15m": 30, "30m": 30, "1h": 90, "4h": 180, "1d": 365, "1w": 365 };
+    const days = daysMap[timeframe] || 90;
+    setBtLoading(true);
+    setError("");
+    try {
+      const res = await fetch(`${API_URL}/api/v1/backtest/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol, timeframe, days, initial_capital: 10000, risk_per_trade_pct: 1.0 }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      const s = json.summary;
+      if (!s || (s.total_trades ?? 0) < 5) {
+        setError("Sampel backtest < 5 trade — pertahankan win-rate/R:R manual.");
+        return;
+      }
+      setForm(f => ({
+        ...f,
+        win_rate: ((s.win_rate_pct ?? s.win_rate ?? 55)).toFixed(1),
+        avg_rr: (s.avg_rr || 2).toFixed(2),
+      }));
+    } catch (e: any) {
+      setError(e.message || "Backtest gagal");
+    } finally {
+      setBtLoading(false);
+    }
+  };
 
   const fetchGarchSL = async () => {
     if (!form.entry) {
@@ -305,7 +337,7 @@ export function PositionSizingCalculator({ symbol = "BTCUSDT", initialData }: { 
         </div>
 
         {/* Stats */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
           <div>
             <label style={labelStyle}>Win Rate (%)</label>
             <input type="number" value={form.win_rate} onChange={e => set("win_rate", e.target.value)} style={inputStyle} placeholder="55" min={1} max={99} />
@@ -315,6 +347,19 @@ export function PositionSizingCalculator({ symbol = "BTCUSDT", initialData }: { 
             <input type="number" value={form.avg_rr} onChange={e => set("avg_rr", e.target.value)} style={inputStyle} placeholder="2.0" step={0.1} min={0.1} />
           </div>
         </div>
+
+        <button
+          onClick={loadBacktest}
+          disabled={btLoading}
+          title="Isi win-rate & R:R dari backtest historis (memakai mesin sinyal yang sama)"
+          style={{
+            width: "100%", padding: "7px", borderRadius: 8, cursor: btLoading ? "wait" : "pointer",
+            background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.25)",
+            color: "#10b981", fontSize: "0.68rem", fontWeight: 800, marginBottom: 12,
+          }}
+        >
+          {btLoading ? "⟳ Menghitung backtest…" : "🕰️ Load Win-Rate & R:R dari Backtest"}
+        </button>
 
         {error && <div style={{ color: "#ef4444", fontSize: "0.75rem", marginBottom: 12, padding: "8px 12px", background: "rgba(239,68,68,0.1)", borderRadius: 8 }}>{error}</div>}
 

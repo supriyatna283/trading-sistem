@@ -351,3 +351,9 @@ async def cancel_signal(symbol: str, reason: str = Query("manual_cancel")):
     """Manually cancel an active signal to allow a new one for that symbol."""
     signal_state_manager.force_cancel(symbol.upper(), reason)
     return {"ok": True, "message": f"Signal for {symbol.upper()} cancelled. New signals now allowed."}
+
+
+@router.get("/signal-performance")
+async def get_signal_performance():
+    """Live, closed-loop performance stats aggregated from resolved signals."""
+    return signal_state_manager.get_performance_stats()

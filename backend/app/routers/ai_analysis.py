@@ -638,12 +638,18 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
         ema20 = ema50 = ema200 = bb_upper = bb_mid = bb_lower = bb_bw = stoch_k = stoch_d = adx_val = None
         vwap_data = {}
 
-    # 5b. Divergence detection
+    # 5b. Divergence detection — single call returns both RSI & MACD flags
     try:
-        rsi_div = detect_divergence(entry_df, "rsi")
-        macd_div = detect_divergence(entry_df, "macd")
+        div = detect_divergence(entry_df)
     except Exception:
-        rsi_div = macd_div = None
+        div = None
+
+    rsi_div = macd_div = None
+    if isinstance(div, dict):
+        d_type = div.get("type") or "none"
+        d_str = f"{d_type} divergence (strength {div.get('strength', 0)})"
+        rsi_div = d_str if div.get("rsi_divergence") else None
+        macd_div = d_str if div.get("macd_divergence") else None
 
     # 5c. Candle pattern
     try:
@@ -1340,12 +1346,12 @@ HTF Alignment:      {aligned_count}/{total_htf} timeframe selaras dengan {signal
   MACD Line:      {macd_l:.6f}
   Signal Line:    {macd_s:.6f}
   Histogram:      {macd_h:+.6f} {macd_dir_icon}
-  Divergence:     {ind.get('macd_divergence', 'Tidak terdeteksi')}
+  Divergence:     {ind.get('macd_divergence') or 'Tidak terdeteksi'}
 
 ━━━ 📉 RSI (14) — PRIMARY OSCILLATOR ━━━━━━━━━━━━
   Status:         {rsi_state}
-  Divergence:     {ind.get('rsi_divergence', 'Tidak terdeteksi')}
-  Candle Pattern: {ind.get('candle_pattern', 'Tidak ada')}
+  Divergence:     {ind.get('rsi_divergence') or 'Tidak terdeteksi'}
+  Candle Pattern: {ind.get('candle_pattern') or 'Tidak ada'}
 
 ━━━ 🏦 SMART MONEY CONCEPTS (CONTEXT) ━━━━━━━━━━
   Order Blocks Aktif ({smc['unmitigated_ob_count']}):
@@ -1560,7 +1566,7 @@ async def _stream_ai_analysis(
         "atr": setup_levels.get("atr"),
         "risk_per_unit": setup_levels.get("risk_per_unit"),
         "invalidation_level": setup_levels.get("invalidation_level"),
-        "tp_probability": setup_levels.get("tp_probability", {"tp1": 75, "tp2": 55, "tp3": 30}),
+        "tp_probability": setup_levels.get("tp_probability", {"tp1": None, "tp2": None, "tp3": None}),
         "htf_biases": ctx["htf_biases"],
         "indicators": ctx["indicators"],
         "smc": ctx["smc"],

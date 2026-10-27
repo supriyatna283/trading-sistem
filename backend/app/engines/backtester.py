@@ -37,6 +37,9 @@ HTF_CANDLE_LIMIT = 300
 # Phase 3 aligned threshold
 MIN_SCORE = 16
 
+# HTF candle interval durations (for look-ahead-free point-in-time filtering)
+HTF_INTERVALS = {"1d": pd.Timedelta(days=1), "4h": pd.Timedelta(hours=4)}
+
 
 def _signal_grade(score: float, max_score: float = MAX_SCORE) -> str:
     """Grade a signal based on its score as a percentage of max possible."""
@@ -104,23 +107,31 @@ class BacktestEngine:
             if pending_setup and not active_trade:
                 risk_amount = equity * (risk_per_trade_pct / 100.0)
                 entry_price = float(current_bar["open"])
-                fee = entry_price * FEE_RATE / 2
+                stop_distance = abs(entry_price - float(pending_setup.stop_loss))
+                position_size = risk_amount / stop_distance if stop_distance > 0 else 0.0
+                # Fee is a % of NOTIONAL (position value), not of price.
+                entry_fee = position_size * entry_price * (FEE_RATE / 2)
 
                 active_trade = {
                     "entry_time": current_time,
+                    "entry_index": i,
                     "symbol": pending_setup.symbol,
                     "direction": pending_setup.direction,
                     "entry_price": entry_price,
                     "stop_loss": pending_setup.stop_loss,
                     "take_profit_1": pending_setup.take_profit_1,
+                    "take_profit_2": pending_setup.take_profit_2,
+                    "take_profit_3": pending_setup.take_profit_3,
                     "risk_reward": pending_setup.risk_reward,
                     "risk_amount": risk_amount,
+                    "position_size": position_size,
                     "score": pending_setup.confluence_score,
                     "max_score": MAX_SCORE,
                     "signal_grade": _signal_grade(pending_setup.confluence_score, MAX_SCORE),
                     "setup_type": pending_setup.setup_type,
-                    "entry_fee": fee,
+                    "entry_fee": entry_fee,
                     "mae": 0.0,
+                    "mfe": 0.0,
                 }
                 pending_setup = None
 
@@ -136,6 +147,7 @@ class BacktestEngine:
                 if active_trade["direction"] == "BUY":
                     adverse_distance = active_trade["entry_price"] - low
                     active_trade["mae"] = max(active_trade["mae"], adverse_distance)
+                    active_trade["mfe"] = max(active_trade["mfe"], high - active_trade["entry_price"])
                     if low <= active_trade["stop_loss"]:
                         pnl = -active_trade["risk_amount"]
                         result = "LOSS"
@@ -147,6 +159,7 @@ class BacktestEngine:
                 else:  # SELL
                     adverse_distance = high - active_trade["entry_price"]
                     active_trade["mae"] = max(active_trade["mae"], adverse_distance)
+                    active_trade["mfe"] = max(active_trade["mfe"], active_trade["entry_price"] - low)
                     if high >= active_trade["stop_loss"]:
                         pnl = -active_trade["risk_amount"]
                         result = "LOSS"
@@ -157,7 +170,8 @@ class BacktestEngine:
                         trade_closed = True
 
                 if trade_closed:
-                    exit_fee = abs(pnl) * FEE_RATE / 2
+                    exit_price = active_trade["stop_loss"] if result == "LOSS" else active_trade["take_profit_1"]
+                    exit_fee = active_trade["position_size"] * exit_price * (FEE_RATE / 2)
                     total_fees = active_trade.get("entry_fee", 0) + exit_fee
                     pnl_after_fees = pnl - total_fees
 
@@ -167,6 +181,7 @@ class BacktestEngine:
                     active_trade["pnl"] = round(pnl_after_fees, 2)
                     active_trade["result"] = result
                     active_trade["mae"] = round(active_trade["mae"], 6)
+                    active_trade["mfe"] = round(active_trade["mfe"], 6)
                     equity += pnl_after_fees
                     active_trade["equity_after"] = round(equity, 2)
                     trades.append(active_trade)
@@ -197,6 +212,8 @@ class BacktestEngine:
                     pending_setup = setup
 
         summary = self._calculate_summary(trades, initial_capital, equity, equity_curve)
+        summary["tp_rates"] = self._compute_tp_reach_rates(trades, df)
+        summary["grade_breakdown"] = self._build_grade_breakdown(trades)
         breakdown = self._build_breakdown(trades)
 
         return {
@@ -238,10 +255,13 @@ class BacktestEngine:
         for tf, htf_df in htf_dfs.items():
             if htf_df.empty:
                 continue
-            available = htf_df[htf_df["open_time"] <= as_of_time]
-            if available.empty:
+            # Point-in-time: only include HTF candles that have CLOSED by as_of_time.
+            # Using open_time <= as_of_time leaks the still-forming candle (look-ahead).
+            interval = HTF_INTERVALS.get(tf, pd.Timedelta(hours=1))
+            closed = htf_df[htf_df["open_time"] + interval <= as_of_time]
+            if closed.empty:
                 continue
-            candles_by_tf[tf] = available.tail(htf_window).reset_index(drop=True)
+            candles_by_tf[tf] = closed.tail(htf_window).reset_index(drop=True)
         return candles_by_tf
 
     def _calculate_summary(
@@ -304,21 +324,24 @@ class BacktestEngine:
         else:
             calmar_ratio = 0.0
 
-        # Sharpe & Sortino Ratios
+        # Sharpe & Sortino Ratios (annualized against the actual time span)
         sharpe_ratio = 0.0
         sortino_ratio = 0.0
         if len(equity_curve) >= 10:
             equities = np.array([e["equity"] for e in equity_curve])
             returns = np.diff(equities) / equities[:-1]
+            times = np.array([e["time"] for e in equity_curve])
+            span_years = (times[-1] - times[0]) / (1000.0 * 60 * 60 * 24 * 365)
+            annual_factor = np.sqrt(len(returns) / span_years) if span_years > 0 else np.sqrt(len(returns))
             if len(returns) > 1:
                 mean_ret = np.mean(returns)
-                std_ret = np.std(returns)
+                std_ret = np.std(returns, ddof=1)
                 if std_ret > 0:
-                    sharpe_ratio = float(mean_ret / std_ret * np.sqrt(len(returns)))
+                    sharpe_ratio = float(mean_ret / std_ret * annual_factor)
                 downside = returns[returns < 0]
-                sortino_std = np.std(downside) if len(downside) > 1 else std_ret
+                sortino_std = np.std(downside, ddof=1) if len(downside) > 1 else std_ret
                 if sortino_std > 0:
-                    sortino_ratio = float(mean_ret / sortino_std * np.sqrt(len(returns)))
+                    sortino_ratio = float(mean_ret / sortino_std * annual_factor)
 
         # Grade breakdown
         grade_counts: Dict[str, int] = {"A+": 0, "A": 0, "B": 0, "C": 0}
@@ -330,12 +353,14 @@ class BacktestEngine:
             "initial_capital": initial_capital,
             "final_equity": round(final_equity, 2),
             "total_return_pct": round(total_return_pct, 2),
+            "net_profit_pct": round(total_return_pct, 2),
             "net_profit": round(net_profit, 2),
             "total_fees": round(total_fees, 2),
             "total_trades": total_trades,
             "wins": win_count,
             "losses": loss_count,
             "win_rate": round(win_rate, 2),
+            "win_rate_pct": round(win_rate, 2),
             "profit_factor": round(profit_factor, 2),
             "max_drawdown_pct": round(max_dd, 2),
             "avg_win": round(avg_win, 2),
@@ -379,4 +404,94 @@ class BacktestEngine:
                 "pnl": stats["pnl"],
             })
         result.sort(key=lambda x: x["total"], reverse=True)
+        return result
+
+    def _compute_tp_reach_rates(self, trades: list, df: pd.DataFrame) -> Dict[str, Any]:
+        """Point-in-time probability that price reaches TP1/TP2/TP3 before SL.
+
+        Independent of the PnL simulation (which exits at TP1), this walks each
+        trade forward from its entry bar and records whether each TP level was
+        touched before the stop loss was hit (conservative SL-first ordering).
+        """
+        if not trades:
+            return {"n": 0, "tp1_hit_rate": 0.0, "tp2_hit_rate": 0.0, "tp3_hit_rate": 0.0}
+
+        highs = df["high"].astype(float).values
+        lows = df["low"].astype(float).values
+        n = len(df)
+        n_trades = len(trades)
+        hit1 = hit2 = hit3 = 0
+
+        for t in trades:
+            idx = t.get("entry_index")
+            if idx is None or idx >= n:
+                continue
+            direction = t["direction"]
+            sl = float(t["stop_loss"])
+            tp1 = t.get("take_profit_1")
+            tp2 = t.get("take_profit_2")
+            tp3 = t.get("take_profit_3")
+
+            reached1 = reached2 = reached3 = False
+            for j in range(idx, n):
+                h = highs[j]
+                l = lows[j]
+                if direction == "BUY":
+                    if l <= sl:
+                        break  # stopped before further TP reach
+                    if tp1 is not None and h >= tp1:
+                        reached1 = True
+                    if tp2 is not None and h >= tp2:
+                        reached2 = True
+                    if tp3 is not None and h >= tp3:
+                        reached3 = True
+                else:  # SELL
+                    if h >= sl:
+                        break
+                    if tp1 is not None and l <= tp1:
+                        reached1 = True
+                    if tp2 is not None and l <= tp2:
+                        reached2 = True
+                    if tp3 is not None and l <= tp3:
+                        reached3 = True
+
+            if reached1:
+                hit1 += 1
+            if reached2:
+                hit2 += 1
+            if reached3:
+                hit3 += 1
+
+        return {
+            "n": n_trades,
+            "tp1_hit_rate": round(hit1 / n_trades * 100, 1),
+            "tp2_hit_rate": round(hit2 / n_trades * 100, 1),
+            "tp3_hit_rate": round(hit3 / n_trades * 100, 1),
+        }
+
+    def _build_grade_breakdown(self, trades: list) -> list:
+        """Per-grade win rate — validates whether higher grades actually win more."""
+        grades: Dict[str, Dict] = {}
+        for t in trades:
+            g = t.get("signal_grade", "C")
+            if g not in grades:
+                grades[g] = {"total": 0, "wins": 0, "pnl": 0.0}
+            grades[g]["total"] += 1
+            grades[g]["pnl"] = round(grades[g]["pnl"] + t.get("pnl", 0), 2)
+            if t["result"] == "WIN":
+                grades[g]["wins"] += 1
+
+        order = {"A+": 0, "A": 1, "B": 2, "C": 3}
+        result = []
+        for g, stats in grades.items():
+            total = stats["total"]
+            result.append({
+                "grade": g,
+                "total": total,
+                "wins": stats["wins"],
+                "losses": total - stats["wins"],
+                "win_rate": round(stats["wins"] / total * 100, 1) if total else 0.0,
+                "pnl": stats["pnl"],
+            })
+        result.sort(key=lambda x: order.get(x["grade"], 9))
         return result

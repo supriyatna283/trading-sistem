@@ -44,7 +44,7 @@ function getNowUTC() {
 
 function getKillZoneStatus(utcHour: number) {
   const active = KILL_ZONES.filter(kz => utcHour >= kz.start && utcHour < kz.end);
-  const next   = KILL_ZONES.find(kz => kz.start > utcHour);
+  const next   = KILL_ZONES.find(kz => kz.start > utcHour) ?? KILL_ZONES[0];
   return { active, next };
 }
 
@@ -53,8 +53,8 @@ function getPremiumDiscount(currentPrice: number, fibData: FibData) {
   if (range <= 0) return { zone: "Equilibrium" as const, pct: 50, color: "#facc15" };
   const posFromLow = ((currentPrice - fibData.swingLow) / range) * 100;
   const pct = Math.max(0, Math.min(100, posFromLow));
-  if (pct > 55) return { zone: "Premium"     as const, pct, color: "#f87171" };
-  if (pct < 45) return { zone: "Discount"    as const, pct, color: "#34d399" };
+  if (pct > 62) return { zone: "Premium"     as const, pct, color: "#f87171" };
+  if (pct < 38) return { zone: "Discount"    as const, pct, color: "#34d399" };
   return               { zone: "Equilibrium" as const, pct, color: "#facc15" };
 }
 
@@ -155,7 +155,7 @@ export default function ICTContextPanel({ symbol: _symbol, currentPrice, fibData
               </span>
             </div>
             <div style={{ position: "relative", height: 6, borderRadius: 3, overflow: "hidden", background: "rgba(255,255,255,0.06)" }}>
-              <div style={{ position: "absolute", left: "45%", width: "10%", height: "100%", background: "rgba(250,204,21,0.18)" }} />
+              <div style={{ position: "absolute", left: "38%", width: "24%", height: "100%", background: "rgba(250,204,21,0.18)" }} />
               <div style={{
                 position: "absolute", left: `${Math.max(0, Math.min(96, pd.pct))}%`,
                 width: "4%", height: "100%", background: pd.color, borderRadius: 3,

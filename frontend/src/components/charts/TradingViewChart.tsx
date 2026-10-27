@@ -42,6 +42,17 @@ export interface FVGOverlay {
   high: number;
 }
 
+export interface LiquidityLevelOverlay {
+  price: number;
+  type: "EQUAL_HIGH" | "EQUAL_LOW";
+  swept: boolean;
+}
+
+export interface PatternData {
+  candle: { pattern: string | null; bullish: boolean } | null;
+  divergence: { rsi_divergence: boolean; macd_divergence: boolean; type: string; strength: number } | null;
+}
+
 export interface StructureMarker {
   time: number;
   label: "BOS" | "CHOCH" | "HH" | "HL" | "LH" | "LL";
@@ -73,6 +84,8 @@ interface IndicatorState {
   macd: boolean;
   autoFib: boolean;
   supportResistance: boolean;
+  vwap: boolean;
+  volumeProfile: boolean;
   sessions: boolean;
 }
 
@@ -175,48 +188,6 @@ function calculateRSI(data: any[], period: number = 14): LineData<Time>[] {
     rsiData.push({ time: data[i].time, value: 100 - 100 / (1 + rs) });
   }
   return rsiData;
-}
-
-function calculateStochRSI(data: any[], period = 14, smoothK = 3, smoothD = 3) {
-  if (data.length < period) return { kLine: [], dLine: [] };
-
-  const rsiData = calculateRSI(data, period);
-  if (rsiData.length < period) return { kLine: [], dLine: [] };
-
-  const stochRsiData: { time: Time; value: number }[] = [];
-
-  for (let i = period - 1; i < rsiData.length; i++) {
-    const slice = rsiData.slice(i - period + 1, i + 1);
-    const minRsi = Math.min(...slice.map(s => s.value));
-    const maxRsi = Math.max(...slice.map(s => s.value));
-
-    let stochRsi = 0;
-    if (maxRsi !== minRsi) {
-      stochRsi = ((rsiData[i].value - minRsi) / (maxRsi - minRsi)) * 100;
-    }
-
-    stochRsiData.push({ time: rsiData[i].time, value: stochRsi });
-  }
-
-  const kLine: LineData<Time>[] = [];
-  if (stochRsiData.length >= smoothK) {
-    for (let i = smoothK - 1; i < stochRsiData.length; i++) {
-      const slice = stochRsiData.slice(i - smoothK + 1, i + 1);
-      const avg = slice.reduce((sum, d) => sum + d.value, 0) / smoothK;
-      kLine.push({ time: stochRsiData[i].time, value: avg });
-    }
-  }
-
-  const dLine: LineData<Time>[] = [];
-  if (kLine.length >= smoothD) {
-    for (let i = smoothD - 1; i < kLine.length; i++) {
-      const slice = kLine.slice(i - smoothD + 1, i + 1);
-      const avg = slice.reduce((sum, d) => sum + d.value, 0) / smoothD;
-      dLine.push({ time: kLine[i].time, value: avg });
-    }
-  }
-
-  return { kLine, dLine };
 }
 
 function calculateMACD(data: any[], fast = 12, slow = 26, signal = 9) {
@@ -337,33 +308,31 @@ function calculateFibonacciAuto(
   const range = swingHigh - swingLow;
 
   // Retracement levels (0–100%) + Extension levels (>100%)
-  // UP trend: anchor 100%=High, 0%=Low → retracement pulls back toward Low
-  // DOWN trend: anchor 100%=Low, 0%=High → retracement pulls back toward High
+  // UP trend:   0% = swingLow, 100% = swingHigh; extensions go ABOVE swingHigh.
+  // DOWN trend: 0% = swingHigh, 100% = swingLow; extensions go BELOW swingLow.
   const RATIOS = [
-    // Extensions (above 100% for UP / below 0% for DOWN)
-    { r: -0.272, label: "127.2%", isKey: true,  isExtension: true,  isGolden: false, color: "rgba(52,211,153,0.9)" },
-    { r: -0.414, label: "141.4%", isKey: false, isExtension: true,  isGolden: false, color: "rgba(52,211,153,0.6)" },
-    { r: -0.618, label: "161.8%", isKey: true,  isExtension: true,  isGolden: false, color: "rgba(52,211,153,1.0)" },
-    { r: -1.0,   label: "200%",   isKey: false, isExtension: true,  isGolden: false, color: "rgba(52,211,153,0.5)" },
-    { r: -1.618, label: "261.8%", isKey: true,  isExtension: true,  isGolden: false, color: "rgba(52,211,153,0.8)" },
+    // Extensions (>100%)
+    { r: 2.618, label: "261.8%", isKey: true,  isExtension: true,  isGolden: false, color: "rgba(52,211,153,0.8)" },
+    { r: 2.0,   label: "200%",   isKey: false, isExtension: true,  isGolden: false, color: "rgba(52,211,153,0.5)" },
+    { r: 1.618, label: "161.8%", isKey: true,  isExtension: true,  isGolden: false, color: "rgba(52,211,153,1.0)" },
+    { r: 1.414, label: "141.4%", isKey: false, isExtension: true,  isGolden: false, color: "rgba(52,211,153,0.6)" },
+    { r: 1.272, label: "127.2%", isKey: true,  isExtension: true,  isGolden: false, color: "rgba(52,211,153,0.9)" },
     // Retracement levels (0–100%)
-    { r:  0.0,   label: "0%",     isKey: false, isExtension: false, isGolden: false, color: "rgba(239,68,68,0.7)"  },
-    { r:  0.236, label: "23.6%",  isKey: false, isExtension: false, isGolden: false, color: "rgba(245,158,11,0.55)" },
-    { r:  0.382, label: "38.2%",  isKey: true,  isExtension: false, isGolden: false, color: "rgba(16,185,129,0.85)" },
-    { r:  0.5,   label: "50%",    isKey: true,  isExtension: false, isGolden: true,  color: "rgba(250,204,21,0.95)" },
-    { r:  0.618, label: "61.8%",  isKey: true,  isExtension: false, isGolden: true,  color: "rgba(167,139,250,0.95)" },
-    { r:  0.786, label: "78.6%",  isKey: false, isExtension: false, isGolden: false, color: "rgba(245,158,11,0.6)"  },
     { r:  1.0,   label: "100%",   isKey: false, isExtension: false, isGolden: false, color: "rgba(239,68,68,0.7)"  },
+    { r:  0.786, label: "78.6%",  isKey: false, isExtension: false, isGolden: false, color: "rgba(245,158,11,0.6)"  },
+    { r:  0.618, label: "61.8%",  isKey: true,  isExtension: false, isGolden: true,  color: "rgba(167,139,250,0.95)" },
+    { r:  0.5,   label: "50%",    isKey: true,  isExtension: false, isGolden: true,  color: "rgba(250,204,21,0.95)" },
+    { r:  0.382, label: "38.2%",  isKey: true,  isExtension: false, isGolden: false, color: "rgba(16,185,129,0.85)" },
+    { r:  0.236, label: "23.6%",  isKey: false, isExtension: false, isGolden: false, color: "rgba(245,158,11,0.55)" },
+    { r:  0.0,   label: "0%",     isKey: false, isExtension: false, isGolden: false, color: "rgba(239,68,68,0.7)"  },
   ];
 
   const levels = RATIOS.map(({ r, label, color, isKey, isExtension, isGolden }) => {
-    // UP: 0% = swingLow, 100% = swingHigh, retracement pulls DOWN from High
-    //     Extensions go ABOVE swingHigh (r < 0 means above 100%)
-    // DOWN: 0% = swingHigh, 100% = swingLow, retracement pulls UP from Low
-    //       Extensions go BELOW swingLow
+    // UP:   0% = swingLow, 100% = swingHigh; r>1 → extension above swingHigh.
+    // DOWN: 0% = swingHigh, 100% = swingLow; r>1 → extension below swingLow.
     const price = direction === "UP"
-      ? swingHigh - r * range        // r=0 → High, r=1 → Low, r=-0.618 → above High (161.8% ext)
-      : swingLow  + r * range;       // r=0 → Low,  r=1 → High, r=-0.618 → below Low (161.8% ext)
+      ? swingLow  + r * range
+      : swingHigh - r * range;
     return { ratio: r, price, label, color, isKey, isExtension, isGolden };
   });
 
@@ -505,6 +474,74 @@ function calculateATR(data: any[], period = 14): number {
   return trs.reduce((a, b) => a + b, 0) / trs.length;
 }
 
+// ── Session VWAP (anchored to UTC day) ──
+function calculateVWAP(data: any[]): LineData<Time>[] {
+  const out: LineData<Time>[] = [];
+  let cumTPV = 0;
+  let cumVol = 0;
+  let currentDay = -1;
+  for (const d of data) {
+    const day = Math.floor(((d.time as number) * 1000) / 86400000);
+    if (day !== currentDay) {
+      currentDay = day;
+      cumTPV = 0;
+      cumVol = 0;
+    }
+    const tp = (d.high + d.low + d.close) / 3;
+    const v = d.volume || 0;
+    cumTPV += tp * v;
+    cumVol += v;
+    out.push({ time: d.time, value: cumVol > 0 ? cumTPV / cumVol : d.close });
+  }
+  return out;
+}
+
+// ── Fixed-range Volume Profile (POC + 70% Value Area) ──
+function calculateVolumeProfile(data: any[], bins = 24): { poc: number; vah: number; val: number } | null {
+  if (data.length < 20) return null;
+  let priceMin = Infinity, priceMax = -Infinity;
+  for (const d of data) {
+    if (d.low < priceMin) priceMin = d.low;
+    if (d.high > priceMax) priceMax = d.high;
+  }
+  if (!(priceMax > priceMin)) return null;
+  const binSize = (priceMax - priceMin) / bins;
+  const volumeAtPrice = new Array(bins).fill(0);
+  for (const d of data) {
+    const v = d.volume || 0;
+    const candleRange = (d.high - d.low) || binSize;
+    for (let b = 0; b < bins; b++) {
+      const bLow = priceMin + b * binSize;
+      const bHigh = bLow + binSize;
+      const overlap = Math.max(0, Math.min(d.high, bHigh) - Math.max(d.low, bLow));
+      volumeAtPrice[b] += v * (overlap / candleRange);
+    }
+  }
+  let pocIdx = 0;
+  for (let b = 1; b < bins; b++) if (volumeAtPrice[b] > volumeAtPrice[pocIdx]) pocIdx = b;
+  const poc = priceMin + (pocIdx + 0.5) * binSize;
+  const totalVol = volumeAtPrice.reduce((a, b) => a + b, 0);
+  const target = totalVol * 0.70;
+  let vaVol = volumeAtPrice[pocIdx];
+  let lowIdx = pocIdx, highIdx = pocIdx;
+  while (vaVol < target && (lowIdx > 0 || highIdx < bins - 1)) {
+    const expandLow = lowIdx > 0 ? volumeAtPrice[lowIdx - 1] : 0;
+    const expandHigh = highIdx < bins - 1 ? volumeAtPrice[highIdx + 1] : 0;
+    if (expandHigh >= expandLow && highIdx < bins - 1) {
+      highIdx++; vaVol += volumeAtPrice[highIdx];
+    } else if (lowIdx > 0) {
+      lowIdx--; vaVol += volumeAtPrice[lowIdx];
+    } else {
+      break;
+    }
+  }
+  return {
+    poc,
+    vah: priceMin + (highIdx + 1) * binSize,
+    val: priceMin + lowIdx * binSize,
+  };
+}
+
 
 // ---------------------------------------------------------------
 export default function TradingViewChart({
@@ -521,12 +558,10 @@ export default function TradingViewChart({
   // Main chart container
   const mainContainerRef = useRef<HTMLDivElement>(null);
   const rsiContainerRef = useRef<HTMLDivElement>(null);
-  const stochRsiContainerRef = useRef<HTMLDivElement>(null);
   const macdContainerRef = useRef<HTMLDivElement>(null);
 
   const chartRef = useRef<IChartApi | null>(null);
   const rsiChartRef = useRef<IChartApi | null>(null);
-  const stochRsiChartRef = useRef<IChartApi | null>(null);
   const macdChartRef = useRef<IChartApi | null>(null);
 
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -542,6 +577,10 @@ export default function TradingViewChart({
   const bbUpperRef = useRef<ISeriesApi<"Line"> | null>(null);
   const bbMiddleRef = useRef<ISeriesApi<"Line"> | null>(null);
   const bbLowerRef = useRef<ISeriesApi<"Line"> | null>(null);
+
+  // Session VWAP + Volume Profile (POC/VAH/VAL)
+  const vwapSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const vpLinesRef = useRef<any[]>([]);
 
   // RSI pane
   const rsiSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
@@ -584,6 +623,8 @@ export default function TradingViewChart({
   const [timeframe, setTimeframe] = useState(timeframeInterval);
   const [smcData, setSmcData] = useState<{ orderBlocks: OrderBlockOverlay[]; fvgs: FVGOverlay[] } | null>(null);
   const [smcStructure, setSmcStructure] = useState<StructureMarker[]>([]);
+  const [smcLiquidity, setSmcLiquidity] = useState<LiquidityLevelOverlay[]>([]);
+  const [smcPattern, setSmcPattern] = useState<PatternData>({ candle: null, divergence: null });
   const [wsStatus, setWsStatus] = useState<"connecting" | "live" | "disconnected">("connecting");
   const [chartStyle, setChartStyle] = useState<ChartStyle>("candlestick");
   const chartStyleRef = useRef<ChartStyle>("candlestick");
@@ -596,6 +637,8 @@ export default function TradingViewChart({
     macd: true,  // MACD — signal generator, on by default
     autoFib: true, // Auto Fibonacci — signal generator, on by default
     supportResistance: false,
+    vwap: false,
+    volumeProfile: false,
     sessions: false,
   });
 
@@ -608,6 +651,8 @@ export default function TradingViewChart({
   const [candleTheme, setCandleTheme] = useState<CandleTheme>("neon");
   const [countdown, setCountdown] = useState("");
   const [srLevels, setSrLevels] = useState<{ supports: number[]; resistances: number[] }>({ supports: [], resistances: [] });
+  const [atrValue, setAtrValue] = useState(0);
+  const [vpLevels, setVpLevels] = useState<{ poc: number; vah: number; val: number } | null>(null);
 
   // Drawing tool state
   const [drawingMode, setDrawingMode] = useState<DrawingMode>("none");
@@ -687,9 +732,10 @@ export default function TradingViewChart({
   const fetchSMC = useCallback(async (sym: string, tf: string) => {
     if (!autoFetchSMC) return;
     try {
-      const [smcRes, structRes] = await Promise.all([
+      const [smcRes, structRes, patRes] = await Promise.all([
         fetch(`${API_URL}/api/v1/analysis/smc/${sym}?timeframe=${tf}&demo=false`).then(r => r.json()),
         fetch(`${API_URL}/api/v1/analysis/structure/${sym}?timeframe=${tf}&demo=false`).then(r => r.json()),
+        fetch(`${API_URL}/api/v1/analysis/patterns/${sym}?timeframe=${tf}&demo=false`).then(r => r.json()).catch(() => null),
       ]);
       const obs: OrderBlockOverlay[] = (smcRes?.order_blocks ?? []).map((ob: any) => ({
         type: ob.type, low: ob.low, high: ob.high, mitigated: ob.mitigated,
@@ -698,6 +744,14 @@ export default function TradingViewChart({
         type: f.type, low: f.low, high: f.high,
       }));
       setSmcData({ orderBlocks: obs, fvgs: fvgsData });
+      const liq: LiquidityLevelOverlay[] = (smcRes?.liquidity_levels ?? []).map((l: any) => ({
+        price: l.price, type: l.type, swept: !!l.swept,
+      }));
+      setSmcLiquidity(liq);
+      setSmcPattern({
+        candle: patRes?.candle_pattern ?? null,
+        divergence: patRes?.divergence ?? null,
+      });
       const markers: StructureMarker[] = (structRes?.structure_labels ?? []).map((l: any) => ({
         time: l.time ? new Date(l.time).getTime() : Date.now(), label: l.label, price: l.price ?? 0,
       }));
@@ -788,13 +842,18 @@ export default function TradingViewChart({
         lines.push(priceLine(series, fvg.low, `${label} Lo`, color, LineStyle.Dotted, 1));
         lines.push(priceLine(series, fvg.high, `${label} Hi`, color, LineStyle.Dotted, 1));
       });
+      smcLiquidity.slice(0, 8).forEach((liq) => {
+        const color = liq.type === "EQUAL_HIGH" ? "rgba(239,68,68,0.5)" : "rgba(34,197,94,0.5)";
+        const label = liq.type === "EQUAL_HIGH" ? "EQ High" : "EQ Low";
+        lines.push(priceLine(series, liq.price, `${label}${liq.swept ? " ✕" : ""}`, color, LineStyle.Dotted, 1));
+      });
     }
 
     priceLineRefs.current = lines;
 
     // Structure markers are now handled by syncMarkers()
     syncMarkers();
-  }, [setup, effectiveOBs, effectiveFVGs, effectiveMarkers, srLevels, indicators.supportResistance, chartStyle]);
+  }, [setup, effectiveOBs, effectiveFVGs, effectiveMarkers, srLevels, indicators.supportResistance, chartStyle, smcLiquidity]);
 
   const syncMarkers = useCallback(() => {
     const series = seriesRef.current || lineSeriesRef.current || areaSeriesRef.current;
@@ -810,8 +869,8 @@ export default function TradingViewChart({
         const m = t.getUTCMinutes();
         if (m === 0) {
           if (h === 0) allMarkers.push({ time: c.time as Time, position: "inBar", color: "rgba(245,158,11,0.7)", shape: "arrowUp", text: "Asia", size: 1 });
-          else if (h === 8) allMarkers.push({ time: c.time as Time, position: "inBar", color: "rgba(59,130,246,0.7)", shape: "arrowUp", text: "London", size: 1 });
-          else if (h === 13) allMarkers.push({ time: c.time as Time, position: "inBar", color: "rgba(34,197,94,0.7)", shape: "arrowUp", text: "NY", size: 1 });
+          else if (h === 7) allMarkers.push({ time: c.time as Time, position: "inBar", color: "rgba(59,130,246,0.7)", shape: "arrowUp", text: "London", size: 1 });
+          else if (h === 12) allMarkers.push({ time: c.time as Time, position: "inBar", color: "rgba(34,197,94,0.7)", shape: "arrowUp", text: "NY", size: 1 });
         }
       });
     }
@@ -843,6 +902,22 @@ export default function TradingViewChart({
       if (fib.swingLowTime) allMarkers.push({ time: fib.swingLowTime as Time, position: "belowBar", color: "#22c55e", shape: "arrowUp", text: "LL" });
     }
 
+    // 4. Divergence Markers (RSI/MACD)
+    if (indicators.smcZones && smcPattern.divergence && (smcPattern.divergence.rsi_divergence || smcPattern.divergence.macd_divergence)) {
+      const div = smcPattern.divergence;
+      const last = chartDataRef.current[chartDataRef.current.length - 1];
+      if (last) {
+        allMarkers.push({
+          time: last.time as Time,
+          position: div.type === "bullish" ? "belowBar" : "aboveBar",
+          color: div.type === "bullish" ? "#22c55e" : "#ef4444",
+          shape: div.type === "bullish" ? "arrowUp" : "arrowDown",
+          text: div.type === "bullish" ? "DIV▲" : "DIV▼",
+          size: 2,
+        });
+      }
+    }
+
     // Sort by time ascending
     allMarkers.sort((a, b) => (a.time as number) - (b.time as number));
 
@@ -855,7 +930,7 @@ export default function TradingViewChart({
       const markerTarget = style === "line" ? lineSeriesRef.current : style === "area" ? areaSeriesRef.current : seriesRef.current;
       markerTarget?.setMarkers(allMarkers);
     }
-  }, [indicators.sessions, indicators.smcZones, indicators.autoFib, effectiveMarkers, timeframe]);
+  }, [indicators.sessions, indicators.smcZones, indicators.autoFib, effectiveMarkers, timeframe, smcPattern]);
 
   useEffect(() => { drawAnnotations(indicators.smcZones); }, [drawAnnotations, indicators.smcZones]);
 
@@ -1103,6 +1178,16 @@ export default function TradingViewChart({
     bbUpperRef.current?.applyOptions({ visible: indicators.bollingerBands });
     bbMiddleRef.current?.applyOptions({ visible: indicators.bollingerBands });
     bbLowerRef.current?.applyOptions({ visible: indicators.bollingerBands });
+    vwapSeriesRef.current?.applyOptions({ visible: indicators.vwap });
+    vpLinesRef.current.forEach(entry => {
+      try {
+        entry.pl.applyOptions({
+          color: indicators.volumeProfile ? entry.color : "rgba(0,0,0,0)",
+          axisLabelVisible: indicators.volumeProfile,
+          title: indicators.volumeProfile ? entry.title : "",
+        });
+      } catch (_) {}
+    });
 
     // Auto Fib: show/hide all fib price lines via color transparency
     autoFibLinesRef.current.forEach(entry => {
@@ -1134,10 +1219,6 @@ export default function TradingViewChart({
       seriesRef.current.applyOptions(CANDLE_THEMES[candleTheme]);
     }
   }, [candleTheme]);
-
-  // Symbols traded on Binance spot (major pairs)
-  // Others (HYPE, etc.) are futures-only or OKX-only → try futures then backend poll
-  const BINANCE_SPOT_ONLY = new Set<string>(); // keep empty: we auto-detect via WS error
 
   const setupWebSocket = useCallback((sym: string, tf: string) => {
     if (wsReconnectRef.current) { clearTimeout(wsReconnectRef.current); wsReconnectRef.current = null; }
@@ -1243,6 +1324,10 @@ export default function TradingViewChart({
                 bbMiddleRef.current?.update(bb.middle[bb.middle.length - 1]);
                 bbLowerRef.current?.update(bb.lower[bb.lower.length - 1]);
               }
+            }
+            if (vwapSeriesRef.current && indicators.vwap) {
+              const d = calculateVWAP(currentData);
+              if (d.length) vwapSeriesRef.current.update(d[d.length - 1]);
             }
             if (rsiSeriesRef.current && indicators.rsi) {
               const rsiD = calculateRSI(currentData, 14);
@@ -1394,7 +1479,9 @@ export default function TradingViewChart({
     htfFibLinesRef.current = [];
     htfFibDataRef.current = null;
     confluenceLinesRef.current = [];
+    vpLinesRef.current = [];
     setConfluenceZones([]);
+    setVpLevels(null);
 
     const chart = createChart(mainContainerRef.current, chartOptions as any);
 
@@ -1441,6 +1528,8 @@ export default function TradingViewChart({
     const bbMiddle = chart.addLineSeries({ color: "rgba(147,51,234,0.3)", lineWidth: 1, crosshairMarkerVisible: false, lineStyle: LineStyle.Dashed, visible: false });
     const bbLower = chart.addLineSeries({ color: "rgba(147,51,234,0.5)", lineWidth: 1, crosshairMarkerVisible: false, visible: false });
 
+    const vwapSeries = chart.addLineSeries({ color: "rgba(96,165,250,0.9)", lineWidth: 1, crosshairMarkerVisible: false, visible: false });
+
     chartRef.current = chart;
     seriesRef.current = candleSeries;
     lineSeriesRef.current = lineSeries;
@@ -1452,6 +1541,7 @@ export default function TradingViewChart({
     bbUpperRef.current = bbUpper;
     bbMiddleRef.current = bbMiddle;
     bbLowerRef.current = bbLower;
+    vwapSeriesRef.current = vwapSeries;
 
     // ── RSI Sub-Chart ──
     let rsiChart: IChartApi | null = null;
@@ -1633,6 +1723,28 @@ export default function TradingViewChart({
           bbUpper.setData(bb.upper);
           bbMiddle.setData(bb.middle);
           bbLower.setData(bb.lower);
+
+          // Session VWAP
+          vwapSeries.setData(calculateVWAP(chartData));
+
+          // ATR for legend
+          setAtrValue(calculateATR(chartData, 14));
+
+          // Volume Profile (POC / VAH / VAL) over the loaded range
+          const vp = calculateVolumeProfile(chartData);
+          setVpLevels(vp);
+          vpLinesRef.current.forEach(entry => { try { candleSeries.removePriceLine(entry.pl); } catch (_) {} });
+          vpLinesRef.current = [];
+          if (vp && candleSeries) {
+            const show = indicators.volumeProfile;
+            const mk = (price: number, color: string, style: LineStyle, w: 1 | 2 | 3 | 4, title: string) =>
+              candleSeries.createPriceLine({ price, color: show ? color : "rgba(0,0,0,0)", lineStyle: style, lineWidth: w, axisLabelVisible: show, title: show ? title : "" });
+            vpLinesRef.current = [
+              { pl: mk(vp.poc, "#f59e0b", LineStyle.Solid, 2, "POC"), color: "#f59e0b", title: "POC" },
+              { pl: mk(vp.vah, "rgba(34,197,94,0.65)", LineStyle.Dashed, 1, "VAH"), color: "rgba(34,197,94,0.65)", title: "VAH" },
+              { pl: mk(vp.val, "rgba(239,68,68,0.65)", LineStyle.Dashed, 1, "VAL"), color: "rgba(239,68,68,0.65)", title: "VAL" },
+            ];
+          }
 
           if (rsiSeries) rsiSeries.setData(calculateRSI(chartData, 14));
 
@@ -1901,6 +2013,7 @@ export default function TradingViewChart({
       autoFibDataRef.current = null;
       htfFibLinesRef.current = [];
       confluenceLinesRef.current = [];
+      vpLinesRef.current = [];
 
       htfFibDataRef.current = null;
       setDrawingsCount(0);
@@ -2235,6 +2348,8 @@ export default function TradingViewChart({
               { key: "volume",   label: "VOL",     color: "rgba(38,166,154,0.9)"  },
               { key: "supportResistance", label: "S/R", color: "rgba(34,197,94,0.9)" },
               { key: "smcZones", label: "SMC",     color: "rgba(139,92,246,0.9)"  },
+              { key: "vwap", label: "VWAP", color: "rgba(96,165,250,0.9)" },
+              { key: "volumeProfile", label: "VolProf", color: "rgba(245,158,11,0.9)" },
               { key: "sessions", label: "⏰ Session", color: "rgba(251,191,36,0.9)" },
             ] as { key: keyof IndicatorState; label: string; color: string }[]).map(({ key, label, color }) => (
               <button key={key} onClick={() => toggleIndicator(key)} style={{
@@ -2311,6 +2426,23 @@ export default function TradingViewChart({
           {indicators.ema50 && <span style={{ color: "rgba(245,158,11,1)", fontWeight: 700 }}>EMA 50</span>}
           {indicators.ema200 && <span style={{ color: "rgba(236,72,153,1)", fontWeight: 700 }}>EMA 200</span>}
           {indicators.bollingerBands && <span style={{ color: "rgba(147,51,234,1)", fontWeight: 700 }}>BB(20,2)</span>}
+          {indicators.vwap && <span style={{ color: "rgba(96,165,250,1)", fontWeight: 700 }}>VWAP</span>}
+          {atrValue > 0 && <span style={{ color: "rgba(245,158,11,0.9)", fontWeight: 700 }}>ATR(14) {formatPrice(atrValue)}</span>}
+          {indicators.volumeProfile && vpLevels && (
+            <span style={{ color: "rgba(245,158,11,0.9)", fontWeight: 700 }}>
+              POC {formatPrice(vpLevels.poc)} · VAH {formatPrice(vpLevels.vah)} · VAL {formatPrice(vpLevels.val)}
+            </span>
+          )}
+          {smcPattern.candle?.pattern && (
+            <span style={{ color: smcPattern.candle.bullish ? "#22c55e" : "#ef4444", fontWeight: 700 }}>
+              {smcPattern.candle.bullish ? "▲" : "▼"} {smcPattern.candle.pattern.replace(/_/g, " ")}
+            </span>
+          )}
+          {smcPattern.divergence && (smcPattern.divergence.rsi_divergence || smcPattern.divergence.macd_divergence) && (
+            <span style={{ color: smcPattern.divergence.type === "bullish" ? "#22c55e" : "#ef4444", fontWeight: 700 }}>
+              {smcPattern.divergence.type === "bullish" ? "▲" : "▼"} {smcPattern.divergence.rsi_divergence ? "RSI" : "MACD"} Div
+            </span>
+          )}
           {indicators.autoFib && autoFibDataRef.current && (
             <span style={{
               color: "rgba(167,139,250,0.9)", fontWeight: 700,

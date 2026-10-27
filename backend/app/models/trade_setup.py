@@ -100,8 +100,9 @@ class TradeSetup(Base):
             # FIX #8/#12: stale detection
             "hours_active": hours_active,
             "is_stale": is_stale,
-            # FIX #11: TP probability (conservative empirical estimates)
-            "tp_probability": {"tp1": 75, "tp2": 55, "tp3": 30},
+            # TP hit-probability is not tracked for stored setups — report unknown
+            # rather than fabricating fixed 75/55/30 estimates.
+            "tp_probability": {"tp1": None, "tp2": None, "tp3": None},
             # FIX #3: max_score for UI display
             "max_score": 30,
         }

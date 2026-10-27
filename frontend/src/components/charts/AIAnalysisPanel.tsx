@@ -512,10 +512,10 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
   };
 
   const rsiVal = ind.rsi;
-  const rsiClr = rsiVal > 70 ? "#ef4444" : rsiVal < 30 ? "#22c55e" : "#60a5fa";
+  const rsiClr = rsiVal == null ? "#60a5fa" : rsiVal > 70 ? "#ef4444" : rsiVal < 30 ? "#22c55e" : "#60a5fa";
   const adxVal = ind.adx;
   const stochK = ind.stoch_k;
-  const stochClr = stochK > 80 ? "#ef4444" : stochK < 20 ? "#22c55e" : "#a78bfa";
+  const stochClr = stochK == null ? "#a78bfa" : stochK > 80 ? "#ef4444" : stochK < 20 ? "#22c55e" : "#a78bfa";
 
   return (
     <div id="ai-panel" className="glass-card">
@@ -736,20 +736,22 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
                     <PriceRow label="Invalidation" value={fmt(setup.invalidation_level)} color="#f43f5e" />
                   )}
                   <div style={{ height: 6 }} />
-                  {/* FIX #11: TP with probability chips */}
+                  {/* TP with probability chips (only shown when backend provides a real estimate) */}
                   {(["tp1", "tp2", "tp3"] as const).map((key, idx) => {
                     const val = setup[key];
-                    const prob = setup.tp_probability?.[key] ?? [75, 55, 30][idx];
+                    const prob = setup.tp_probability?.[key] ?? null;  // no fabricated fallback
                     const tpColors = ["#4ade80", "#34d399", "#10b981"];
                     if (!val) return null;
                     return (
                       <div key={key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 0", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                           <span style={{ fontSize: "0.63rem", color: "var(--text-muted)", fontWeight: 600 }}>Take Profit {idx + 1}</span>
-                          <span style={{ fontSize: "0.5rem", fontWeight: 800, padding: "1px 5px", borderRadius: 4,
-                            background: prob >= 70 ? "rgba(34,197,94,0.15)" : prob >= 50 ? "rgba(245,158,11,0.15)" : "rgba(239,68,68,0.15)",
-                            color: prob >= 70 ? "#22c55e" : prob >= 50 ? "#f59e0b" : "#f87171",
-                          }}>{prob}%</span>
+                          {prob != null && (
+                            <span title="Estimasi probabilitas tembus TP (heuristik, bukan backtest)" style={{ fontSize: "0.5rem", fontWeight: 800, padding: "1px 5px", borderRadius: 4,
+                              background: prob >= 70 ? "rgba(34,197,94,0.15)" : prob >= 50 ? "rgba(245,158,11,0.15)" : "rgba(239,68,68,0.15)",
+                              color: prob >= 70 ? "#22c55e" : prob >= 50 ? "#f59e0b" : "#f87171",
+                            }}>{prob}%</span>
+                          )}
                         </div>
                         <span style={{ fontSize: "0.72rem", fontWeight: 700, fontFamily: "'JetBrains Mono','Fira Code',monospace", color: tpColors[idx] }}>{fmt(val)}</span>
                       </div>
@@ -792,7 +794,9 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
                       </div>
                       {(() => {
                         const riskAmount = accountSize * (riskPct / 100);
-                        const entry = setup.signal === "BUY" ? setup.entry_high! : setup.entry_low!;
+                        const entry = setup.signal === "BUY"
+                          ? (setup.entry_high ?? setup.entry_low!)
+                          : (setup.entry_low ?? setup.entry_high!);
                         const slDistance = Math.abs(entry - setup.stop_loss!);
                         const slPct = (slDistance / entry) * 100;
                         const posSizeUSD = slPct > 0 ? riskAmount / (slPct / 100) : 0;
@@ -950,6 +954,7 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
               {/* ─── WHALE INTEL PANEL (independent fetch) ─── */}
               {(() => {
                 const wi = whaleIntel;
+                const maxScore = wi?.max_score || 1;
                 const dp = wi?.dominant_position ?? "";
                 const isBull = dp.includes("LONG");
                 const isBear = dp.includes("SHORT");
@@ -1000,8 +1005,8 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
                             {/* Score fill */}
                             <div style={{
                               position: "absolute",
-                              left: wi.score >= 0 ? "50%" : `${50 + (wi.score / wi.max_score) * 50}%`,
-                              width: `${Math.abs(wi.score) / wi.max_score * 50}%`,
+                              left: wi.score >= 0 ? "50%" : `${50 + (wi.score / maxScore) * 50}%`,
+                              width: `${Math.abs(wi.score) / maxScore * 50}%`,
                               top: 0, bottom: 0,
                               background: wi.score >= 0 ? "#22c55e" : "#ef4444",
                               transition: "all 0.8s ease",
