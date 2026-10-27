@@ -5,19 +5,44 @@ import { api } from "@/lib/api";
 import { API_URL } from "@/lib/utils";
 import { useRouter } from "next/navigation";
 
-// Reuse the Scanner types
+interface TradeSetupPlan {
+  symbol: string;
+  direction: "BUY" | "SELL";
+  entry_price?: number;
+  entry_low: number;
+  entry_high: number;
+  stop_loss: number;
+  take_profit_1: number;
+  take_profit_2: number;
+  take_profit_3?: number;
+  risk_reward: number;
+  risk_pct?: number;
+  setup_type?: string;
+  pd_zone?: string;
+  in_ote?: boolean;
+}
+
 interface ScanResult {
   symbol: string;
   trend: string;
   latest_price: number;
   price_change_24h: number;
+  liquidity_status?: string;
   setup_status: string;
   signal_score: number;
   signal_grade: "A+" | "VALID" | "WEAK" | "NO_TRADE";
   score_breakdown: { STR: number; PA: number; SMC: number; VOL: number; TIM: number; RR: number };
+  hard_rejected?: boolean;
+  rejection_reasons?: string[];
   mtf_confirmation: string;
+  ict_badges?: string[];
+  pd_zone?: string;
+  in_ote?: boolean;
+  rsi_1h?: number | null;
+  orderbook_bias?: string;
+  market_cap_tier?: string;
   volume_delta?: number | null;
-  setup: any | null;
+  setup: TradeSetupPlan | null;
 }
 
 interface KZData {
@@ -30,20 +55,34 @@ interface KZData {
 }
 
 const SCORE_LABELS: Record<string, string> = {
-  STR: "Strength", PA: "Price Action", SMC: "Smart Money",
-  VOL: "Volume", TIM: "Timing", RR: "Risk:Reward",
+  STR: "Strength & HTF",
+  PA: "Price Action (Fib/RSI/MACD)",
+  SMC: "Smart Money (OB/FVG/Sweep)",
+  VOL: "Volume Confirmation",
+  TIM: "Session & News Timing",
+  RR: "Risk:Reward & Orderflow",
 };
+
+function fmtPrice(p: number | undefined | null): string {
+  if (p == null || Number.isNaN(Number(p))) return "—";
+  const val = Number(p);
+  if (val >= 1000) return val.toLocaleString("en-US", { maximumFractionDigits: 2 });
+  if (val >= 1) return val.toLocaleString("en-US", { maximumFractionDigits: 4 });
+  return val.toFixed(5);
+}
 
 export function ProScannerPanel({
   defaultTf = "1h",
   isActive = true,
   onSetWAAlert,
   onSelectSymbol,
+  onLoadPosCalc,
 }: {
   defaultTf?: string;
   isActive?: boolean;
   onSetWAAlert?: (data: any) => void;
   onSelectSymbol?: (symbol: string) => void;
+  onLoadPosCalc?: (plan: any, symbol?: string) => void;
 }) {
   const router = useRouter();
   const [data, setData] = useState<ScanResult[]>([]);
@@ -51,7 +90,7 @@ export function ProScannerPanel({
   const [isScanning, setIsScanning] = useState(false);
   const [entryTf, setEntryTf] = useState(defaultTf);
   const [trendFilter, setTrendFilter] = useState<"ALL" | "BULLISH" | "BEARISH">("ALL");
-  const [gradeFilter, setGradeFilter] = useState<"ALL" | "A+" | "VALID">("ALL");
+  const [gradeFilter, setGradeFilter] = useState<"READY" | "A+" | "VALID" | "ALL">("READY");
   const [kzData, setKzData] = useState<KZData | null>(null);
 
   const autoRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -106,19 +145,44 @@ export function ProScannerPanel({
     };
   }, [fetchData, fetchKZ, isActive]);
 
+  // Summary metrics across all scanned pairs
+  const readyPairs = data.filter(
+    r => !r.hard_rejected && (r.signal_grade === "A+" || r.signal_grade === "VALID") && r.setup !== null
+  );
+  const aPlusCount = readyPairs.filter(r => r.signal_grade === "A+").length;
+  const validCount = readyPairs.filter(r => r.signal_grade === "VALID").length;
+  const longCount = readyPairs.filter(r => (r.setup?.direction || (r.trend === "BULLISH" ? "BUY" : "SELL")) === "BUY").length;
+  const shortCount = readyPairs.filter(r => (r.setup?.direction || (r.trend === "BEARISH" ? "SELL" : "BUY")) === "SELL").length;
+  const avgRR = readyPairs.length > 0
+    ? (readyPairs.reduce((acc, r) => acc + Number(r.setup?.risk_reward || 2.0), 0) / readyPairs.length).toFixed(2)
+    : "—";
+
   // Multi-filter: grade + trend
   const filteredPairs = data.filter(r => {
-    const gradeOk = gradeFilter === "ALL"
-      ? (r.signal_grade === "A+" || r.signal_grade === "VALID" || r.setup !== null)
-      : r.signal_grade === gradeFilter;
-    const trendOk = trendFilter === "ALL" || r.trend === trendFilter;
+    const isActionable = !r.hard_rejected && (r.signal_grade === "A+" || r.signal_grade === "VALID") && r.setup !== null;
+    const gradeOk =
+      gradeFilter === "READY"
+        ? isActionable
+        : gradeFilter === "A+"
+        ? isActionable && r.signal_grade === "A+"
+        : gradeFilter === "VALID"
+        ? isActionable && r.signal_grade === "VALID"
+        : true; // "ALL" shows all scanned pairs including Watchlist / Rejected
+    const dir = r.setup?.direction === "BUY" ? "BULLISH" : r.setup?.direction === "SELL" ? "BEARISH" : r.trend;
+    const trendOk = trendFilter === "ALL" || dir === trendFilter;
     return gradeOk && trendOk;
   });
-  const sortedPairs = [...filteredPairs].sort((a, b) => (b.signal_score || 0) - (a.signal_score || 0));
+
+  const sortedPairs = [...filteredPairs].sort((a, b) => {
+    const aReady = (!a.hard_rejected && a.setup !== null) ? 1 : 0;
+    const bReady = (!b.hard_rejected && b.setup !== null) ? 1 : 0;
+    if (aReady !== bReady) return bReady - aReady;
+    return (b.signal_score || 0) - (a.signal_score || 0);
+  });
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      {/* ── Killzone Banner (Bug #7) ── */}
+      {/* ── Killzone Banner ── */}
       {kzData && (
         <div style={{
           display: "flex", alignItems: "center", gap: 12, padding: "10px 18px",
@@ -151,12 +215,16 @@ export function ProScannerPanel({
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)", padding: "16px 20px", borderRadius: 16, flexWrap: "wrap", gap: 12 }}>
         <div>
           <h2 style={{ fontSize: "1.2rem", fontWeight: 900, margin: 0, display: "flex", alignItems: "center", gap: 10 }}>
-            <span style={{ color: "#e879f9" }}>📡 Live Market Scanner</span>
-            <span style={{ fontSize: "0.65rem", background: "rgba(232,121,249,0.15)", color: "#e879f9", padding: "3px 8px", borderRadius: 6, fontWeight: 800 }}>READY PAIRS</span>
+            <span style={{ color: "#e879f9" }}>📡 Institutional Live Market Scanner</span>
+            <span style={{ fontSize: "0.62rem", background: "rgba(232,121,249,0.15)", color: "#e879f9", padding: "3px 8px", borderRadius: 6, fontWeight: 800, border: "1px solid rgba(232,121,249,0.3)" }}>
+              HYBRID QUANT + ICT
+            </span>
           </h2>
-          <p style={{ fontSize: "0.75rem", color: "var(--text-muted)", margin: "4px 0 0" }}>Auto-detecting A+ and Valid setups across the market.</p>
+          <p style={{ fontSize: "0.73rem", color: "var(--text-muted)", margin: "4px 0 0" }}>
+            Scans 20+ pairs for aligned HTF Bias, Structure, Discount/Premium OTE, Liquidity Sweep & OB/FVG Trade Plans.
+          </p>
         </div>
-        
+
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           {/* TF Selector */}
           <div style={{ display: "flex", background: "rgba(0,0,0,0.2)", borderRadius: 8, padding: 3, border: "1px solid rgba(255,255,255,0.05)" }}>
@@ -194,12 +262,44 @@ export function ProScannerPanel({
         </div>
       </div>
 
-      {/* ── Filter Bar (Bug #7) ── */}
+      {/* ── Market Pulse Summary Strip ── */}
+      {!isLoading && data.length > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
+          <div style={{ padding: "10px 14px", borderRadius: 12, background: "rgba(232,121,249,0.06)", border: "1px solid rgba(232,121,249,0.2)" }}>
+            <div style={{ fontSize: "0.58rem", color: "var(--text-muted)", fontWeight: 700, textTransform: "uppercase" }}>⚡ Ready Setups</div>
+            <div style={{ fontSize: "1.15rem", fontWeight: 900, color: "#e879f9", fontFamily: "'JetBrains Mono', monospace", marginTop: 2 }}>
+              {readyPairs.length} <span style={{ fontSize: "0.68rem", color: "var(--text-muted)", fontWeight: 600 }}>/ {data.length} pairs</span>
+            </div>
+          </div>
+          <div style={{ padding: "10px 14px", borderRadius: 12, background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.2)" }}>
+            <div style={{ fontSize: "0.58rem", color: "var(--text-muted)", fontWeight: 700, textTransform: "uppercase" }}>🏆 A+ / ✅ Valid</div>
+            <div style={{ fontSize: "1.15rem", fontWeight: 900, color: "#f59e0b", fontFamily: "'JetBrains Mono', monospace", marginTop: 2 }}>
+              {aPlusCount} A+ <span style={{ fontSize: "0.75rem", color: "#10b981" }}>· {validCount} Valid</span>
+            </div>
+          </div>
+          <div style={{ padding: "10px 14px", borderRadius: 12, background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.2)" }}>
+            <div style={{ fontSize: "0.58rem", color: "var(--text-muted)", fontWeight: 700, textTransform: "uppercase" }}>📊 Directional Skew</div>
+            <div style={{ fontSize: "1.05rem", fontWeight: 900, fontFamily: "'JetBrains Mono', monospace", marginTop: 2 }}>
+              <span style={{ color: "#10b981" }}>{longCount} LONG</span>
+              <span style={{ color: "var(--text-muted)", margin: "0 6px" }}>/</span>
+              <span style={{ color: "#ef4444" }}>{shortCount} SHORT</span>
+            </div>
+          </div>
+          <div style={{ padding: "10px 14px", borderRadius: 12, background: "rgba(99,102,241,0.06)", border: "1px solid rgba(99,102,241,0.2)" }}>
+            <div style={{ fontSize: "0.58rem", color: "var(--text-muted)", fontWeight: 700, textTransform: "uppercase" }}>📐 Avg Risk:Reward</div>
+            <div style={{ fontSize: "1.15rem", fontWeight: 900, color: "#818cf8", fontFamily: "'JetBrains Mono', monospace", marginTop: 2 }}>
+              {avgRR !== "—" ? `1:${avgRR}` : "—"}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Filter Bar ── */}
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", padding: "10px 16px", borderRadius: 12, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
         <span style={{ fontSize: "0.65rem", fontWeight: 700, color: "var(--text-muted)", whiteSpace: "nowrap" }}>🔽 Filter:</span>
 
         {/* Grade filter */}
-        {(["ALL", "A+", "VALID"] as const).map(g => (
+        {(["READY", "A+", "VALID", "ALL"] as const).map(g => (
           <button key={g} onClick={() => setGradeFilter(g)} style={{
             padding: "4px 12px", borderRadius: 6, fontSize: "0.65rem", fontWeight: 800, cursor: "pointer",
             background: gradeFilter === g ? "rgba(232,121,249,0.2)" : "rgba(255,255,255,0.04)",
@@ -207,7 +307,13 @@ export function ProScannerPanel({
             color: gradeFilter === g ? "#e879f9" : "var(--text-muted)",
             transition: "all 0.15s",
           }}>
-            {g === "ALL" ? "⭐ All" : g === "A+" ? "🏆 A+ Only" : "✅ Valid+"}
+            {g === "READY"
+              ? `⚡ Ready (${readyPairs.length})`
+              : g === "A+"
+              ? `🏆 A+ Only (${aPlusCount})`
+              : g === "VALID"
+              ? `✅ Valid (${validCount})`
+              : `📋 All Scanned (${data.length})`}
           </button>
         ))}
 
@@ -216,16 +322,16 @@ export function ProScannerPanel({
         {/* Trend filter */}
         {(["ALL", "BULLISH", "BEARISH"] as const).map(t => {
           const col = t === "BULLISH" ? "#10b981" : t === "BEARISH" ? "#ef4444" : "#64748b";
-          const isActive = trendFilter === t;
+          const isAct = trendFilter === t;
           return (
             <button key={t} onClick={() => setTrendFilter(t)} style={{
               padding: "4px 12px", borderRadius: 6, fontSize: "0.65rem", fontWeight: 800, cursor: "pointer",
-              background: isActive ? `${col}20` : "rgba(255,255,255,0.04)",
-              border: isActive ? `1px solid ${col}50` : "1px solid rgba(255,255,255,0.08)",
-              color: isActive ? col : "var(--text-muted)",
+              background: isAct ? `${col}20` : "rgba(255,255,255,0.04)",
+              border: isAct ? `1px solid ${col}50` : "1px solid rgba(255,255,255,0.08)",
+              color: isAct ? col : "var(--text-muted)",
               transition: "all 0.15s",
             }}>
-              {t === "ALL" ? "🔄 All Trend" : t === "BULLISH" ? "▲ Bull" : "▼ Bear"}
+              {t === "ALL" ? "🔄 All Bias" : t === "BULLISH" ? "🟢 Long / Bull" : "🔴 Short / Bear"}
             </button>
           );
         })}
@@ -235,107 +341,306 @@ export function ProScannerPanel({
         </div>
       </div>
 
-      {/* ── Ready Pairs Grid ── */}
+      {/* ── Scanner Cards Grid ── */}
       {isLoading ? (
         <div style={{ padding: "60px 0", textAlign: "center" }}>
           <div style={{ width: 40, height: 40, border: "3px solid rgba(232,121,249,0.2)", borderTopColor: "#e879f9", borderRadius: "50%", animation: "spin 1s linear infinite", margin: "0 auto" }} />
           <div style={{ marginTop: 16, fontSize: "0.85rem", fontWeight: 700, color: "#e879f9" }}>Scanning all pairs...</div>
         </div>
       ) : sortedPairs.length === 0 ? (
-        <div style={{ padding: "60px 0", textAlign: "center", background: "rgba(255,255,255,0.01)", border: "1px dashed rgba(255,255,255,0.1)", borderRadius: 16 }}>
-          <div style={{ fontSize: "2.5rem", marginBottom: 12 }}>🔍</div>
-          <div style={{ fontSize: "0.95rem", fontWeight: 800, color: "var(--text-muted)", marginBottom: 4 }}>No ready pairs found for {entryTf.toUpperCase()}</div>
-          <div style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.3)" }}>Wait for the next scan or switch timeframes.</div>
+        <div style={{ padding: "50px 20px", textAlign: "center", background: "rgba(255,255,255,0.01)", border: "1px dashed rgba(255,255,255,0.1)", borderRadius: 16 }}>
+          <div style={{ fontSize: "2.2rem", marginBottom: 10 }}>🔍</div>
+          <div style={{ fontSize: "0.95rem", fontWeight: 800, color: "var(--text-muted)", marginBottom: 6 }}>
+            No pairs match this filter on {entryTf.toUpperCase()}
+          </div>
+          <div style={{ fontSize: "0.73rem", color: "rgba(255,255,255,0.45)", marginBottom: 14 }}>
+            Switch to <strong>📋 All Scanned</strong> to inspect forming watchlist pairs or try another timeframe.
+          </div>
+          {gradeFilter !== "ALL" && (
+            <button
+              onClick={() => { setGradeFilter("ALL"); setTrendFilter("ALL"); }}
+              style={{
+                padding: "7px 16px", borderRadius: 8, fontSize: "0.72rem", fontWeight: 800, cursor: "pointer",
+                background: "rgba(232,121,249,0.15)", border: "1px solid rgba(232,121,249,0.4)", color: "#e879f9",
+              }}
+            >
+              📋 Show All {data.length} Scanned Pairs
+            </button>
+          )}
         </div>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(330px, 1fr))", gap: 16 }}>
           {sortedPairs.map(row => {
             const chgClr = row.price_change_24h > 0 ? "#22c55e" : row.price_change_24h < 0 ? "#ef4444" : "#64748b";
-            const gradeColor = row.signal_grade === "A+" ? "#f59e0b" : "#10b981";
-            
-            return (
-              <div key={row.symbol} style={{
-                background: "linear-gradient(145deg, rgba(20,25,45,0.95), rgba(15,20,40,0.98))",
-                border: `1px solid ${gradeColor}30`,
-                borderRadius: 14, padding: 18, position: "relative",
-                boxShadow: row.signal_grade === "A+" ? `0 4px 20px ${gradeColor}15` : "none",
-                transition: "transform 0.2s",
-                cursor: "pointer",
-              }}
-              className="pro-scanner-card"
-              onClick={() => router.push(`/charts?symbol=${row.symbol}`)}
-              >
-                <style>{`
-                  .pro-scanner-card:hover { transform: translateY(-3px); border-color: ${gradeColor}60 !important; }
-                `}</style>
-                
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
-                  <div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                      <span style={{ fontSize: "1.15rem", fontWeight: 900, color: "#fff" }}>{row.symbol.replace("USDT","")}</span>
-                      <span style={{ fontSize: "0.6rem", fontWeight: 800, color: gradeColor, background: `${gradeColor}15`, padding: "2px 6px", borderRadius: 4 }}>{row.signal_grade}</span>
-                    </div>
-                    <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-                      <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "0.85rem", color: "#e2e8f0", fontWeight: 700 }}>
-                        {row.latest_price >= 1 ? row.latest_price.toLocaleString("en-US", { maximumFractionDigits: 3 }) : row.latest_price.toFixed(5)}
-                      </span>
-                      <span style={{ fontSize: "0.65rem", fontWeight: 700, color: chgClr }}>
-                        {row.price_change_24h > 0 ? "+" : ""}{row.price_change_24h.toFixed(2)}%
-                      </span>
-                    </div>
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
-                    <div style={{ fontSize: "0.6rem", color: "var(--text-muted)", fontWeight: 700, marginBottom: 2 }}>SCORE</div>
-                    <div style={{ fontSize: "1.3rem", fontFamily: "'JetBrains Mono', monospace", fontWeight: 900, color: gradeColor }}>
-                      {row.signal_score}
-                    </div>
-                  </div>
-                </div>
+            const gradeColor =
+              row.signal_grade === "A+" ? "#f59e0b" :
+              row.signal_grade === "VALID" ? "#10b981" :
+              row.signal_grade === "WEAK" ? "#60a5fa" : "#64748b";
+            const setup = row.setup;
+            const tradeDir = setup?.direction || (row.trend === "BULLISH" ? "BUY" : row.trend === "BEARISH" ? "SELL" : null);
+            const dirColor = tradeDir === "BUY" ? "#10b981" : tradeDir === "SELL" ? "#ef4444" : "#94a3b8";
+            const badges = Array.isArray(row.ict_badges) ? row.ict_badges : [];
 
-                {/* Tags / Info */}
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 14 }}>
-                  <div style={{ fontSize: "0.6rem", background: "rgba(255,255,255,0.05)", padding: "3px 8px", borderRadius: 5, color: "#94a3b8" }}>
-                    {row.trend === "BULLISH" ? "▲ BULL" : row.trend === "BEARISH" ? "▼ BEAR" : "◆ SIDE"}
+            return (
+              <div
+                key={row.symbol}
+                style={{
+                  background: "linear-gradient(145deg, rgba(20,25,45,0.96), rgba(13,18,35,0.99))",
+                  border: `1px solid ${setup ? gradeColor + "40" : "rgba(255,255,255,0.08)"}`,
+                  borderRadius: 16,
+                  padding: 18,
+                  position: "relative",
+                  boxShadow: row.signal_grade === "A+" ? `0 6px 24px ${gradeColor}18` : "none",
+                  transition: "transform 0.2s, border-color 0.2s",
+                  display: "flex",
+                  flexDirection: "column",
+                  justifyContent: "space-between",
+                }}
+              >
+                <div>
+                  {/* ── Card Header: Symbol, Grade, Direction Pill, Score ── */}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+                    <div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 5, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: "1.18rem", fontWeight: 900, color: "#fff", letterSpacing: "-0.02em" }}>
+                          {row.symbol.replace("USDT", "")}
+                          <span style={{ fontSize: "0.65rem", color: "var(--text-muted)", fontWeight: 600 }}>/USDT</span>
+                        </span>
+                        <span style={{
+                          fontSize: "0.6rem", fontWeight: 900, color: gradeColor,
+                          background: `${gradeColor}18`, border: `1px solid ${gradeColor}45`,
+                          padding: "2px 7px", borderRadius: 5,
+                        }}>
+                          {row.signal_grade}
+                        </span>
+                        {tradeDir && (
+                          <span style={{
+                            fontSize: "0.6rem", fontWeight: 900, color: dirColor,
+                            background: `${dirColor}18`, border: `1px solid ${dirColor}45`,
+                            padding: "2px 8px", borderRadius: 5,
+                          }}>
+                            {tradeDir === "BUY" ? "🟢 LONG" : "🔴 SHORT"}
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "0.9rem", color: "#e2e8f0", fontWeight: 800 }}>
+                          ${fmtPrice(row.latest_price)}
+                        </span>
+                        <span style={{ fontSize: "0.68rem", fontWeight: 700, color: chgClr }}>
+                          {row.price_change_24h > 0 ? "+" : ""}{row.price_change_24h.toFixed(2)}%
+                        </span>
+                        {row.rsi_1h != null && (
+                          <span style={{ fontSize: "0.58rem", color: "var(--text-muted)", fontFamily: "'JetBrains Mono', monospace" }}>
+                            RSI {Number(row.rsi_1h).toFixed(0)}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
+                      <div style={{ fontSize: "0.55rem", color: "var(--text-muted)", fontWeight: 800, letterSpacing: "0.05em" }}>SCORE</div>
+                      <div style={{ fontSize: "1.35rem", fontFamily: "'JetBrains Mono', monospace", fontWeight: 900, color: gradeColor, lineHeight: 1.1 }}>
+                        {row.signal_score}
+                      </div>
+                      <div style={{ fontSize: "0.55rem", color: "#94a3b8", fontWeight: 700, marginTop: 2 }}>
+                        MTF: {row.mtf_confirmation?.replace("_", " ") || "NONE"}
+                      </div>
+                    </div>
                   </div>
-                  <div style={{ fontSize: "0.6rem", background: "rgba(255,255,255,0.05)", padding: "3px 8px", borderRadius: 5, color: "#94a3b8" }}>
-                    {row.mtf_confirmation.replace("_", " ")}
+
+                  {/* ── ICT & Quant Confluence Badges ── */}
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 12 }}>
+                    {badges.length > 0 ? (
+                      badges.map((b, idx) => (
+                        <span
+                          key={idx}
+                          style={{
+                            fontSize: "0.58rem",
+                            fontWeight: 800,
+                            padding: "2px 7px",
+                            borderRadius: 5,
+                            background: b.includes("OTE") || b.includes("Sweep")
+                              ? "rgba(245,158,11,0.14)"
+                              : b.includes("FVG") || b.includes("OB") || b.includes("Breaker")
+                              ? "rgba(99,102,241,0.16)"
+                              : "rgba(255,255,255,0.06)",
+                            color: b.includes("OTE") || b.includes("Sweep")
+                              ? "#fbbf24"
+                              : b.includes("FVG") || b.includes("OB") || b.includes("Breaker")
+                              ? "#a5b4fc"
+                              : "#cbd5e1",
+                            border: "1px solid rgba(255,255,255,0.08)",
+                          }}
+                        >
+                          {b}
+                        </span>
+                      ))
+                    ) : (
+                      <span style={{ fontSize: "0.6rem", color: "var(--text-muted)" }}>
+                        {row.setup_status}
+                      </span>
+                    )}
+                    {row.orderbook_bias && row.orderbook_bias !== "NEUTRAL" && (
+                      <span style={{
+                        fontSize: "0.56rem", fontWeight: 700, padding: "2px 6px", borderRadius: 5,
+                        background: "rgba(255,255,255,0.04)", color: "#94a3b8", border: "1px solid rgba(255,255,255,0.06)"
+                      }}>
+                        OBook: {row.orderbook_bias}
+                      </span>
+                    )}
                   </div>
-                  {row.setup_status && row.setup_status !== "No setup" && (
-                    <div style={{ fontSize: "0.6rem", background: "rgba(245,158,11,0.1)", color: "#f59e0b", padding: "3px 8px", borderRadius: 5, fontWeight: 700 }}>
-                      ⚡ {row.setup_status}
+
+                  {/* ── Actionable Institutional Trade Plan Box (or Watchlist Status) ── */}
+                  {setup ? (
+                    <div style={{
+                      padding: "10px 12px",
+                      borderRadius: 10,
+                      background: tradeDir === "BUY" ? "rgba(16,185,129,0.06)" : "rgba(239,68,68,0.06)",
+                      border: `1px solid ${tradeDir === "BUY" ? "rgba(16,185,129,0.22)" : "rgba(239,68,68,0.22)"}`,
+                      marginBottom: 12,
+                    }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 7 }}>
+                        <span style={{ fontSize: "0.62rem", fontWeight: 800, color: dirColor }}>
+                          🎯 {setup.setup_type || `${setup.direction} Setup`}
+                        </span>
+                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                          {setup.risk_pct != null && (
+                            <span style={{ fontSize: "0.56rem", color: "var(--text-muted)", fontFamily: "'JetBrains Mono', monospace" }}>
+                              Risk {setup.risk_pct}%
+                            </span>
+                          )}
+                          <span style={{
+                            fontSize: "0.6rem", fontWeight: 900, fontFamily: "'JetBrains Mono', monospace",
+                            padding: "1px 6px", borderRadius: 4, background: "rgba(255,255,255,0.08)", color: "#f8fafc"
+                          }}>
+                            R:R 1:{setup.risk_reward}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div style={{ display: "grid", gridTemplateColumns: "1.35fr 1fr 1fr 1fr", gap: 6, fontSize: "0.62rem", fontFamily: "'JetBrains Mono', monospace" }}>
+                        <div style={{ background: "rgba(0,0,0,0.25)", padding: "5px 7px", borderRadius: 6 }}>
+                          <div style={{ fontSize: "0.5rem", color: "var(--text-muted)", fontWeight: 700, marginBottom: 1 }}>ENTRY ZONE</div>
+                          <div style={{ color: "#e2e8f0", fontWeight: 800, fontSize: "0.6rem" }}>
+                            {fmtPrice(setup.entry_low)}–{fmtPrice(setup.entry_high)}
+                          </div>
+                        </div>
+                        <div style={{ background: "rgba(0,0,0,0.25)", padding: "5px 7px", borderRadius: 6 }}>
+                          <div style={{ fontSize: "0.5rem", color: "#fca5a5", fontWeight: 700, marginBottom: 1 }}>STOP LOSS</div>
+                          <div style={{ color: "#ef4444", fontWeight: 800 }}>{fmtPrice(setup.stop_loss)}</div>
+                        </div>
+                        <div style={{ background: "rgba(0,0,0,0.25)", padding: "5px 7px", borderRadius: 6 }}>
+                          <div style={{ fontSize: "0.5rem", color: "#86efac", fontWeight: 700, marginBottom: 1 }}>TP1 (1.5R)</div>
+                          <div style={{ color: "#22c55e", fontWeight: 800 }}>{fmtPrice(setup.take_profit_1)}</div>
+                        </div>
+                        <div style={{ background: "rgba(0,0,0,0.25)", padding: "5px 7px", borderRadius: 6 }}>
+                          <div style={{ fontSize: "0.5rem", color: "#4ade80", fontWeight: 700, marginBottom: 1 }}>TP2 (2.5R)</div>
+                          <div style={{ color: "#10b981", fontWeight: 800 }}>{fmtPrice(setup.take_profit_2)}</div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{
+                      padding: "9px 12px", borderRadius: 10, marginBottom: 12,
+                      background: "rgba(255,255,255,0.02)", border: "1px dashed rgba(255,255,255,0.08)",
+                      fontSize: "0.64rem", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 8
+                    }}>
+                      <span>⏳</span>
+                      <span>
+                        <strong>Watchlist / Filtered:</strong>{" "}
+                        {row.rejection_reasons && row.rejection_reasons.length > 0
+                          ? row.rejection_reasons.join(" · ")
+                          : row.setup_status || "Waiting for higher confluence"}
+                      </span>
                     </div>
                   )}
+
+                  {/* ── 6-Pillar Confluence Bar ── */}
+                  <div style={{ display: "flex", gap: 3, height: 6, borderRadius: 3, overflow: "hidden", marginBottom: 5 }}>
+                    {(["STR", "PA", "SMC", "VOL", "TIM", "RR"] as const).map(k => {
+                      const val = row.score_breakdown?.[k] || 0;
+                      const bColor = val >= 70 ? "#22c55e" : val >= 40 ? "#f59e0b" : "#ef4444";
+                      return <div key={k} style={{ flex: 1, background: bColor, opacity: val > 0 ? 1 : 0.2 }} title={`${SCORE_LABELS[k]}: ${val}/100`} />;
+                    })}
+                  </div>
+                  <div style={{ display: "flex", gap: 3 }}>
+                    {(["STR", "PA", "SMC", "VOL", "TIM", "RR"] as const).map(k => {
+                      const val = row.score_breakdown?.[k] || 0;
+                      return (
+                        <div key={k} style={{ flex: 1, textAlign: "center", fontSize: "0.46rem", color: "var(--text-muted)", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>
+                          {k} <span style={{ color: val >= 70 ? "#22c55e" : val >= 40 ? "#f59e0b" : "#94a3b8" }}>{val}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
 
-                {/* Confluence Bar with Labels */}
-                <div style={{ display: "flex", gap: 2, height: 6, borderRadius: 3, overflow: "hidden", marginBottom: 4 }}>
-                  {(["STR", "PA", "SMC", "VOL", "TIM", "RR"] as const).map(k => {
-                    const val = row.score_breakdown?.[k] || 0;
-                    const bColor = val >= 70 ? "#22c55e" : val >= 40 ? "#f59e0b" : "#ef4444";
-                    return <div key={k} style={{ flex: 1, background: bColor, opacity: val > 0 ? 1 : 0.2 }} title={`${SCORE_LABELS[k]}: ${val}/100`} />;
-                  })}
-                </div>
-                <div style={{ display: "flex", gap: 2 }}>
-                  {(["STR", "PA", "SMC", "VOL", "TIM", "RR"] as const).map(k => (
-                    <div key={k} style={{ flex: 1, textAlign: "center", fontSize: "0.42rem", color: "var(--text-muted)", fontWeight: 700 }}>{k}</div>
-                  ))}
-                </div>
-
-                {/* Actions */}
-                <div style={{ display: "flex", gap: 6, marginTop: 16 }}>
+                {/* ── Action Buttons ── */}
+                <div style={{ display: "flex", gap: 6, marginTop: 14 }}>
                   {onSelectSymbol && (
-                    <button onClick={(e) => { e.stopPropagation(); onSelectSymbol(row.symbol); }} style={{ flex: 1, padding: "8px 0", borderRadius: 8, background: "rgba(99,102,241,0.14)", border: "1px solid rgba(99,102,241,0.3)", color: "#818cf8", fontSize: "0.68rem", fontWeight: 800, cursor: "pointer", transition: "all 0.2s" }}>
-                      ⚡ ICT Analyze
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onSelectSymbol(row.symbol); }}
+                      style={{
+                        flex: 1, padding: "7px 0", borderRadius: 8,
+                        background: "rgba(99,102,241,0.14)", border: "1px solid rgba(99,102,241,0.3)",
+                        color: "#818cf8", fontSize: "0.65rem", fontWeight: 800, cursor: "pointer",
+                      }}
+                      title="Open deep ICT Confluence analysis for this pair"
+                    >
+                      ⚡ ICT Detail
                     </button>
                   )}
-                  <button onClick={(e) => { e.stopPropagation(); onSetWAAlert?.(row); }} style={{ flex: 1, padding: "8px 0", borderRadius: 8, background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.2)", color: "#10b981", fontSize: "0.68rem", fontWeight: 800, cursor: "pointer", transition: "all 0.2s" }} onMouseEnter={e => e.currentTarget.style.background = "rgba(16,185,129,0.2)"} onMouseLeave={e => e.currentTarget.style.background = "rgba(16,185,129,0.1)"}>
-                    🔔 WA Alert
+                  {setup && onLoadPosCalc && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const entryMid = setup.entry_price ?? (setup.entry_low + setup.entry_high) / 2;
+                        onLoadPosCalc(
+                          {
+                            entry: entryMid,
+                            stop_loss: setup.stop_loss,
+                            tp1: setup.take_profit_1,
+                            tp2: setup.take_profit_2,
+                            direction: setup.direction,
+                            source: `Live Scanner (${row.symbol} ${entryTf.toUpperCase()})`,
+                          },
+                          row.symbol
+                        );
+                      }}
+                      style={{
+                        flex: 1, padding: "7px 0", borderRadius: 8,
+                        background: "rgba(167,139,250,0.14)", border: "1px solid rgba(167,139,250,0.35)",
+                        color: "#c4b5fd", fontSize: "0.65rem", fontWeight: 800, cursor: "pointer",
+                      }}
+                      title="Load Entry, Stop Loss & TP into Position Sizing Calculator"
+                    >
+                      🔢 Pos Calc
+                    </button>
+                  )}
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onSetWAAlert?.(row); }}
+                    style={{
+                      flex: 1, padding: "7px 0", borderRadius: 8,
+                      background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.25)",
+                      color: "#10b981", fontSize: "0.65rem", fontWeight: 800, cursor: "pointer",
+                    }}
+                    title="Send Trade Plan to WhatsApp"
+                  >
+                    🔔 WA
                   </button>
-                  <button onClick={(e) => { e.stopPropagation(); router.push(`/charts?symbol=${row.symbol}`); }} style={{ flex: 1, padding: "8px 0", borderRadius: 8, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", color: "#fff", fontSize: "0.68rem", fontWeight: 800, cursor: "pointer", transition: "all 0.2s" }} onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.1)"} onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.05)"}>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); router.push(`/charts?symbol=${row.symbol}`); }}
+                    style={{
+                      flex: 0.9, padding: "7px 0", borderRadius: 8,
+                      background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)",
+                      color: "#fff", fontSize: "0.65rem", fontWeight: 800, cursor: "pointer",
+                    }}
+                    title="Open interactive chart + DeepSeek AI"
+                  >
                     📈 Chart
                   </button>
                 </div>
-
               </div>
             );
           })}

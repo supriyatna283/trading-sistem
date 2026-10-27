@@ -25,6 +25,10 @@ from app.engines.mtf_confirmation import MTFConfirmationEngine
 from app.engines.sentiment import SentimentEngine
 from app.engines.news_calendar import NewsCalendarEngine
 from app.engines.market_intel import MarketIntelEngine
+from app.engines.liquidity_sweep import LiquiditySweepEngine
+from app.engines.fvg_breaker import FVGBreakerEngine
+from app.engines.pd_zones import PDZoneEngine
+from app.engines.setup_generator import calculate_trade_levels, _estimate_atr
 from app.utils.indicators import calculate_rsi
 
 logger = logging.getLogger(__name__)
@@ -47,6 +51,9 @@ class MarketScanner:
         self.sentiment_engine = SentimentEngine()
         self.news_engine = NewsCalendarEngine()
         self.intel_engine = MarketIntelEngine()
+        self.sweep_engine = LiquiditySweepEngine()
+        self.fvg_engine = FVGBreakerEngine()
+        self.pd_engine = PDZoneEngine()
 
     async def scan(
         self, symbols: List[str] = None, use_sample: bool = False, entry_tf: str = "1h"
@@ -89,10 +96,20 @@ class MarketScanner:
                 logger.error(f"Scan error for {symbol}: {res}")
                 final_results.append({
                     "symbol": symbol,
-                    "trend": "UNKNOWN",
+                    "trend": "SIDEWAYS",
+                    "latest_price": 0.0,
+                    "price_change_24h": 0.0,
                     "liquidity_status": "Error",
                     "setup_status": "Error",
                     "confluence_score": 0,
+                    "signal_score": 0,
+                    "signal_grade": "NO_TRADE",
+                    "score_breakdown": {"STR": 0, "PA": 0, "SMC": 0, "VOL": 0, "TIM": 0, "RR": 0},
+                    "hard_rejected": True,
+                    "rejection_reasons": [str(res)],
+                    "mtf_confirmation": "NONE",
+                    "ict_badges": [],
+                    "setup": None,
                     "error": str(res),
                 })
             else:
@@ -187,6 +204,13 @@ class MarketScanner:
         # Price and 24h Change
         latest_price = float(entry_df.iloc[-1]["close"]) if not entry_df.empty else 0
 
+        # Fast local ICT engines (<3ms CPU, 0 network calls): Sweep + FVG/Breaker + PD Zone
+        htf_key = "4h" if "4h" in candles_by_tf else ("1d" if "1d" in candles_by_tf else entry_tf)
+        htf_df_for_pd = candles_by_tf.get(htf_key, entry_df)
+        pd_res = self.pd_engine.analyze(htf_df_for_pd, latest_price, htf_label=htf_key.upper())
+        sweep_res = self.sweep_engine.analyze(entry_df)
+        fvg_res = self.fvg_engine.analyze(entry_df)
+
         # ---- Market Intelligence (V4 — Fast Zero-Stall Lookup) ----
         # Market cap is already batch-cached in _fetch_macro_context (0ms lookup)
         mcap_data = await self.intel_engine.get_market_cap(symbol)
@@ -221,19 +245,27 @@ class MarketScanner:
             except Exception:
                 orderbook_data = {}
 
-        # Liquidity status (check genuine wick-sweep from V3 liquidity levels first)
-        swept = any(getattr(l, "swept", False) for l in smc.liquidity_levels) or self.smc.check_liquidity_sweep(entry_df, smc.liquidity_levels)
-        if swept:
+        # Liquidity status (combining SMC + dedicated LiquiditySweepEngine)
+        latest_sw = sweep_res.get("latest_sweep") if isinstance(sweep_res, dict) else None
+        swept = (
+            bool(latest_sw and latest_sw.get("is_confirmed"))
+            or any(getattr(l, "swept", False) for l in smc.liquidity_levels)
+            or self.smc.check_liquidity_sweep(entry_df, smc.liquidity_levels)
+        )
+        if latest_sw and latest_sw.get("is_confirmed"):
+            sw_side = "SSL Swept (Bullish)" if latest_sw.get("direction_after") == "BUY" else "BSL Swept (Bearish)"
+            liq_status = sw_side
+        elif swept:
             liq_status = "Liquidity taken"
         elif smc.liquidity_levels:
             above = any(l.type == "EQUAL_HIGH" for l in smc.liquidity_levels)
             below = any(l.type == "EQUAL_LOW" for l in smc.liquidity_levels)
             if above and below:
-                liq_status = "Liquidity above & below"
+                liq_status = "Pools above & below"
             elif above:
-                liq_status = "Liquidity above"
+                liq_status = "BSL Pool above"
             else:
-                liq_status = "Liquidity below"
+                liq_status = "SSL Pool below"
         else:
             liq_status = "No clear liquidity"
 
@@ -245,8 +277,64 @@ class MarketScanner:
                 footprint = await order_flow_engine.get_footprint(symbol, entry_tf, limit=1)
                 if footprint and len(footprint) > 0:
                     volume_delta = footprint[-1].get("delta", 0)
-            except Exception as e:
+            except Exception:
                 pass
+
+        # ── Institutional Directional Consensus (Quant + ICT) ──
+        # Prevents "SIDEWAYS" trend when HTF/Confluence/ICT have a clear directional setup
+        dom_bias = conf.details.get("htf_bias", {}).get("dominant_bias", "SIDEWAYS")
+        mtf_dom = mtf_result.get("dominant_bias", "NEUTRAL") if isinstance(mtf_result, dict) else "NEUTRAL"
+
+        dir_votes = 0.0
+        if conf.recommendation == "STRONG_BUY":
+            dir_votes += 3.5
+        elif conf.recommendation == "BUY":
+            dir_votes += 2.5
+        elif conf.recommendation == "STRONG_SELL":
+            dir_votes -= 3.5
+        elif conf.recommendation == "SELL":
+            dir_votes -= 2.5
+
+        if structure.bias == "BULLISH":
+            dir_votes += 1.5
+        elif structure.bias == "BEARISH":
+            dir_votes -= 1.5
+
+        if dom_bias == "BULLISH":
+            dir_votes += 2.0
+        elif dom_bias == "BEARISH":
+            dir_votes -= 2.0
+
+        if mtf_dom == "BULLISH":
+            dir_votes += 1.5
+        elif mtf_dom == "BEARISH":
+            dir_votes -= 1.5
+
+        if pd_res.signal in ("BUY", "STRONG_BUY"):
+            dir_votes += 1.5
+        elif pd_res.signal in ("SELL", "STRONG_SELL"):
+            dir_votes -= 1.5
+
+        if latest_sw and latest_sw.get("sweep_bar_idx", 0) >= 55:
+            if latest_sw.get("direction_after") == "BUY":
+                dir_votes += 2.0
+            elif latest_sw.get("direction_after") == "SELL":
+                dir_votes -= 2.0
+
+        if fvg_res.entry_bias in ("BUY", "STRONG_BUY"):
+            dir_votes += 1.5
+        elif fvg_res.entry_bias in ("SELL", "STRONG_SELL"):
+            dir_votes -= 1.5
+
+        if dir_votes >= 2.0:
+            effective_trend = "BULLISH"
+            trade_dir = "BUY"
+        elif dir_votes <= -2.0:
+            effective_trend = "BEARISH"
+            trade_dir = "SELL"
+        else:
+            effective_trend = "SIDEWAYS"
+            trade_dir = None
 
         # Setup generation (V4 — passes market intel for explanation enrichment)
         setup = self.setup_gen.generate(
@@ -257,12 +345,7 @@ class MarketScanner:
             market_intel_data=market_intel_data,
             volume_delta=volume_delta,
         )
-        if setup:
-            setup_status = f"{setup.direction} setup"
-        elif conf.total_score >= 10:
-            setup_status = "Setup forming"
-        else:
-            setup_status = "No setup"
+        setup_dict = setup.model_dump() if setup else None
 
         price_change_24h = 0.0
         bars_24h = {"5m": 288, "15m": 96, "30m": 48, "1h": 24, "4h": 6, "1d": 1}.get(entry_tf, 24)
@@ -282,9 +365,30 @@ class MarketScanner:
             if rsi_1h <= 25 or rsi_1h >= 75:
                 strong_rsi_signal = True
 
-        # --- Final Scoring & Grade ---
-        # Scale 18-point score to 100-point scale
-        signal_score = round((conf.total_score / conf.max_score) * 100) if conf.max_score > 0 else 0
+        # --- Final Hybrid Quant + ICT Scoring & Grade ---
+        quant_pct = (conf.total_score / conf.max_score) * 100 if conf.max_score > 0 else 0
+        # ICT bonus/alignment weight (PD Zone + OTE + Sweep + FVG/Breaker)
+        ict_bonus = 0.0
+        if trade_dir == "BUY":
+            if pd_res.zone == "DISCOUNT":
+                ict_bonus += 6.0
+            if pd_res.is_in_ote:
+                ict_bonus += 5.0
+            if latest_sw and latest_sw.get("direction_after") == "BUY":
+                ict_bonus += 6.0
+            if fvg_res.nearest_bullish_fvg is not None:
+                ict_bonus += 5.0
+        elif trade_dir == "SELL":
+            if pd_res.zone == "PREMIUM":
+                ict_bonus += 6.0
+            if pd_res.is_in_ote:
+                ict_bonus += 5.0
+            if latest_sw and latest_sw.get("direction_after") == "SELL":
+                ict_bonus += 6.0
+            if fvg_res.nearest_bearish_fvg is not None:
+                ict_bonus += 5.0
+
+        signal_score = min(99, round(quant_pct * 0.82 + ict_bonus)) if trade_dir else min(42, round(quant_pct * 0.6))
 
         # FIX #1 + #5: score_breakdown now uses ACTUAL keys from confluence.py details.
         # Confluence.py only writes: fibonacci, macd, rsi, htf_bias, structure, volume, session, news
@@ -374,66 +478,151 @@ class MarketScanner:
             "RR":  rr_pct,
         }
 
-        # Determine signal grade
-        if signal_score >= 75:
-            signal_grade = "A+"
-        elif signal_score >= 50:
-            signal_grade = "VALID"
-        elif signal_score >= 35:
-            signal_grade = "WEAK"
-        else:
-            signal_grade = "NO_TRADE"
-
-        # Check for hard rejection (e.g. against major trend or extreme RSI)
+        # Check for hard rejection (ATR-scaled S/R check instead of naive 1.0% wall)
         rejection_reasons = []
         hard_rejected = False
-        
+        atr_val = _estimate_atr(entry_df.tail(25)) or (latest_price * 0.008)
+        atr_pct = (atr_val / latest_price * 100) if latest_price > 0 else 0.8
+        min_sr_clearance_pct = min(0.35, atr_pct * 0.28)
+
         if is_synthetic:
             hard_rejected = True
             rejection_reasons.append("Synthetic fallback data")
 
-        if signal_score < 25:
+        if not trade_dir or effective_trend == "SIDEWAYS":
+            hard_rejected = True
+            rejection_reasons.append("Sideways / No directional bias")
+
+        if signal_score < 35:
             hard_rejected = True
             rejection_reasons.append("Low confluence")
-        
-        if rsi_1h is not None:
-            if structure.bias == "BULLISH" and rsi_1h > 75:
-                hard_rejected = True
-                rejection_reasons.append("Overbought RSI")
-            if structure.bias == "BEARISH" and rsi_1h < 25:
-                hard_rejected = True
-                rejection_reasons.append("Oversold RSI")
 
-        # Prevent Buying into Resistance / Selling into Support
-        if structure.bias == "BULLISH":
+        if rsi_1h is not None and trade_dir:
+            if trade_dir == "BUY" and rsi_1h > 76:
+                hard_rejected = True
+                rejection_reasons.append(f"Overbought RSI ({rsi_1h:.0f})")
+            elif trade_dir == "SELL" and rsi_1h < 24:
+                hard_rejected = True
+                rejection_reasons.append(f"Oversold RSI ({rsi_1h:.0f})")
+
+        # Only reject S/R proximity if jammed directly against level (<0.28 ATR) without BOS confirmation
+        has_bos = conf.details.get("structure", {}).get("confirmed", False)
+        if trade_dir == "BUY" and not has_bos:
             res_dist = sr_data.get("resistance_distance_pct")
-            if res_dist is not None and res_dist < 1.0:
+            if res_dist is not None and res_dist < min_sr_clearance_pct:
                 hard_rejected = True
-                rejection_reasons.append("Buying into Resistance")
-        elif structure.bias == "BEARISH":
+                rejection_reasons.append("At Immediate Resistance")
+        elif trade_dir == "SELL" and not has_bos:
             sup_dist = sr_data.get("support_distance_pct")
-            if sup_dist is not None and sup_dist < 1.0:
+            if sup_dist is not None and sup_dist < min_sr_clearance_pct:
                 hard_rejected = True
-                rejection_reasons.append("Selling into Support")
+                rejection_reasons.append("At Immediate Support")
+
+        # Build ICT + Quant Badges for Scanner UI (strictly aligned with trade_dir)
+        ict_badges: List[str] = []
+        if trade_dir == "BUY" and pd_res.zone == "DISCOUNT":
+            ict_badges.append(f"Discount{' OTE' if pd_res.is_in_ote else ''}")
+        elif trade_dir == "SELL" and pd_res.zone == "PREMIUM":
+            ict_badges.append(f"Premium{' OTE' if pd_res.is_in_ote else ''}")
+        elif pd_res.is_in_ote:
+            ict_badges.append("OTE Zone")
+        fib_det = conf.details.get("fibonacci", {})
+        if fib_det.get("score", 0) >= 2 and fib_det.get("nearest_level"):
+            ict_badges.append(f"Fib {fib_det['nearest_level']}")
+        if latest_sw and latest_sw.get("is_confirmed") and (not trade_dir or latest_sw.get("direction_after") == trade_dir):
+            ict_badges.append("Liq Sweep")
+        if trade_dir == "BUY" and fvg_res.nearest_bullish_fvg is not None:
+            ict_badges.append("Bull FVG")
+        elif trade_dir == "SELL" and fvg_res.nearest_bearish_fvg is not None:
+            ict_badges.append("Bear FVG")
+        if fvg_res.nearest_breaker is not None and getattr(fvg_res.nearest_breaker, "type", "") == ("BULLISH" if trade_dir == "BUY" else "BEARISH"):
+            ict_badges.append("Breaker")
+        dir_obs = [
+            ob for ob in unmitigated_obs
+            if (trade_dir == "BUY" and getattr(ob, "type", "") == "BULLISH")
+            or (trade_dir == "SELL" and getattr(ob, "type", "") == "BEARISH")
+        ]
+        if dir_obs:
+            ict_badges.append(f"{len(dir_obs)} {'Bull' if trade_dir == 'BUY' else 'Bear'} OB")
+        elif not trade_dir and unmitigated_obs:
+            ict_badges.append(f"{len(unmitigated_obs)} OB")
+        if has_bos:
+            ict_badges.append("BOS/CHoCH")
+
+        # Ensure actionable directional pairs (score >= 48 & not rejected) always have a validated Trade Plan
+        if setup_dict is None and trade_dir in ("BUY", "SELL") and not hard_rejected and signal_score >= 48:
+            e_low, e_high, sl_px, tp1_px, tp2_px, tp3_px = calculate_trade_levels(
+                trade_dir, latest_price, smc, entry_df
+            )
+            e_mid = round((e_low + e_high) / 2.0, 6)
+            risk_u = abs(e_high - sl_px) if trade_dir == "BUY" else abs(sl_px - e_low)
+            rr_val = round(abs(tp2_px - e_high if trade_dir == "BUY" else e_low - tp2_px) / risk_u, 2) if risk_u > 0 else 2.0
+            setup_dict = {
+                "symbol": symbol,
+                "direction": trade_dir,
+                "entry_price": e_mid,
+                "entry_low": round(e_low, 6),
+                "entry_high": round(e_high, 6),
+                "stop_loss": round(sl_px, 6),
+                "take_profit_1": round(tp1_px, 6),
+                "take_profit_2": round(tp2_px, 6),
+                "take_profit_3": round(tp3_px, 6),
+                "risk_reward": rr_val,
+                "risk_pct": round(risk_u / e_mid * 100, 2) if e_mid > 0 else 1.0,
+                "setup_type": " + ".join(ict_badges[:3]) if ict_badges else f"{trade_dir} Confluence",
+                "confluence_score": conf.total_score,
+                "status": "ACTIVE",
+                "timeframe": entry_tf,
+                "pd_zone": pd_res.zone,
+                "in_ote": pd_res.is_in_ote,
+            }
+        elif setup_dict is not None:
+            e_low = float(setup_dict.get("entry_low") or latest_price)
+            e_high = float(setup_dict.get("entry_high") or latest_price)
+            e_mid = round((e_low + e_high) / 2.0, 6)
+            sl_px = float(setup_dict.get("stop_loss") or 0)
+            risk_u = abs(e_high - sl_px) if setup_dict.get("direction") == "BUY" else abs(sl_px - e_low)
+            setup_dict["entry_price"] = e_mid
+            setup_dict["risk_pct"] = round(risk_u / e_mid * 100, 2) if e_mid > 0 else 1.0
+            setup_dict["pd_zone"] = pd_res.zone
+            setup_dict["in_ote"] = pd_res.is_in_ote
+            # Align effective_trend with generated setup direction
+            effective_trend = "BULLISH" if setup_dict.get("direction") == "BUY" else "BEARISH"
+
+        # Determine final signal grade & setup status (strictly gated by hard_rejected & setup presence)
+        if hard_rejected or effective_trend == "SIDEWAYS" or setup_dict is None:
+            signal_grade = "WEAK" if (not hard_rejected and signal_score >= 40) else "NO_TRADE"
+            setup_status = rejection_reasons[0] if rejection_reasons else "Waiting trigger"
+        else:
+            if signal_score >= 72:
+                signal_grade = "A+"
+            elif signal_score >= 48:
+                signal_grade = "VALID"
+            else:
+                signal_grade = "WEAK"
+            setup_status = f"{setup_dict['direction']} · {setup_dict.get('setup_type', 'Ready')}"
 
         return {
             "symbol": symbol,
             "data_source": data_source,
             "is_synthetic": is_synthetic,
-            "trend": structure.bias,
+            "trend": effective_trend,
             "latest_price": latest_price,
             "price_change_24h": price_change_24h,
             "liquidity_status": liq_status,
             "setup_status": setup_status,
             "confluence_score": conf.total_score,
             "max_score": conf.max_score,
-            "signal_score": signal_score, # For frontend progress bar (0-100)
-            "signal_grade": signal_grade, # For frontend badge
-            "score_breakdown": score_breakdown, # For LayerBreakdown component
+            "signal_score": signal_score,
+            "signal_grade": signal_grade,
+            "score_breakdown": score_breakdown,
             "hard_rejected": hard_rejected,
             "rejection_reasons": rejection_reasons,
             "mtf_confirmation": mtf_level,
-            "setup": setup.model_dump() if setup else None,
+            "ict_badges": ict_badges,
+            "pd_zone": pd_res.zone,
+            "in_ote": pd_res.is_in_ote,
+            "setup": setup_dict,
             "rsi_1h": rsi_1h,
             "rsi_4h": rsi_4h,
             "rsi_1d": rsi_1d,

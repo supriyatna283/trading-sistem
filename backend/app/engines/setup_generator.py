@@ -204,18 +204,26 @@ class SetupGenerator:
                 _reject("htf_bias", f"ALL htf biases are {opposite}, direction={direction}")
                 return None
 
-        # ---- Quality Gate 4: Need SMC edge OR structure confirmation ----
-        # (NOT both — big caps may not always be in an OB but still have valid BOS)
-        has_smc_edge = (
-            confluence.details.get("liquidity", {}).get("swept", False)
-            or confluence.details.get("order_block", {}).get("in_zone", False)
-        )
+        # ---- Quality Gate 4: Need SMC edge, Fibonacci key zone, OR structure confirmation ----
+        # Fix: Read directly from `smc` object and V5 `confluence.details["fibonacci"]`
+        dir_ob_type = "BULLISH" if direction == "BUY" else "BEARISH"
+        aligned_unmitigated_obs = [
+            ob for ob in getattr(smc, "order_blocks", [])
+            if getattr(ob, "type", "") == dir_ob_type and not getattr(ob, "mitigated", False) and not getattr(ob, "invalidated", False)
+        ]
+        aligned_fvgs = [
+            f for f in getattr(smc, "fvgs", [])
+            if getattr(f, "type", "") == dir_ob_type and not getattr(f, "filled", False)
+        ]
+        liq_swept = any(getattr(l, "swept", False) for l in getattr(smc, "liquidity_levels", []))
+        has_smc_edge = bool(aligned_unmitigated_obs) or liq_swept
         has_structure = confluence.details.get("structure", {}).get("confirmed", False)
-        has_fvg = confluence.details.get("fvg", {}).get("present", False)
+        has_fvg = bool(aligned_fvgs)
+        has_fib_edge = confluence.details.get("fibonacci", {}).get("score", 0) >= 2
 
         # Must have at least ONE technical anchor
-        if not has_smc_edge and not has_structure and not has_fvg:
-            _reject("technical_anchor", "no OB, no liquidity sweep, no FVG, no BOS/CHOCH")
+        if not (has_smc_edge or has_structure or has_fvg or has_fib_edge):
+            _reject("technical_anchor", "no OB, no liquidity sweep, no FVG, no Fib key level, no BOS/CHOCH")
             return None
 
         # Phase 3: Volume Delta Mandatory Filter (if order flow data is available)
@@ -232,9 +240,11 @@ class SetupGenerator:
             direction, last_price, smc, df
         )
 
-        risk = abs(entry_low - sl) if direction == "BUY" else abs(sl - entry_high)
-        reward = abs(tp1 - entry_high) if direction == "BUY" else abs(entry_low - tp1)
-        rr = round(reward / risk, 2) if risk > 0 else 0
+        # Risk is measured from worst-case fill (entry_high for BUY, entry_low for SELL)
+        # matching calculate_trade_levels where tp1 = +1.5R and tp2 = +2.5R
+        risk = abs(entry_high - sl) if direction == "BUY" else abs(sl - entry_low)
+        reward_tp2 = abs(tp2 - entry_high) if direction == "BUY" else abs(entry_low - tp2)
+        rr = round(reward_tp2 / risk, 2) if risk > 0 else 0
 
         if rr < self.min_rr:
             _reject("rr_ratio", f"rr={rr} < required={self.min_rr}")
@@ -258,9 +268,9 @@ class SetupGenerator:
         # Macro filters (MTF, News, Sentiment) are now considered inside the confluence score
         # rather than being strict blockers, to maximize signal generation based on core technicals.
 
-        # Build detailed explanation (V4 — includes market intel)
-        explanation = self._build_explanation(confluence, direction, rr, market_intel_data, volume_delta)
-        setup_type = self._build_setup_type(confluence, direction)
+        # Build detailed explanation & setup type using real V5 + SMC attributes
+        explanation = self._build_explanation(confluence, direction, rr, market_intel_data, volume_delta, smc=smc)
+        setup_type = self._build_setup_type(confluence, direction, smc=smc)
 
         logger.info(
             f"[{symbol}/{timeframe}] ✅ Setup ACCEPTED | {direction} | "
@@ -330,8 +340,8 @@ class SetupGenerator:
         # Return the nearest (lowest) swing high above reference
         return min(swing_highs)
 
-    def _build_explanation(self, confluence: ConfluenceResult, direction: str, rr: float, market_intel_data: Optional[Dict] = None, volume_delta: Optional[float] = None) -> str:
-        """Build a professional explanation string."""
+    def _build_explanation(self, confluence: ConfluenceResult, direction: str, rr: float, market_intel_data: Optional[Dict] = None, volume_delta: Optional[float] = None, smc: Optional[SmartMoneyAnalysis] = None) -> str:
+        """Build a professional explanation string from V5 Confluence + SMC."""
         parts = []
         details = confluence.details
 
@@ -339,16 +349,21 @@ class SetupGenerator:
             biases = details["htf_bias"]["biases"]
             parts.append(f"HTF Bias aligned ({', '.join(f'{k}: {v}' for k, v in biases.items())})")
 
-        if details.get("liquidity", {}).get("swept"):
-            count = details["liquidity"]["swept_count"]
-            parts.append(f"Liquidity swept ({count} level{'s' if count > 1 else ''})")
+        fib_det = details.get("fibonacci", {})
+        if fib_det.get("score", 0) >= 2:
+            parts.append(f"Fib {fib_det.get('nearest_level', 'Key')} ({fib_det.get('price_zone', 'Retracement')})")
 
-        if details.get("order_block", {}).get("in_zone"):
-            ob_dir = details["order_block"].get("ob_direction", direction)
-            parts.append(f"Price in fresh {ob_dir} Order Block zone")
-
-        if details.get("fvg", {}).get("present"):
-            parts.append(f"Unfilled FVG present ({details['fvg']['aligned_count']} aligned)")
+        if smc is not None:
+            dir_ob_type = "BULLISH" if direction == "BUY" else "BEARISH"
+            u_obs = [ob for ob in getattr(smc, "order_blocks", []) if getattr(ob, "type", "") == dir_ob_type and not getattr(ob, "mitigated", False)]
+            u_fvgs = [f for f in getattr(smc, "fvgs", []) if getattr(f, "type", "") == dir_ob_type and not getattr(f, "filled", False)]
+            swept_lvls = [l for l in getattr(smc, "liquidity_levels", []) if getattr(l, "swept", False)]
+            if swept_lvls:
+                parts.append(f"Liquidity swept ({len(swept_lvls)} pool)")
+            if u_obs:
+                parts.append(f"{len(u_obs)} Unmitigated {dir_ob_type.title()} OB")
+            if u_fvgs:
+                parts.append(f"{len(u_fvgs)} Fresh {dir_ob_type.title()} FVG")
 
         if details.get("structure", {}).get("confirmed"):
             parts.append(f"Structure confirmed ({details['structure']['bias']})")
@@ -437,21 +452,30 @@ class SetupGenerator:
 
         return " | ".join(parts)
 
-    def _build_setup_type(self, confluence: ConfluenceResult, direction: str) -> str:
-        """Build setup type label."""
+    def _build_setup_type(self, confluence: ConfluenceResult, direction: str, smc: Optional[SmartMoneyAnalysis] = None) -> str:
+        """Build setup type label from V5 Confluence + SMC."""
         parts = []
         details = confluence.details
+        dir_ob_type = "BULLISH" if direction == "BUY" else "BEARISH"
 
-        if details.get("liquidity", {}).get("swept"):
-            parts.append("Liq Sweep")
-        if details.get("order_block", {}).get("in_zone"):
-            parts.append(f"{'Bullish' if direction == 'BUY' else 'Bearish'} OB")
-        if details.get("fvg", {}).get("present"):
-            parts.append("FVG")
-        if details.get("premium_discount", {}).get("in_correct_zone"):
-            parts.append("Discount" if direction == "BUY" else "Premium")
+        fib_det = details.get("fibonacci", {})
+        if fib_det.get("score", 0) >= 2 and fib_det.get("nearest_level"):
+            parts.append(f"Fib {fib_det['nearest_level']}")
 
-        return " + ".join(parts) if parts else "Multi-Confluence Setup"
+        if smc is not None:
+            if any(getattr(l, "swept", False) for l in getattr(smc, "liquidity_levels", [])):
+                parts.append("Liq Sweep")
+            if any(getattr(ob, "type", "") == dir_ob_type and not getattr(ob, "mitigated", False) for ob in getattr(smc, "order_blocks", [])):
+                parts.append(f"{'Bull' if direction == 'BUY' else 'Bear'} OB")
+            if any(getattr(f, "type", "") == dir_ob_type and not getattr(f, "filled", False) for f in getattr(smc, "fvgs", [])):
+                parts.append("FVG")
+
+        if details.get("macd", {}).get("aligned") and len(parts) < 3:
+            parts.append("MACD")
+        if details.get("structure", {}).get("confirmed") and len(parts) < 3:
+            parts.append("BOS")
+
+        return " + ".join(parts[:3]) if parts else f"{direction} Multi-Confluence"
 
     @staticmethod
     def _estimate_atr(df: pd.DataFrame, period: int = 14) -> float:

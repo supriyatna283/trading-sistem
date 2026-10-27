@@ -292,6 +292,10 @@ export default function ProToolsPage() {
           isActive={activeTab === "scanner"}
           onSetWAAlert={handleSetWAAlert}
           onSelectSymbol={(sym) => { setSymbol(sym); setActiveTab("confluence"); }}
+          onLoadPosCalc={(plan, sym) => {
+            if (sym) setSymbol(sym);
+            handleLoadTradePlan(plan);
+          }}
         />
       </div>
 
