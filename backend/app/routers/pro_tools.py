@@ -611,12 +611,94 @@ async def get_full_sprint1_analysis(req: FullAnalysisRequest):
         # 9. Volume Profile Check (Sprint D)
         vp_result = _vp_engine.analyze(df_entry)
 
-        # ── Aggregate confluence score (0–24 scale from backend) ────────────
-        bias_direction  = sweep_result.get("bias_from_sweep") or fvg_data["signals"]["entry_bias"] or "NEUTRAL"
-        pd_score        = _pd_engine.score_for_confluence(pd_result, bias_direction)
-        sweep_score     = sweep_result.get("score", 0)
-        ob_score        = min(5, ((scored_obs[0].score + 10) // 20) if scored_obs else 0)
-        kz_score        = 3 if kz_status["is_killzone_active"] else (1 if kz_status["current_kz"] else 0)
+        # ── Weighted Directional Consensus across all ICT pillars ────────────
+        # Fixes bug where a single old/weak liquidity sweep overrode bearish structure/FVG/breaker.
+        dir_votes = 0.0
+
+        # 1. PD Zone vote (+2 Discount/BUY, -2 Premium/SELL)
+        if pd_result.signal in ("BUY", "STRONG_BUY"):
+            dir_votes += 2.0
+        elif pd_result.signal in ("SELL", "STRONG_SELL"):
+            dir_votes -= 2.0
+
+        # 2. Liquidity Sweep vote (weighted by quality & recency within 80-bar window)
+        latest_sw = sweep_result.get("latest_sweep")
+        raw_sweep_score = sweep_result.get("score", 0)
+        sw_dir = sweep_result.get("bias_from_sweep")
+        if latest_sw and sw_dir in ("BUY", "SELL"):
+            sw_bar = latest_sw.get("sweep_bar_idx", 0)
+            is_recent_sw = sw_bar >= 55  # within last ~25 bars of 80-bar lookback
+            sw_weight = float(raw_sweep_score) if is_recent_sw else float(raw_sweep_score) * 0.4
+            dir_votes += sw_weight if sw_dir == "BUY" else -sw_weight
+
+        # 3. FVG + Breaker entry_bias vote
+        fvg_bias = fvg_data["signals"].get("entry_bias", "NEUTRAL")
+        if fvg_bias == "STRONG_BUY":
+            dir_votes += 3.0
+        elif fvg_bias == "BUY":
+            dir_votes += 2.0
+        elif fvg_bias == "STRONG_SELL":
+            dir_votes -= 3.0
+        elif fvg_bias == "SELL":
+            dir_votes -= 2.0
+
+        # 4. Market Structure bias vote
+        if ms_result.bias == "BULLISH":
+            dir_votes += 2.0
+        elif ms_result.bias == "BEARISH":
+            dir_votes -= 2.0
+
+        # 5. Best Order Block vote
+        if scored_obs:
+            top_ob_type = getattr(scored_obs[0].ob, "type", "")
+            if top_ob_type == "BULLISH":
+                dir_votes += 1.5
+            elif top_ob_type == "BEARISH":
+                dir_votes -= 1.5
+
+        # 6. MM Flow phase vote
+        if mm_result.mm_phase in ("ACCUMULATION", "MARKUP"):
+            dir_votes += 1.0
+        elif mm_result.mm_phase in ("DISTRIBUTION", "MARKDOWN"):
+            dir_votes -= 1.0
+
+        if dir_votes >= 5.0:
+            bias_direction = "STRONG_BUY"
+        elif dir_votes >= 1.5:
+            bias_direction = "BUY"
+        elif dir_votes <= -5.0:
+            bias_direction = "STRONG_SELL"
+        elif dir_votes <= -1.5:
+            bias_direction = "SELL"
+        else:
+            # Tie-breaker: use PD zone signal or FVG bias if non-neutral
+            bias_direction = (
+                fvg_bias if fvg_bias != "NEUTRAL" else
+                (pd_result.signal if pd_result.signal in ("BUY", "SELL") else "NEUTRAL")
+            )
+
+        is_bull_bias = bias_direction in ("BUY", "STRONG_BUY")
+        is_bear_bias = bias_direction in ("SELL", "STRONG_SELL")
+
+        # ── Aggregate confluence score (0–24 scale, direction-aligned) ──────
+        pd_score    = _pd_engine.score_for_confluence(pd_result, "BUY" if is_bull_bias else ("SELL" if is_bear_bias else "NEUTRAL"))
+        sweep_score = raw_sweep_score if (
+            (is_bull_bias and sw_dir == "BUY") or
+            (is_bear_bias and sw_dir == "SELL") or
+            bias_direction == "NEUTRAL"
+        ) else max(0, raw_sweep_score - 2)
+
+        aligned_obs = [
+            s for s in scored_obs
+            if (is_bull_bias and getattr(s.ob, "type", "") == "BULLISH")
+            or (is_bear_bias and getattr(s.ob, "type", "") == "BEARISH")
+            or (not is_bull_bias and not is_bear_bias)
+        ]
+        ob_score    = min(5, ((aligned_obs[0].score + 10) // 20) if aligned_obs else 0)
+        kz_score    = 3 if kz_status["is_killzone_active"] else (1 if kz_status["current_kz"] else 0)
+
+        if (is_bull_bias and ms_result.bias == "BEARISH") or (is_bear_bias and ms_result.bias == "BULLISH"):
+            structure_score = max(0, structure_score - 2)
 
         total_score     = pd_score + sweep_score + ob_score + kz_score + structure_score + mm_score
         max_score       = 24
@@ -641,27 +723,123 @@ async def get_full_sprint1_analysis(req: FullAnalysisRequest):
                       "WATCHLIST"             if total_score >= 11 else
                       "WAIT")
 
-        # ── Auto Trade Plan ─────────────────────────────────────────────────
+        # ── Auto Trade Plan (Strictly Direction-Aligned & Mathematically Validated) ──
         trade_plan = None
         entry_zone = None
+        atr_val = float(fvg_data.get("atr") or (current_price * 0.008))
 
-        # Prefer FVG entry zone aligned with bias
-        if bias_direction in ("BUY", "STRONG_BUY"):
-            nearest = fvg_data["nearest"]["bullish_fvg"]
-            if nearest:
-                entry_zone = nearest.get("entry_zone")
-        elif bias_direction in ("SELL", "STRONG_SELL"):
-            nearest = fvg_data["nearest"]["bearish_fvg"]
-            if nearest:
-                entry_zone = nearest.get("entry_zone")
+        if is_bull_bias:
+            # 1. Nearest unmitigated Bullish FVG
+            nearest_fvg = fvg_data["nearest"].get("bullish_fvg")
+            if nearest_fvg:
+                entry_zone = nearest_fvg.get("entry_zone")
+            # 2. Fallback ONLY to Bullish Breaker (NEVER Bearish Breaker!)
+            if not entry_zone:
+                bull_brk = fvg_data["nearest"].get("bullish_breaker")
+                if bull_brk:
+                    entry_zone = bull_brk.get("entry_zone")
+            # 3. Fallback to Best Bullish Order Block below/at current price
+            valid_bull_obs = [s for s in aligned_obs if float(s.ob.low) <= current_price * 1.002]
+            if not entry_zone and valid_bull_obs:
+                best_bull_ob = valid_bull_obs[0].ob
+                ob_entry = round(min(current_price, (float(best_bull_ob.low) + float(best_bull_ob.high)) / 2.0), 6)
+                ob_sl    = round(float(best_bull_ob.low) - atr_val * 0.25, 6)
+                ob_risk  = max(ob_entry - ob_sl, atr_val * 0.3)
+                ob_sl    = round(ob_entry - ob_risk, 6)
+                entry_zone = {
+                    "entry": ob_entry,
+                    "stop_loss": ob_sl,
+                    "tp1": round(ob_entry + ob_risk * 1.5, 6),
+                    "tp2": round(ob_entry + ob_risk * 2.5, 6),
+                    "tp3": round(ob_entry + ob_risk * 3.5, 6),
+                    "rr_tp1": 1.5,
+                    "rr_tp2": 2.5,
+                    "risk_pct": round(ob_risk / ob_entry * 100, 3) if ob_entry > 0 else 0.5,
+                    "quality": "GOOD" if aligned_obs[0].score >= 60 else "VALID",
+                }
+        elif is_bear_bias:
+            # 1. Nearest unmitigated Bearish FVG
+            nearest_fvg = fvg_data["nearest"].get("bearish_fvg")
+            if nearest_fvg:
+                entry_zone = nearest_fvg.get("entry_zone")
+            # 2. Fallback ONLY to Bearish Breaker (NEVER Bullish Breaker!)
+            if not entry_zone:
+                bear_brk = fvg_data["nearest"].get("bearish_breaker")
+                if bear_brk:
+                    entry_zone = bear_brk.get("entry_zone")
+            # 3. Fallback to Best Bearish Order Block above/at current price
+            valid_bear_obs = [s for s in aligned_obs if float(s.ob.high) >= current_price * 0.998]
+            if not entry_zone and valid_bear_obs:
+                best_bear_ob = valid_bear_obs[0].ob
+                ob_entry = round(max(current_price, (float(best_bear_ob.low) + float(best_bear_ob.high)) / 2.0), 6)
+                ob_sl    = round(float(best_bear_ob.high) + atr_val * 0.25, 6)
+                ob_risk  = max(ob_sl - ob_entry, atr_val * 0.3)
+                ob_sl    = round(ob_entry + ob_risk, 6)
+                entry_zone = {
+                    "entry": ob_entry,
+                    "stop_loss": ob_sl,
+                    "tp1": round(ob_entry - ob_risk * 1.5, 6),
+                    "tp2": round(ob_entry - ob_risk * 2.5, 6),
+                    "tp3": round(ob_entry - ob_risk * 3.5, 6),
+                    "rr_tp1": 1.5,
+                    "rr_tp2": 2.5,
+                    "risk_pct": round(ob_risk / ob_entry * 100, 3) if ob_entry > 0 else 0.5,
+                    "quality": "GOOD" if aligned_obs[0].score >= 60 else "VALID",
+                }
 
-        # Fallback to best breaker
-        if not entry_zone:
-            breaker = fvg_data["nearest"].get("breaker")
-            if breaker:
-                entry_zone = breaker.get("entry_zone")
+        # 4. Final Mathematical Invariant Guard (Prevents BUY with Short SL/TP or SELL with Long SL/TP)
+        if entry_zone and (is_bull_bias or is_bear_bias):
+            e_px  = float(entry_zone.get("entry") or current_price)
+            sl_px = float(entry_zone.get("stop_loss") or 0)
+            tp1_px = float(entry_zone.get("tp1") or 0)
+            tp2_px = float(entry_zone.get("tp2") or 0)
+            tp3_px = float(entry_zone.get("tp3") or 0)
 
-        if entry_zone and not macro_restricted and not is_synthetic:
+            # Check if entry_zone violates directional order, is on the wrong side of spot price, or is stale (>6 ATR away)
+            if is_bull_bias:
+                invalid_geom = (
+                    (sl_px >= e_px)
+                    or (tp1_px <= max(e_px, current_price))
+                    or (e_px > current_price * 1.003)
+                    or (abs(current_price - e_px) > atr_val * 6)
+                )
+                if invalid_geom:
+                    e_px = round(current_price - atr_val * 0.35, 6)
+                    risk_u = max(atr_val * 0.85, e_px * 0.003)
+                    sl_px  = round(e_px - risk_u, 6)
+                    tp1_px = round(e_px + risk_u * 1.5, 6)
+                    tp2_px = round(e_px + risk_u * 2.5, 6)
+                    tp3_px = round(e_px + risk_u * 3.5, 6)
+                    entry_zone = {
+                        **entry_zone,
+                        "entry": e_px, "stop_loss": sl_px,
+                        "tp1": tp1_px, "tp2": tp2_px, "tp3": tp3_px,
+                        "rr_tp1": 1.5, "rr_tp2": 2.5,
+                        "risk_pct": round(risk_u / e_px * 100, 3),
+                    }
+            elif is_bear_bias:
+                invalid_geom = (
+                    (sl_px <= e_px)
+                    or (tp1_px >= min(e_px, current_price))
+                    or (e_px < current_price * 0.997)
+                    or (abs(current_price - e_px) > atr_val * 6)
+                )
+                if invalid_geom:
+                    e_px = round(current_price + atr_val * 0.35, 6)
+                    risk_u = max(atr_val * 0.85, e_px * 0.003)
+                    sl_px  = round(e_px + risk_u, 6)
+                    tp1_px = round(e_px - risk_u * 1.5, 6)
+                    tp2_px = round(e_px - risk_u * 2.5, 6)
+                    tp3_px = round(e_px - risk_u * 3.5, 6)
+                    entry_zone = {
+                        **entry_zone,
+                        "entry": e_px, "stop_loss": sl_px,
+                        "tp1": tp1_px, "tp2": tp2_px, "tp3": tp3_px,
+                        "rr_tp1": 1.5, "rr_tp2": 2.5,
+                        "risk_pct": round(risk_u / e_px * 100, 3),
+                    }
+
+        if entry_zone and (is_bull_bias or is_bear_bias) and not macro_restricted and not is_synthetic:
             trade_plan = {
                 "bias":         bias_direction,
                 "entry":        entry_zone.get("entry"),

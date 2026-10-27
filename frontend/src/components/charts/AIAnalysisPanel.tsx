@@ -243,12 +243,20 @@ function ParsedAnalysis({ text }: { text: string }) {
   if (!text) return null;
 
   const sectionColors: Record<string, string> = {
+    "Struktur": "#60a5fa",
+    "Pembacaan": "#60a5fa",
     "Narasi": "#60a5fa",
+    "Konfluensi": "#a78bfa",
     "Justifikasi": "#a78bfa",
-    "Setup Trading": "#34d399",
+    "Rencana": "#34d399",
+    "Setup": "#34d399",
+    "Skenario Gagal": "#f87171",
+    "Invalidasi": "#f87171",
+    "Devil": "#fb923c",
     "Self-Critique": "#fb923c",
     "Risiko": "#f87171",
     "Kesimpulan": "#4ade80",
+    "Timing": "#94a3b8",
     "Waktu": "#94a3b8",
   };
 
@@ -271,7 +279,7 @@ function ParsedAnalysis({ text }: { text: string }) {
           ) : null;
         }
 
-        const isRisk = rawTitle.includes("Self-Critique") || rawTitle.includes("Risiko");
+        const isRisk = rawTitle.includes("Self-Critique") || rawTitle.includes("Risiko") || rawTitle.includes("Skenario Gagal") || rawTitle.includes("Invalidasi") || rawTitle.includes("Devil");
         const isSummary = rawTitle.includes("Kesimpulan");
 
         if (isSummary) {

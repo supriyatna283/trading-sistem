@@ -143,7 +143,9 @@ function FVGCard({ fvg, price, expanded, onToggle }: { fvg: FVG; price: number; 
   const c = FG[fvg.type];
   const statC: Record<string, string> = { FRESH: "#10b981", PARTIAL: "#f59e0b", FILLED: "#475569", INVERTED: "#a78bfa" };
   const distCE = ((price - fvg.ce_level) / price * 100).toFixed(2);
-  const dir = fvg.type === "BULLISH" ? "BUY" : "SELL";
+  const dir = fvg.is_inverted
+    ? (fvg.type === "BULLISH" ? "SELL" : "BUY")
+    : (fvg.type === "BULLISH" ? "BUY" : "SELL");
   return (
     <div style={{ borderRadius: 12, background: `${c}07`, border: `1px solid ${c}20`, overflow: "hidden", marginBottom: 8 }}>
       {/* Header row */}

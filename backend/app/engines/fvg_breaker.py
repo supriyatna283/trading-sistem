@@ -207,17 +207,19 @@ class FVGBreakerEngine:
 
         rbs = self._detect_rejection_blocks(h, l, o, c, atr)
 
-        # ── active (non-filled) sorted by strength ─────
-        active_bull = sorted([f for f in bull_fvgs if f.status != "FILLED"], key=lambda f: f.strength, reverse=True)
-        active_bear = sorted([f for f in bear_fvgs if f.status != "FILLED"], key=lambda f: f.strength, reverse=True)
-        all_fvgs    = sorted(active_bull + active_bear, key=lambda f: f.strength, reverse=True)
+        # ── active unmitigated (FRESH/PARTIAL) sorted by strength ─────
+        # Bug fix: INVERTED FVGs were already closed through in the opposite direction
+        # and must NOT be treated as active FVGs in their original direction.
+        active_bull = sorted([f for f in bull_fvgs if f.status in ("FRESH", "PARTIAL")], key=lambda f: f.strength, reverse=True)
+        active_bear = sorted([f for f in bear_fvgs if f.status in ("FRESH", "PARTIAL")], key=lambda f: f.strength, reverse=True)
+        all_fvgs    = sorted([f for f in (bull_fvgs + bear_fvgs) if f.status != "FILLED"], key=lambda f: f.strength, reverse=True)
         all_bbs     = sorted(bull_bbs + bear_bbs, key=lambda b: b.strength, reverse=True)
 
-        # ── nearest levels ─────────────────────────────
-        bull_below = [f for f in active_bull if f.gap_high < price]
-        bear_above = [f for f in active_bear if f.gap_low  > price]
-        nb = max(bull_below, key=lambda f: f.gap_high)   if bull_below else None
-        na = min(bear_above, key=lambda f: f.gap_low)    if bear_above else None
+        # ── nearest levels (include FVGs price is currently inside!) ──
+        bull_below = [f for f in active_bull if f.gap_low <= price]
+        bear_above = [f for f in active_bear if f.gap_high >= price]
+        nb = max(bull_below, key=lambda f: f.ce_level)   if bull_below else None
+        na = min(bear_above, key=lambda f: f.ce_level)   if bear_above else None
         nr = min(all_bbs,    key=lambda b: abs(b.midpoint - price)) if all_bbs else None
 
         # ── signals ────────────────────────────────────
@@ -392,17 +394,22 @@ class FVGBreakerEngine:
                 continue
             # TPs are anchored to ENTRY (not current price) so the displayed
             # levels match the reported R:R exactly.
-            if fvg.type == "BULLISH":
+            # If FVG is INVERTED (IFVG), its polarity flipped (Bullish FVG broken down -> SELL IFVG; Bearish FVG broken up -> BUY IFVG)
+            is_long_zone = (fvg.type == "BULLISH" and not fvg.is_inverted) or (fvg.type == "BEARISH" and fvg.is_inverted)
+            min_risk = max(atr * 0.25, price * 0.0015) if atr > 0 else price * 0.002
+            if is_long_zone:
                 entry = fvg.ce_level
-                sl    = fvg.gap_low - atr * 0.1
-                risk  = entry - sl
+                raw_sl = fvg.gap_low - atr * 0.15
+                risk  = max(entry - raw_sl, min_risk)
+                sl    = entry - risk
                 tp1   = entry + risk * 1.5
                 tp2   = entry + risk * 2.0
                 tp3   = entry + risk * 3.0
             else:
                 entry = fvg.ce_level
-                sl    = fvg.gap_high + atr * 0.1
-                risk  = sl - entry
+                raw_sl = fvg.gap_high + atr * 0.15
+                risk  = max(raw_sl - entry, min_risk)
+                sl    = entry + risk
                 tp1   = entry - risk * 1.5
                 tp2   = entry - risk * 2.0
                 tp3   = entry - risk * 3.0
@@ -496,6 +503,10 @@ class FVGBreakerEngine:
             ob_l = float(min(l[ob_idx], ob_h - atr * 0.15))
             if (ob_h - ob_l) > atr * 1.5:
                 ob_l = ob_h - atr * 0.6
+            # Invalidation check: if subsequent candles closed below ob_l, this Bullish Breaker failed
+            post_closes = c[bi+1:]
+            if len(post_closes) > 0 and float(np.min(post_closes)) < ob_l:
+                continue
             ote  = ob_l + (ob_h - ob_l) * 0.62
 
             vol_mult = float(v[bi]) / avg_v if avg_v > 0 else 1
@@ -538,6 +549,10 @@ class FVGBreakerEngine:
             ob_h = float(max(h[ob_idx], ob_l + atr * 0.15))
             if (ob_h - ob_l) > atr * 1.5:
                 ob_h = ob_l + atr * 0.6
+            # Invalidation check: if subsequent candles closed above ob_h, this Bearish Breaker failed
+            post_closes = c[bi+1:]
+            if len(post_closes) > 0 and float(np.max(post_closes)) > ob_h:
+                continue
             ote  = ob_h - (ob_h - ob_l) * 0.62
 
             vol_mult = float(v[bi]) / avg_v if avg_v > 0 else 1
@@ -842,9 +857,21 @@ class FVGBreakerEngine:
             "rejection_blocks": [self.rb_to_dict(rb) for rb in r.rejection_blocks[:8]],
             "fvg_stacks":       [{"zone_high": s.zone_high, "zone_low": s.zone_low, "count": s.count, "types": s.types, "strength": s.combined_strength} for s in r.fvg_stacks],
             "nearest": {
-                "bullish_fvg": self.fvg_to_dict(r.nearest_bullish_fvg) if r.nearest_bullish_fvg else None,
-                "bearish_fvg": self.fvg_to_dict(r.nearest_bearish_fvg) if r.nearest_bearish_fvg else None,
-                "breaker":     self.breaker_to_dict(r.nearest_breaker)  if r.nearest_breaker else None,
+                "bullish_fvg":     self.fvg_to_dict(r.nearest_bullish_fvg) if r.nearest_bullish_fvg else None,
+                "bearish_fvg":     self.fvg_to_dict(r.nearest_bearish_fvg) if r.nearest_bearish_fvg else None,
+                "breaker":         self.breaker_to_dict(r.nearest_breaker)  if r.nearest_breaker else None,
+                "bullish_breaker": self.breaker_to_dict(
+                    min(
+                        [b for b in r.bullish_breakers if b.ob_low <= r.current_price * 1.002],
+                        key=lambda b: abs(b.ote_entry - r.current_price),
+                    )
+                ) if any(b.ob_low <= r.current_price * 1.002 for b in r.bullish_breakers) else None,
+                "bearish_breaker": self.breaker_to_dict(
+                    min(
+                        [b for b in r.bearish_breakers if b.ob_high >= r.current_price * 0.998],
+                        key=lambda b: abs(b.ote_entry - r.current_price),
+                    )
+                ) if any(b.ob_high >= r.current_price * 0.998 for b in r.bearish_breakers) else None,
             },
             "ict_setup": {
                 "total":        r.ict_setup.total,
