@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 interface FibData {
   levels: { label: string; price: number; isKey: boolean; isExtension: boolean; isGolden: boolean }[];
@@ -72,7 +72,11 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 export default function ICTContextPanel({ symbol: _symbol, currentPrice, fibData, adr }: Props) {
-  const { utcHour, utcDay, utcTimeStr } = useMemo(getNowUTC, []);
+  const [{ utcHour, utcDay, utcTimeStr }, setNowUTC] = useState(getNowUTC);
+  useEffect(() => {
+    const id = setInterval(() => setNowUTC(getNowUTC()), 30_000);
+    return () => clearInterval(id);
+  }, []);
   const { active: activeKZs, next: nextKZ } = useMemo(() => getKillZoneStatus(utcHour), [utcHour]);
   const dowInfo = DOW_BIAS[utcDay];
 

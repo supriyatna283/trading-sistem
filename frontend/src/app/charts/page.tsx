@@ -63,20 +63,19 @@ function ChartsPageContent() {
   const [selectedSymbol, setSelectedSymbol] = useState(initSymbol);
   const [searchInput, setSearchInput] = useState("");
   const [allSymbols, setAllSymbols] = useState<string[]>([]);
-  const [activeSetups, setActiveSetups] = useState<any[]>([]);
   const [selectedSetup, setSelectedSetup] = useState<SetupOverlay | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [chartContext, setChartContext] = useState<{ lastPrice: number | null; fibData: any }>({
+    lastPrice: null,
+    fibData: null,
+  });
   const [isMTFGrid, setIsMTFGrid] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showWatchlist, setShowWatchlist] = useState(true);
-  const [showSetups, setShowSetups] = useState(true);
   const [watchlist, setWatchlist] = useState<string[]>([]);
   const [watchlistInput, setWatchlistInput] = useState("");
-  const [mtfData, setMtfData] = useState<Record<string, any[]>>({});
+  const [mtfData, setMtfData] = useState<Record<string, { candles: any[]; source: string; isSynthetic: boolean }>>({});
   const [isMtfLoading, setIsMtfLoading] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: "error" | "success" } | null>(null);
-  const [setupDirFilter, setSetupDirFilter] = useState<"ALL" | "BUY" | "SELL">("ALL");
-  const [setupTfFilter, setSetupTfFilter] = useState("ALL");
   const [refreshKey, setRefreshKey] = useState(0);
   const [showSearch, setShowSearch] = useState(false);
   const [activeTimeframe, setActiveTimeframe] = useState(initTf);
@@ -114,17 +113,11 @@ function ChartsPageContent() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [setupsRes, symbolsRes] = await Promise.all([
-          api.getSetups("ACTIVE").catch(() => ({ setups: [] })),
-          api.getSymbols().catch(() => ({ symbols: [] })),
-        ]);
-        setActiveSetups(Array.isArray(setupsRes?.setups) ? setupsRes.setups : []);
+        const symbolsRes = await api.getSymbols().catch(() => ({ symbols: [] }));
         const syms = Array.isArray(symbolsRes?.symbols) ? symbolsRes.symbols : [];
         setAllSymbols(syms.length > 0 ? syms.map((s: any) => s.symbol) : QUICK_PAIRS);
       } catch (err) {
         console.error(err);
-      } finally {
-        setIsLoading(false);
       }
     };
     fetchData();
@@ -173,12 +166,19 @@ function ChartsPageContent() {
         MTF_TIMEFRAMES.map(({ tf }) =>
           fetch(`${API_URL}/api/v1/market/candles/${sym}?timeframe=${tf}&limit=200`, { signal: controller.signal })
             .then(r => r.json())
-            .then(j => ({ tf, candles: j.candles ?? [] }))
-            .catch(() => ({ tf, candles: [] }))
+            .then(j => ({
+              tf,
+              candles: j.candles ?? [],
+              source: j.source ?? "okx",
+              isSynthetic: Boolean(j.is_synthetic || j.source === "synthetic"),
+            }))
+            .catch(() => ({ tf, candles: [], source: "none", isSynthetic: false }))
         )
       );
-      const dataMap: Record<string, any[]> = {};
-      results.forEach(({ tf, candles }) => { dataMap[tf] = candles; });
+      const dataMap: Record<string, { candles: any[]; source: string; isSynthetic: boolean }> = {};
+      results.forEach(({ tf, candles, source, isSynthetic }) => {
+        dataMap[tf] = { candles, source, isSynthetic };
+      });
       setMtfData(dataMap);
     } catch (e: any) {
       if (e.name !== "AbortError") console.error(e);
@@ -240,21 +240,11 @@ function ChartsPageContent() {
     return () => document.removeEventListener("fullscreenchange", handler);
   }, []);
 
-  const setupTimeframes = ["ALL", ...Array.from(new Set(activeSetups.map(s => s.timeframe).filter(Boolean)))];
-  const filteredSetups = activeSetups.filter(s => {
-    if (setupDirFilter !== "ALL" && s.direction !== setupDirFilter) return false;
-    if (setupTfFilter !== "ALL" && s.timeframe !== setupTfFilter) return false;
-    return true;
-  });
-
   const selectSymbol = (sym: string) => {
     setSelectedSymbol(sym);
     setSelectedSetup(null);
+    setChartContext({ lastPrice: null, fibData: null });
   };
-
-  // Sidebar widths
-  const leftW = showWatchlist ? 180 : 0;
-  const rightW = (showSetups || showNotes) && !isMTFGrid ? 280 : 0;
 
   return (
     <MainLayout>
@@ -335,6 +325,20 @@ function ChartsPageContent() {
             >
               {isFullscreen ? "⊡" : "⛶"}
             </button>
+            {selectedSetup && (
+              <button
+                onClick={() => setSelectedSetup(null)}
+                className="icon-btn"
+                title="Sembunyikan garis Entry/SL/TP dari chart"
+                style={{
+                  background: "rgba(245,158,11,0.12)",
+                  borderColor: "rgba(245,158,11,0.4)",
+                  color: "#fbbf24",
+                }}
+              >
+                <span style={{ fontSize: "0.75rem" }}>📐</span> Clear Setup ✕
+              </button>
+            )}
             <button
               onClick={() => setShowAIPanel(v => !v)}
               className={`icon-btn${showAIPanel ? " icon-btn-active-purple" : ""}`}
@@ -518,19 +522,26 @@ function ChartsPageContent() {
                   </div>
                 )}
                 <div id="mtf-grid">
-                  {MTF_TIMEFRAMES.map(({ tf, label }) => (
-                    <div key={`${tf}-${refreshKey}`} style={{ position: "relative", minHeight: 0 }}>
-                      <div className="mtf-label">{label}</div>
-                      <TradingViewChart
-                        symbol={selectedSymbol}
-                        data={mtfData[tf]}
-                        setup={selectedSetup}
-                        autoFetchSMC={false}
-                        timeframeInterval={tf}
-                        compactToolbar
-                      />
-                    </div>
-                  ))}
+                  {MTF_TIMEFRAMES.map(({ tf, label }) => {
+                    const cell = mtfData[tf];
+                    return (
+                      <div key={`${tf}-${refreshKey}`} style={{ position: "relative", minHeight: 0 }}>
+                        <div className="mtf-label">{label}</div>
+                        {cell && (
+                          <TradingViewChart
+                            symbol={selectedSymbol}
+                            data={cell.candles}
+                            dataSource={cell.source}
+                            isSynthetic={cell.isSynthetic}
+                            setup={selectedSetup}
+                            autoFetchSMC={false}
+                            timeframeInterval={tf}
+                            compactToolbar
+                          />
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             ) : (
@@ -540,6 +551,8 @@ function ChartsPageContent() {
                 setup={selectedSetup}
                 autoFetchSMC={true}
                 timeframeInterval={activeTimeframe}
+                onTimeframeChange={setActiveTimeframe}
+                onContextChange={setChartContext}
               />
             )}
           </div>
@@ -563,8 +576,8 @@ function ChartsPageContent() {
             }}>
               <ICTContextPanel
                 symbol={selectedSymbol}
-                currentPrice={watchlistPrices[selectedSymbol]?.price ?? null}
-                fibData={null}  // fibData wired via ref in TradingViewChart when needed
+                currentPrice={chartContext.lastPrice ?? watchlistPrices[selectedSymbol]?.price ?? null}
+                fibData={chartContext.fibData}
               />
             </div>
           )}
@@ -575,6 +588,7 @@ function ChartsPageContent() {
             timeframe={activeTimeframe}
             isOpen={showAIPanel}
             onClose={() => setShowAIPanel(false)}
+            onSetupChange={setSelectedSetup}
           />
         </div>
 
@@ -787,13 +801,20 @@ function ChartsPageContent() {
             flex-direction: column;
           }
 
-          /* MTF grid */
+          /* MTF grid — 8 timeframes (1W, 1D, 4H, 1H, 30m, 15m, 5m, 1m) in 4×2 grid */
           #mtf-grid {
             display: grid;
-            grid-template-columns: 1fr 1fr;
-            grid-template-rows: 1fr 1fr;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            grid-template-rows: repeat(2, minmax(200px, 1fr));
             gap: 8px;
             height: 100%;
+            overflow-y: auto;
+          }
+          @media (max-width: 1280px) {
+            #mtf-grid {
+              grid-template-columns: repeat(2, minmax(0, 1fr));
+              grid-template-rows: repeat(4, minmax(220px, 1fr));
+            }
           }
           .mtf-label {
             position: absolute;

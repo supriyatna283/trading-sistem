@@ -31,8 +31,8 @@ class OKXWebSocket:
             inst_id = inst_id.replace("USDT", "-USDT")
 
         okx_interval_map = {
-            "1m": "1m", "5m": "5m", "15m": "15m",
-            "1h": "1H", "4h": "4H", "1d": "1D",
+            "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
+            "1h": "1H", "4h": "4H", "1d": "1Dutc", "1w": "1Wutc",
         }
         bar = okx_interval_map.get(interval, "1m")
 

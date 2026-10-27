@@ -624,31 +624,35 @@ def detect_candle_pattern(df: pd.DataFrame) -> Dict[str, Any]:
         c_upper_wick = c_high - max(c_open, c_close)
         c_lower_wick = min(c_open, c_close) - c_low
 
+        # Prior directional context (3 bars back when available) so reversal patterns
+        # are only reported after a move in the opposite direction.
+        ref_idx = max(0, len(df) - 4)
+        ref_close = float(df.iloc[ref_idx]["close"])
+        after_pullback = p_close <= ref_close
+        after_rally = p_close >= ref_close
+
         # 1. Engulfing
-        # Bullish Engulfing: prev is red, curr is green, curr body engulfs prev body
-        if not p_is_bullish and c_is_bullish and c_close >= p_open and c_open <= p_close and c_body > p_body:
-            return {"pattern": "engulfing", "bullish": True}
+        # Bullish Engulfing: prev is red, curr is green, curr body engulfs prev body after pullback
+        if not p_is_bullish and c_is_bullish and c_close >= p_open and c_open <= p_close and c_body > p_body and after_pullback:
+            return {"pattern": "engulfing", "bullish": True, "direction": "bullish"}
         
-        # Bearish Engulfing: prev is green, curr is red, curr body engulfs prev body
-        if p_is_bullish and not c_is_bullish and c_close <= p_open and c_open >= p_close and c_body > p_body:
-            return {"pattern": "engulfing", "bullish": False}
+        # Bearish Engulfing: prev is green, curr is red, curr body engulfs prev body after rally
+        if p_is_bullish and not c_is_bullish and c_close <= p_open and c_open >= p_close and c_body > p_body and after_rally:
+            return {"pattern": "engulfing", "bullish": False, "direction": "bearish"}
 
         # 2. Pin Bar
         # Bullish Pin Bar (Hammer): long lower wick (> 2x body), small upper wick, close in top 30% of range
-        if c_lower_wick > (2 * c_body) and c_upper_wick < c_body and (c_close - c_low) / c_range > 0.7:
-            return {"pattern": "pin_bar", "bullish": True}
+        if c_lower_wick > (2 * c_body) and c_upper_wick < c_body and (c_close - c_low) / c_range > 0.7 and after_pullback:
+            return {"pattern": "pin_bar", "bullish": True, "direction": "bullish"}
         
         # Bearish Pin Bar (Shooting Star): long upper wick (> 2x body), small lower wick, close in bottom 30% of range
-        if c_upper_wick > (2 * c_body) and c_lower_wick < c_body and (c_high - c_close) / c_range > 0.7:
-            return {"pattern": "pin_bar", "bullish": False}
+        if c_upper_wick > (2 * c_body) and c_lower_wick < c_body and (c_high - c_close) / c_range > 0.7 and after_rally:
+            return {"pattern": "pin_bar", "bullish": False, "direction": "bearish"}
 
-        # 3. Doji
-        # Real body is less than 5% of total candle range
-        if c_body <= (c_range * 0.05) and c_range > (c_close * 0.001): # Ensure range is not just a flatline
-            # Doji doesn't inherently have a direction, but it indicates exhaustion.
-            # We can classify it as neutral/none for strong directional booster, but let's return it
-            return {"pattern": "doji", "bullish": False} # bullish flag means nothing here
+        # 3. Doji (neutral indecision — explicitly mark direction="neutral")
+        if c_body <= (c_range * 0.05) and c_range > (c_close * 0.001):
+            return {"pattern": "doji", "bullish": False, "direction": "neutral", "neutral": True}
 
-        return {"pattern": None, "bullish": False}
+        return {"pattern": None, "bullish": False, "direction": "none"}
     except Exception:
         return {"pattern": None, "bullish": False}

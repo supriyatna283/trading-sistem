@@ -24,11 +24,12 @@ import time
 import re
 from typing import AsyncGenerator, Optional, List
 
-from fastapi import APIRouter, Request, Query, Body
+from fastapi import APIRouter, Request, Query, Body, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.config import get_settings
+from app.security import require_api_key, rate_limit
 from app.engines.market_data import MarketDataEngine
 from app.engines.market_structure import MarketStructureAnalyzer
 from app.engines.smart_money import SmartMoneyConceptsEngine
@@ -396,7 +397,7 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
         ls_ratio_raw,
         order_flow_raw,
     ) = await asyncio.gather(
-        *[_data_engine.get_candles(symbol.upper(), tf, 200) for tf in HTF_TIMEFRAMES],
+        *[_data_engine.get_candles_with_source(symbol.upper(), tf, 200) for tf in HTF_TIMEFRAMES],
         _news_engine.get_events(),
         _crypto_news_engine.get_crypto_news(symbol, limit=5),
         _intel_engine.get_btc_dominance(),
@@ -410,35 +411,29 @@ async def _build_market_context(symbol: str, timeframe: str) -> dict:
     results = candle_results
 
     candles_by_tf: dict = {}
-    # FIX #4 (KRITIS): Deteksi sample data — tandai setiap TF yang menggunakan fake/sample data.
-    # MarketDataEngine.generate_sample_data() mengisi kolom 'symbol' dengan nilai uppercase.
-    # Cara membedakan sample data: kolom 'symbol' konsisten ada + data memiliki pola random seed.
-    # Namun cara paling sederhana: cek apakah df berasal dari candle real (has non-uniform volume).
-    sample_data_tfs: list = []  # list TF yang pakai sample data
-    for i, df in enumerate(results):
+    # Sample/synthetic detection is now exact: MarketDataEngine reports which venue
+    # produced each frame ("okx" | "binance" | "synthetic"). The old volume-variance
+    # heuristic produced false positives on illiquid coins and is gone.
+    sample_data_tfs: list = []  # TFs whose candles are synthetic (random walk)
+    for i, res in enumerate(results):
         tf = HTF_TIMEFRAMES[i]
-        if not isinstance(df, Exception) and not df.empty:
-            # Deteksi sample data: jika semua volume sama persis atau sumbernya generate_sample_data
-            # Cek: apakah df memiliki 'symbol' kolom dengan nilai konsisten (marker dari generate_sample_data)
-            # dan volume sangat seragam (std dev rendah relatif terhadap mean)
-            try:
-                vol_series = df["volume"].astype(float)
-                vol_std = float(vol_series.std())
-                vol_mean = float(vol_series.mean())
-                # Sample data dari generate_sample_data: vol ~ Normal(1000, 300)
-                # Real data: vol variance jauh lebih tinggi dan tidak regular
-                # Heuristik: jika semua volume < 10.0 (sangat kecil, tidak masuk akal untuk crypto)
-                # atau coefficient of variation < 0.15 dengan mean < 5000 = sangat mencurigakan
-                is_suspicious_vol = (vol_mean < 5000 and vol_std > 0 and (vol_std / vol_mean) < 0.5 and vol_mean < 2000)
-                if is_suspicious_vol:
-                    sample_data_tfs.append(tf)
-                    logger.warning(f"[AI] Possible sample data detected for {symbol}/{tf}: vol_mean={vol_mean:.1f}")
-            except Exception:
-                pass
+        if isinstance(res, Exception):
+            continue
+        df, src = res
+        if df is not None and not df.empty:
+            if src == "synthetic":
+                sample_data_tfs.append(tf)
+                logger.warning(f"[AI] Synthetic candles for {symbol}/{tf} (all data sources failed)")
             candles_by_tf[tf] = df
 
     # Flag sample data di entry TF
     is_sample_data = entry_tf in sample_data_tfs
+
+    if is_sample_data:
+        return {"error": (
+            f"Data pasar {symbol.upper()} ({entry_tf}) tidak tersedia dari exchange — "
+            "yang tersedia hanya data simulasi. Analisis AI dibatalkan agar tidak menyesatkan."
+        )}
 
     entry_df = candles_by_tf.get(entry_tf)
     if entry_df is None or entry_df.empty:
@@ -1760,7 +1755,7 @@ async def _stream_ai_analysis(
 # ──────────────────────────────────────────────────────────────
 # Endpoints
 # ──────────────────────────────────────────────────────────────
-@router.get("/analyze")
+@router.get("/analyze", dependencies=[Depends(rate_limit("ai-analyze", 20))])
 async def analyze_chart(
     request: Request,
     symbol: str = Query("BTCUSDT", description="Trading pair, e.g. BTCUSDT"),
@@ -1796,7 +1791,7 @@ async def analyze_chart(
     )
 
 
-@router.delete("/cache")
+@router.delete("/cache", dependencies=[Depends(require_api_key)])
 async def clear_ai_cache(
     symbol: str = Query("", description="Symbol to clear (empty = clear all)"),
     timeframe: str = Query("", description="Timeframe to clear (empty = all TFs for symbol)"),
@@ -1906,7 +1901,7 @@ Jawab pertanyaan trader dengan BAHASA INDONESIA yang jelas, ringkas, dan profesi
     yield sse("done", "complete")
 
 
-@router.post("/chat")
+@router.post("/chat", dependencies=[Depends(require_api_key), Depends(rate_limit("ai-chat", 30))])
 async def chat_with_ai(req: ChatRequest):
     """
     Interactive chat endpoint — continue conversation after /analyze.

@@ -33,13 +33,23 @@ export interface OrderBlockOverlay {
   low: number;
   high: number;
   start_index?: number;
+  time?: number;
   mitigated?: boolean;
+  tested?: boolean;
+  status?: string;
+  bos_confirmed?: boolean;
 }
 
 export interface FVGOverlay {
   type: "BULLISH" | "BEARISH";
   low: number;
   high: number;
+  start_index?: number;
+  time?: number;
+  midpoint?: number;
+  fill_pct?: number;
+  ce_touched?: boolean;
+  status?: string;
 }
 
 export interface LiquidityLevelOverlay {
@@ -49,7 +59,7 @@ export interface LiquidityLevelOverlay {
 }
 
 export interface PatternData {
-  candle: { pattern: string | null; bullish: boolean } | null;
+  candle: { pattern: string | null; bullish: boolean; neutral?: boolean; direction?: "bullish" | "bearish" | "neutral" | "none" } | null;
   divergence: { rsi_divergence: boolean; macd_divergence: boolean; type: string; strength: number } | null;
 }
 
@@ -70,6 +80,16 @@ interface Props {
   timeframeInterval?: string;
   /** MTF grid: slimmer header, hide indicator/tools bar */
   compactToolbar?: boolean;
+  /** Optional provenance passed by parent (e.g. MTF grid) */
+  dataSource?: string;
+  isSynthetic?: boolean;
+  /** Notify parent when timeframe changes via internal chart toolbar */
+  onTimeframeChange?: (tf: string) => void;
+  /** Notify parent of live price + AutoFib state (for ICTContextPanel) */
+  onContextChange?: (ctx: {
+    lastPrice: number | null;
+    fibData: ReturnType<typeof calculateFibonacciAuto>;
+  }) => void;
 }
 
 // Indicator visibility state
@@ -93,7 +113,7 @@ type ChartStyle = "candlestick" | "line" | "area";
 type DrawingMode = "none" | "hline" | "fibonacci";
 type CandleTheme = "neon" | "classic" | "ocean" | "monochrome";
 
-const TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"];
+const TIMEFRAMES = ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"];
 
 const CANDLE_THEMES: Record<CandleTheme, any> = {
   neon: {
@@ -554,6 +574,10 @@ export default function TradingViewChart({
   autoFetchSMC = false,
   timeframeInterval = "1h",
   compactToolbar = false,
+  dataSource: propDataSource,
+  isSynthetic: propIsSynthetic,
+  onTimeframeChange,
+  onContextChange,
 }: Props) {
   // Main chart container
   const mainContainerRef = useRef<HTMLDivElement>(null);
@@ -621,6 +645,11 @@ export default function TradingViewChart({
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
   const [timeframe, setTimeframe] = useState(timeframeInterval);
+  const [candleSource, setCandleSource] = useState<string>(propDataSource || "okx");
+  const [isSyntheticData, setIsSyntheticData] = useState<boolean>(!!propIsSynthetic);
+  const syncMarkersRef = useRef<() => void>(() => {});
+  const onContextChangeRef = useRef(onContextChange);
+  onContextChangeRef.current = onContextChange;
   const [smcData, setSmcData] = useState<{ orderBlocks: OrderBlockOverlay[]; fvgs: FVGOverlay[] } | null>(null);
   const [smcStructure, setSmcStructure] = useState<StructureMarker[]>([]);
   const [smcLiquidity, setSmcLiquidity] = useState<LiquidityLevelOverlay[]>([]);
@@ -671,7 +700,7 @@ export default function TradingViewChart({
 
   // ── Countdown Timer ──
   useEffect(() => {
-    const tfMs: Record<string, number> = { "1m": 60000, "5m": 300000, "15m": 900000, "1h": 3600000, "4h": 14400000, "1d": 86400000 };
+    const tfMs: Record<string, number> = { "1m": 60000, "5m": 300000, "15m": 900000, "30m": 1800000, "1h": 3600000, "4h": 14400000, "1d": 86400000, "1w": 604800000 };
     const updateCountdown = () => {
       const ms = tfMs[timeframe] || 3600000;
       const now = Date.now();
@@ -737,11 +766,36 @@ export default function TradingViewChart({
         fetch(`${API_URL}/api/v1/analysis/structure/${sym}?timeframe=${tf}&demo=false`).then(r => r.json()),
         fetch(`${API_URL}/api/v1/analysis/patterns/${sym}?timeframe=${tf}&demo=false`).then(r => r.json()).catch(() => null),
       ]);
+      if (smcRes?.is_synthetic || structRes?.is_synthetic) {
+        setIsSyntheticData(true);
+        setCandleSource("synthetic");
+        setSmcData({ orderBlocks: [], fvgs: [] });
+        setSmcLiquidity([]);
+        setSmcPattern({ candle: null, divergence: null });
+        setSmcStructure([]);
+        return;
+      }
       const obs: OrderBlockOverlay[] = (smcRes?.order_blocks ?? []).map((ob: any) => ({
-        type: ob.type, low: ob.low, high: ob.high, mitigated: ob.mitigated,
+        type: ob.type,
+        low: ob.low,
+        high: ob.high,
+        mitigated: ob.mitigated,
+        tested: ob.tested,
+        status: ob.status,
+        bos_confirmed: ob.bos_confirmed,
+        start_index: typeof ob.index === "number" ? ob.index : undefined,
+        time: ob.time ? Math.floor(new Date(ob.time).getTime() / 1000) : undefined,
       }));
       const fvgsData: FVGOverlay[] = (smcRes?.fvgs ?? []).map((f: any) => ({
-        type: f.type, low: f.low, high: f.high,
+        type: f.type,
+        low: f.low,
+        high: f.high,
+        midpoint: f.midpoint,
+        fill_pct: f.fill_pct,
+        ce_touched: f.ce_touched,
+        status: f.status,
+        start_index: typeof f.index === "number" ? f.index : undefined,
+        time: f.time ? Math.floor(new Date(f.time).getTime() / 1000) : undefined,
       }));
       setSmcData({ orderBlocks: obs, fvgs: fvgsData });
       const liq: LiquidityLevelOverlay[] = (smcRes?.liquidity_levels ?? []).map((l: any) => ({
@@ -752,9 +806,13 @@ export default function TradingViewChart({
         candle: patRes?.candle_pattern ?? null,
         divergence: patRes?.divergence ?? null,
       });
-      const markers: StructureMarker[] = (structRes?.structure_labels ?? []).map((l: any) => ({
-        time: l.time ? new Date(l.time).getTime() : Date.now(), label: l.label, price: l.price ?? 0,
-      }));
+      const markers: StructureMarker[] = (structRes?.structure_labels ?? [])
+        .filter((l: any) => Boolean(l.time))
+        .map((l: any) => ({
+          time: new Date(l.time).getTime(),
+          label: l.label,
+          price: l.price ?? 0,
+        }));
       setSmcStructure(markers);
     } catch (e) { console.warn("SMC fetch failed:", e); }
   }, [autoFetchSMC]);
@@ -829,23 +887,12 @@ export default function TradingViewChart({
     }
 
     if (showSMC) {
-      effectiveOBs.slice(-6).forEach((ob) => {
-        if (ob.mitigated) return;
-        const color = ob.type === "BULLISH" ? "rgba(16,185,129,0.8)" : "rgba(239,68,68,0.8)";
-        const label = ob.type === "BULLISH" ? "📦 Bull OB" : "📦 Bear OB";
-        lines.push(priceLine(series, ob.low, `${label} Lo`, color, LineStyle.Dotted, 1));
-        lines.push(priceLine(series, ob.high, `${label} Hi`, color, LineStyle.Dotted, 1));
-      });
-      effectiveFVGs.slice(-4).forEach((fvg) => {
-        const color = fvg.type === "BULLISH" ? "rgba(16,185,129,0.5)" : "rgba(239,68,68,0.5)";
-        const label = fvg.type === "BULLISH" ? "FVG ▲" : "FVG ▼";
-        lines.push(priceLine(series, fvg.low, `${label} Lo`, color, LineStyle.Dotted, 1));
-        lines.push(priceLine(series, fvg.high, `${label} Hi`, color, LineStyle.Dotted, 1));
-      });
+      // Order Blocks and FVGs are rendered as time-anchored boxes on the canvas overlay
+      // to avoid duplicate full-width priceLine clutter. Only Equal High/Low liquidity pools use priceLines.
       smcLiquidity.slice(0, 8).forEach((liq) => {
-        const color = liq.type === "EQUAL_HIGH" ? "rgba(239,68,68,0.5)" : "rgba(34,197,94,0.5)";
+        const color = liq.type === "EQUAL_HIGH" ? "rgba(239,68,68,0.55)" : "rgba(34,197,94,0.55)";
         const label = liq.type === "EQUAL_HIGH" ? "EQ High" : "EQ Low";
-        lines.push(priceLine(series, liq.price, `${label}${liq.swept ? " ✕" : ""}`, color, LineStyle.Dotted, 1));
+        lines.push(priceLine(series, liq.price, `${label}${liq.swept ? " · Swept 💧" : ""}`, color, LineStyle.Dotted, 1));
       });
     }
 
@@ -895,11 +942,11 @@ export default function TradingViewChart({
       allMarkers = allMarkers.concat(smcMarkers);
     }
 
-    // 3. AutoFib Swing Markers
+    // 3. AutoFib Swing Markers (distinct from Market Structure HH/LL labels)
     if (indicators.autoFib && autoFibDataRef.current) {
       const fib = autoFibDataRef.current;
-      if (fib.swingHighTime) allMarkers.push({ time: fib.swingHighTime as Time, position: "aboveBar", color: "#ef4444", shape: "arrowDown", text: "HH" });
-      if (fib.swingLowTime) allMarkers.push({ time: fib.swingLowTime as Time, position: "belowBar", color: "#22c55e", shape: "arrowUp", text: "LL" });
+      if (fib.swingHighTime) allMarkers.push({ time: fib.swingHighTime as Time, position: "aboveBar", color: "#a78bfa", shape: "arrowDown", text: "Fib Hi" });
+      if (fib.swingLowTime) allMarkers.push({ time: fib.swingLowTime as Time, position: "belowBar", color: "#a78bfa", shape: "arrowUp", text: "Fib Lo" });
     }
 
     // 4. Divergence Markers (RSI/MACD)
@@ -931,6 +978,7 @@ export default function TradingViewChart({
       markerTarget?.setMarkers(allMarkers);
     }
   }, [indicators.sessions, indicators.smcZones, indicators.autoFib, effectiveMarkers, timeframe, smcPattern]);
+  syncMarkersRef.current = syncMarkers;
 
   useEffect(() => { drawAnnotations(indicators.smcZones); }, [drawAnnotations, indicators.smcZones]);
 
@@ -1015,61 +1063,80 @@ export default function TradingViewChart({
       }
     }
 
-    // ── 2. Order Block boxes ───────────────────────────────────────────────
+    // ── 2. Order Block boxes (time-anchored to origin candle) ──────────────
     if (ind?.smcZones && obs.length > 0) {
       obs.slice(-10).forEach(ob => {
         const yHi = series.priceToCoordinate(ob.high);
         const yLo = series.priceToCoordinate(ob.low);
         if (yHi === null || yLo === null) return;
 
+        let rawX = ob.time ? ts.timeToCoordinate(ob.time as Time) : null;
+        if (rawX === null && typeof ob.start_index === "number") {
+          rawX = ts.logicalToCoordinate(ob.start_index as any);
+        }
+        const xLeft = rawX !== null ? Math.max(0, Math.min(W - 24, rawX)) : 0;
+        const boxW  = Math.max(24, W - xLeft);
+
         const isBull    = ob.type === "BULLISH";
         const mitigated = ob.mitigated ?? false;
+        const tested    = ob.status === "TESTED" || (ob.tested ?? false);
 
-        // Strength coloring: unmitigated = solid fill, mitigated = ghost
-        const fillAlpha   = mitigated ? 0.04 : 0.12;
-        const borderAlpha = mitigated ? 0.18 : 0.60;
+        // Strength coloring: unmitigated = solid fill, tested = slightly softer, mitigated = ghost
+        const fillAlpha   = mitigated ? 0.04 : tested ? 0.09 : 0.13;
+        const borderAlpha = mitigated ? 0.18 : tested ? 0.48 : 0.65;
         const rgb = isBull ? "16,185,129" : "239,68,68";
 
         const y = Math.min(yHi, yLo);
         const h = Math.max(Math.abs(yHi - yLo), 1);
 
-        // Gradient fill: fade L→R to simulate "zone energy"
-        const grad = ctx.createLinearGradient(0, 0, W, 0);
+        // Gradient fill: fade from origin candle L→R
+        const grad = ctx.createLinearGradient(xLeft, 0, W, 0);
         grad.addColorStop(0, `rgba(${rgb},${fillAlpha * 1.6})`);
         grad.addColorStop(1, `rgba(${rgb},${fillAlpha * 0.3})`);
         ctx.fillStyle = grad;
-        ctx.fillRect(0, y, W, h);
+        ctx.fillRect(xLeft, y, boxW, h);
 
-        // Border lines
+        // Border lines (top, bottom, and origin anchor edge)
         ctx.strokeStyle = `rgba(${rgb},${borderAlpha})`;
         ctx.lineWidth   = mitigated ? 0.75 : 1.5;
         ctx.setLineDash(mitigated ? [5, 4] : []);
         ctx.beginPath();
-        ctx.moveTo(0, y);     ctx.lineTo(W, y);
-        ctx.moveTo(0, y + h); ctx.lineTo(W, y + h);
+        ctx.moveTo(xLeft, y);     ctx.lineTo(W, y);
+        ctx.moveTo(xLeft, y + h); ctx.lineTo(W, y + h);
+        if (xLeft > 0) {
+          ctx.moveTo(xLeft, y);   ctx.lineTo(xLeft, y + h);
+        }
         ctx.stroke();
         ctx.setLineDash([]);
 
-        // Label (left side, only unmitigated)
+        // Label (anchored at xLeft + 6)
         if (!mitigated && h > 8) {
-          ctx.fillStyle = `rgba(${rgb},0.75)`;
+          ctx.fillStyle = `rgba(${rgb},0.82)`;
           ctx.font      = "bold 10px 'JetBrains Mono', monospace";
-          const label   = isBull ? "📦 Bull OB" : "📦 Bear OB";
-          ctx.fillText(label, 6, y + h / 2 + 4);
+          const statusSuffix = tested ? " · Tested" : ob.bos_confirmed ? " · BOS" : "";
+          const label   = (isBull ? "📦 Bull OB" : "📦 Bear OB") + statusSuffix;
+          ctx.fillText(label, xLeft + 6, y + h / 2 + 4);
         } else if (mitigated && h > 6) {
           ctx.fillStyle = `rgba(${rgb},0.35)`;
           ctx.font      = "9px 'JetBrains Mono', monospace";
-          ctx.fillText("mitigated", 6, y + h / 2 + 3);
+          ctx.fillText("mitigated", xLeft + 6, y + h / 2 + 3);
         }
       });
     }
 
-    // ── 3. FVG boxes with 50% CE line ─────────────────────────────────────
+    // ── 3. FVG boxes with 50% CE line (time-anchored to impulse candle) ────
     if (ind?.smcZones && fvgs.length > 0) {
       fvgs.slice(-8).forEach(fvg => {
         const yHi = series.priceToCoordinate(fvg.high);
         const yLo = series.priceToCoordinate(fvg.low);
         if (yHi === null || yLo === null) return;
+
+        let rawX = fvg.time ? ts.timeToCoordinate(fvg.time as Time) : null;
+        if (rawX === null && typeof fvg.start_index === "number") {
+          rawX = ts.logicalToCoordinate(fvg.start_index as any);
+        }
+        const xLeft = rawX !== null ? Math.max(0, Math.min(W - 24, rawX)) : 0;
+        const boxW  = Math.max(24, W - xLeft);
 
         const isBull = fvg.type === "BULLISH";
         const rgb    = isBull ? "16,185,129" : "239,68,68";
@@ -1078,14 +1145,14 @@ export default function TradingViewChart({
         const yCE    = (yHi + yLo) / 2;
 
         // Subtle fill
-        ctx.fillStyle = `rgba(${rgb},0.07)`;
-        ctx.fillRect(0, y, W, h);
+        ctx.fillStyle = `rgba(${rgb},${fvg.ce_touched ? 0.045 : 0.075})`;
+        ctx.fillRect(xLeft, y, boxW, h);
 
-        // Dashed border (all sides)
+        // Dashed border (anchored at xLeft)
         ctx.strokeStyle = `rgba(${rgb},0.40)`;
         ctx.lineWidth   = 1;
         ctx.setLineDash([3, 4]);
-        ctx.strokeRect(0, y, W, h);
+        ctx.strokeRect(xLeft, y, boxW, h);
         ctx.setLineDash([]);
 
         // CE (50% midline) — the key ICT level inside the FVG
@@ -1093,18 +1160,23 @@ export default function TradingViewChart({
         ctx.lineWidth   = 1;
         ctx.setLineDash([6, 3]);
         ctx.beginPath();
-        ctx.moveTo(0,  yCE);
+        ctx.moveTo(xLeft, yCE);
         ctx.lineTo(W, yCE);
         ctx.stroke();
         ctx.setLineDash([]);
 
-        // CE label
+        // CE & fill status label
         if (h > 10) {
-          ctx.fillStyle = `rgba(${rgb},0.65)`;
+          ctx.fillStyle = `rgba(${rgb},0.70)`;
           ctx.font      = "bold 9px 'JetBrains Mono', monospace";
-          ctx.fillText(`${isBull ? "▲" : "▼"} FVG`, 6, y + 11);
+          const fvgStatus = fvg.ce_touched
+            ? " · CE"
+            : fvg.fill_pct && fvg.fill_pct > 0
+              ? ` · ${Math.round(fvg.fill_pct)}%`
+              : "";
+          ctx.fillText(`${isBull ? "▲" : "▼"} FVG${fvgStatus}`, xLeft + 6, y + 11);
           ctx.fillStyle = `rgba(${rgb},0.85)`;
-          ctx.fillText("CE", 6, yCE - 3);
+          ctx.fillText("CE", xLeft + 6, yCE - 3);
         }
       });
     }
@@ -1305,19 +1377,21 @@ export default function TradingViewChart({
               currentData.push({ ...tick, volume: volValue });
             }
 
-            if (ema20SeriesRef.current && indicators.ema20) {
+            const liveInd = indicatorsRef.current;
+            const liveTf = timeframeRef.current;
+            if (ema20SeriesRef.current && liveInd?.ema20) {
               const d = calculateEMA(currentData, 20);
               if (d.length) ema20SeriesRef.current.update(d[d.length - 1]);
             }
-            if (ema50SeriesRef.current && indicators.ema50) {
+            if (ema50SeriesRef.current && liveInd?.ema50) {
               const d = calculateEMA(currentData, 50);
               if (d.length) ema50SeriesRef.current.update(d[d.length - 1]);
             }
-            if (ema200SeriesRef.current && indicators.ema200) {
+            if (ema200SeriesRef.current && liveInd?.ema200) {
               const d = calculateEMA(currentData, 200);
               if (d.length) ema200SeriesRef.current.update(d[d.length - 1]);
             }
-            if (indicators.bollingerBands) {
+            if (liveInd?.bollingerBands) {
               const bb = calculateBollingerBands(currentData);
               if (bb.upper.length) {
                 bbUpperRef.current?.update(bb.upper[bb.upper.length - 1]);
@@ -1325,23 +1399,23 @@ export default function TradingViewChart({
                 bbLowerRef.current?.update(bb.lower[bb.lower.length - 1]);
               }
             }
-            if (vwapSeriesRef.current && indicators.vwap) {
+            if (vwapSeriesRef.current && liveInd?.vwap) {
               const d = calculateVWAP(currentData);
               if (d.length) vwapSeriesRef.current.update(d[d.length - 1]);
             }
-            if (rsiSeriesRef.current && indicators.rsi) {
+            if (rsiSeriesRef.current && liveInd?.rsi) {
               const rsiD = calculateRSI(currentData, 14);
               if (rsiD.length) rsiSeriesRef.current.update(rsiD[rsiD.length - 1]);
             }
-            if (macdHistRef.current && macdLineRef.current && macdSignalRef.current && indicators.macd) {
+            if (macdHistRef.current && macdLineRef.current && macdSignalRef.current && liveInd?.macd) {
               const m = calculateMACD(currentData);
               if (m.histogram.length) macdHistRef.current.update(m.histogram[m.histogram.length - 1]);
               if (m.macdLine.length) macdLineRef.current.update(m.macdLine[m.macdLine.length - 1]);
               if (m.signalLine.length) macdSignalRef.current.update(m.signalLine[m.signalLine.length - 1]);
             }
             // Auto Fib: update price when swing changes
-            if (indicators.autoFib && autoFibDataRef.current) {
-              const newFib = calculateFibonacciAuto(currentData, timeframe);
+            if (liveInd?.autoFib && autoFibDataRef.current) {
+              const newFib = calculateFibonacciAuto(currentData, liveTf);
               if (newFib) {
                 const prev = autoFibDataRef.current;
                 const changed = Math.abs(newFib.swingHigh - prev.swingHigh) / prev.swingHigh > 0.0005
@@ -1354,10 +1428,14 @@ export default function TradingViewChart({
                     } catch (_) {}
                   });
                   // ── Sync markers ──
-                  syncMarkers();
+                  syncMarkersRef.current();
                 }
               }
             }
+            onContextChangeRef.current?.({
+              lastPrice: tick.close,
+              fibData: autoFibDataRef.current,
+            });
           } catch (e) { console.warn("WS message parse error:", e); }
         };
 
@@ -1660,6 +1738,8 @@ export default function TradingViewChart({
         let chartData: any[] = [];
 
         if (data && data.length > 0) {
+          setCandleSource(propDataSource || "okx");
+          setIsSyntheticData(!!propIsSynthetic);
           chartData = data.map((c) => ({
             time: (new Date(c.open_time).getTime() / 1000) as Time,
             open: parseFloat(c.open), high: parseFloat(c.high),
@@ -1678,6 +1758,9 @@ export default function TradingViewChart({
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const json = await res.json();
             if (isCancelled) return;
+            const synth = Boolean(json.is_synthetic || json.source === "synthetic");
+            setCandleSource(json.source || "okx");
+            setIsSyntheticData(synth);
             if (json.candles && Array.isArray(json.candles)) {
               chartData = json.candles.map((c: any) => ({
                 time: (new Date(c.open_time).getTime() / 1000) as Time,
@@ -1786,9 +1869,10 @@ export default function TradingViewChart({
             if (htfResp.ok) {
               const htfJson = await htfResp.json();
               if (isCancelled) return;
-              const htfCandles = (htfJson.candles ?? []).map((c: any) => ({
-                time: c.time ?? c.timestamp,
-                open: c.open, high: c.high, low: c.low, close: c.close,
+              const htfRaw = htfJson.is_synthetic ? [] : (htfJson.candles ?? []);
+              const htfCandles = htfRaw.map((c: any) => ({
+                time: (c.open_time ? new Date(c.open_time).getTime() / 1000 : (c.time ?? c.timestamp)) as Time,
+                open: parseFloat(c.open), high: parseFloat(c.high), low: parseFloat(c.low), close: parseFloat(c.close),
               }));
               if (htfCandles.length >= 10) {
                 const htfFib = calculateFibonacciAuto(htfCandles, htfTf);
@@ -1902,6 +1986,14 @@ export default function TradingViewChart({
 
         if (isCancelled) return;
         
+        // Notify parent of initial price & Fib context (used by ICTContextPanel)
+        if (chartData.length > 0) {
+          onContextChangeRef.current?.({
+            lastPrice: chartData[chartData.length - 1].close,
+            fibData: autoFibDataRef.current,
+          });
+        }
+
         // Draw annotations & sync markers
         drawAnnotations(indicators.smcZones);
         syncMarkers();
@@ -2235,6 +2327,26 @@ export default function TradingViewChart({
           {hasSMC && indicators.smcZones && (
             <span style={{ fontSize: "0.68rem", padding: "2px 6px", borderRadius: 6, background: "rgba(139,92,246,0.15)", color: "#a78bfa", fontWeight: 700 }}>📦</span>
           )}
+          <span
+            title={
+              isSyntheticData
+                ? "Semua koneksi bursa gagal — menampilkan data simulasi (random walk). Jangan gunakan untuk trading!"
+                : `Sumber data candle: ${candleSource.toUpperCase()}`
+            }
+            style={{
+              fontSize: compactToolbar ? "0.58rem" : "0.64rem",
+              padding: "2px 6px",
+              borderRadius: 6,
+              fontWeight: 800,
+              letterSpacing: "0.04em",
+              fontFamily: "'JetBrains Mono', monospace",
+              background: isSyntheticData ? "rgba(239,68,68,0.22)" : "rgba(16,185,129,0.12)",
+              border: `1px solid ${isSyntheticData ? "rgba(239,68,68,0.55)" : "rgba(16,185,129,0.3)"}`,
+              color: isSyntheticData ? "#fca5a5" : "#34d399",
+            }}
+          >
+            {isSyntheticData ? "⚠️ SIMULATED" : candleSource.toUpperCase()}
+          </span>
         </div>
 
         {/* Right: Chart Style + Timeframes */}
@@ -2293,7 +2405,7 @@ export default function TradingViewChart({
             <>
               <div style={{ width: 1, height: 16, background: "var(--border)", margin: "0 4px" }} />
               {TIMEFRAMES.map((tf) => (
-                <button key={tf} type="button" onClick={() => setTimeframe(tf)} style={{
+                <button key={tf} type="button" onClick={() => { setTimeframe(tf); onTimeframeChange?.(tf); }} style={{
                   background: tf === timeframe ? "rgba(59,130,246,0.15)" : "transparent",
                   border: tf === timeframe ? "1px solid rgba(59,130,246,0.3)" : "1px solid transparent",
                   color: tf === timeframe ? "var(--accent-blue)" : "var(--text-secondary)",
@@ -2367,6 +2479,30 @@ export default function TradingViewChart({
         </div>
       )}
 
+      {/* ── Synthetic Data Warning Banner ── */}
+      {isSyntheticData && (
+        <div
+          role="alert"
+          style={{
+            padding: compactToolbar ? "4px 8px" : "7px 14px",
+            background: "linear-gradient(90deg, rgba(220,38,38,0.28), rgba(153,27,27,0.22))",
+            borderBottom: "1px solid rgba(239,68,68,0.5)",
+            color: "#fecaca",
+            fontSize: compactToolbar ? "0.65rem" : "0.75rem",
+            fontWeight: 700,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 8,
+            flexShrink: 0,
+          }}
+        >
+          <span>
+            ⚠️ DATA SIMULASI (SYNTHETIC) — Koneksi ke OKX &amp; Binance gagal. Candle di bawah adalah random walk, <u>jangan gunakan untuk keputusan trading</u>.
+          </span>
+        </div>
+      )}
+
       {/* ── Main Chart Canvas ── */}
       <div ref={mainContainerRef} style={{ flexGrow: 1, width: "100%", position: "relative", minHeight: 300 }}>
         {/* ICT Overlay Canvas — draws OB/FVG boxes, Kill Zones, Sweep markers */}
@@ -2433,11 +2569,16 @@ export default function TradingViewChart({
               POC {formatPrice(vpLevels.poc)} · VAH {formatPrice(vpLevels.vah)} · VAL {formatPrice(vpLevels.val)}
             </span>
           )}
-          {smcPattern.candle?.pattern && (
-            <span style={{ color: smcPattern.candle.bullish ? "#22c55e" : "#ef4444", fontWeight: 700 }}>
-              {smcPattern.candle.bullish ? "▲" : "▼"} {smcPattern.candle.pattern.replace(/_/g, " ")}
-            </span>
-          )}
+          {smcPattern.candle?.pattern && (() => {
+            const isNeutral = smcPattern.candle.neutral || smcPattern.candle.direction === "neutral" || smcPattern.candle.pattern === "doji";
+            const color = isNeutral ? "#f59e0b" : smcPattern.candle.bullish ? "#22c55e" : "#ef4444";
+            const icon  = isNeutral ? "◆" : smcPattern.candle.bullish ? "▲" : "▼";
+            return (
+              <span style={{ color, fontWeight: 700 }}>
+                {icon} {smcPattern.candle.pattern.replace(/_/g, " ")}
+              </span>
+            );
+          })()}
           {smcPattern.divergence && (smcPattern.divergence.rsi_divergence || smcPattern.divergence.macd_divergence) && (
             <span style={{ color: smcPattern.divergence.type === "bullish" ? "#22c55e" : "#ef4444", fontWeight: 700 }}>
               {smcPattern.divergence.type === "bullish" ? "▲" : "▼"} {smcPattern.divergence.rsi_divergence ? "RSI" : "MACD"} Div

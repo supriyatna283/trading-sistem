@@ -1,7 +1,11 @@
 """Market data API endpoints — V2 resilient with auto-fallback."""
 
 from fastapi import APIRouter, Query
-from app.engines.market_data import MarketDataEngine
+from app.engines.market_data import (
+    MarketDataEngine,
+    TIMEFRAME_REGEX,
+    SOURCE_SYNTHETIC,
+)
 
 router = APIRouter(prefix="/api/v1/market", tags=["Market Data"])
 
@@ -18,7 +22,7 @@ async def list_symbols():
 @router.get("/candles/{symbol}")
 async def get_candles(
     symbol: str,
-    timeframe: str = Query("1h", regex="^(1m|5m|15m|1h|4h|1d)$"),
+    timeframe: str = Query("1h", pattern=TIMEFRAME_REGEX),
     limit: int = Query(200, ge=1, le=1000),
 ):
     """
@@ -27,11 +31,19 @@ async def get_candles(
     open_time is always returned as a UTC ISO-8601 string (with 'Z' suffix)
     so browsers always parse it as UTC, avoiding local-timezone offset bugs
     that cause duplicate / misplaced candles on the chart.
+
+    The response always carries `source` ("okx" | "binance" | "synthetic" | "none")
+    and `is_synthetic`. When `is_synthetic` is true every real source failed and the
+    candles are a random walk — clients must warn the user and must not trade on it.
     """
-    df = await data_engine.get_candles(symbol.upper(), timeframe, limit)
+    df, source = await data_engine.get_candles_with_source(symbol.upper(), timeframe, limit)
 
     if df.empty:
-        return {"symbol": symbol.upper(), "timeframe": timeframe, "candles": []}
+        return {
+            "symbol": symbol.upper(), "timeframe": timeframe,
+            "source": "none", "is_synthetic": False,
+            "count": 0, "candles": [],
+        }
 
     candles = df.to_dict(orient="records")
     # Convert pandas Timestamps → UTC ISO strings (always append 'Z')
@@ -46,6 +58,8 @@ async def get_candles(
     return {
         "symbol": symbol.upper(),
         "timeframe": timeframe,
+        "source": source,
+        "is_synthetic": source == SOURCE_SYNTHETIC,
         "count": len(candles),
         "candles": candles,
     }

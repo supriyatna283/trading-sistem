@@ -45,8 +45,8 @@ class OKXWebsocketClient:
             okx_symbol = okx_symbol.replace("USDT", "-USDT")
             
         okx_interval_map = {
-            "1m": "candle1m", "5m": "candle5m", "15m": "candle15m",
-            "1h": "candle1H", "4h": "candle4H", "1d": "candle1D",
+            "1m": "candle1m", "5m": "candle5m", "15m": "candle15m", "30m": "candle30m",
+            "1h": "candle1H", "4h": "candle4H", "1d": "candle1Dutc", "1w": "candle1Wutc",
         }
         channel = okx_interval_map.get(interval, "candle1H")
         sub_key = f"{channel}:{okx_symbol}"
@@ -121,8 +121,9 @@ class OKXWebsocketClient:
                 
                 # Reverse mapping: candle1H -> 1h, BTC-USDT -> BTCUSDT
                 interval_reverse_map = {
-                    "candle1m": "1m", "candle5m": "5m", "candle15m": "15m",
-                    "candle1H": "1h", "candle4H": "4h", "candle1D": "1d",
+                    "candle1m": "1m", "candle5m": "5m", "candle15m": "15m", "candle30m": "30m",
+                    "candle1H": "1h", "candle4H": "4h", "candle1D": "1d", "candle1Dutc": "1d",
+                    "candle1Wutc": "1w",
                 }
                 interval = interval_reverse_map.get(channel, "1h")
                 local_symbol = instId.replace("-", "")

@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 
 from app.database import get_db
+from app.security import require_api_key
 from app.models.symbol_note import SymbolNote
 
 
@@ -42,7 +43,7 @@ async def get_note(symbol: str, db: Session = Depends(get_db)):
     return {"note": note.to_dict()}
 
 
-@router.put("/{symbol}")
+@router.put("/{symbol}", dependencies=[Depends(require_api_key)])
 async def upsert_note(symbol: str, data: NoteUpsert, db: Session = Depends(get_db)):
     """Create or update the note for a symbol."""
     sym = symbol.upper()
@@ -76,7 +77,7 @@ async def list_notes(db: Session = Depends(get_db)):
     return {"notes": [n.to_dict() for n in notes]}
 
 
-@router.delete("/{symbol}")
+@router.delete("/{symbol}", dependencies=[Depends(require_api_key)])
 async def delete_note(symbol: str, db: Session = Depends(get_db)):
     """Delete the note for a symbol."""
     sym = symbol.upper()

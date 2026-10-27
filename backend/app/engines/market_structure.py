@@ -1,19 +1,20 @@
 """
-Market Structure Analyzer
-=========================
-Detects swing points (HH, HL, LH, LL), Break of Structure (BOS),
-Change of Character (CHOCH), and Market Structure Shift (MSS).
-Determines market bias (Bullish / Bearish / Sideways).
+Market Structure Analyzer (V3 - Close-Break BOS / CHOCH)
+========================================================
+Detects swing points (HH, HL, LH, LL) and places Break of Structure (BOS) /
+Change of Character (CHOCH) at the exact candle whose CLOSE breaks the prior
+swing high or swing low — including live breaks after the most recent confirmed
+swing so fresh breakouts/reversals are not delayed by `swing_lookback` bars.
 """
 
 import pandas as pd
 import numpy as np
-from typing import List, Tuple
+from typing import List, Optional
 from app.schemas.market_data import SwingPoint, StructureLabel, MarketBias
 
 
 class MarketStructureAnalyzer:
-    """Analyzes market structure using price action swing points."""
+    """Analyzes market structure using price action swing points and close breaks."""
 
     def __init__(self, swing_lookback: int = 5):
         self.swing_lookback = swing_lookback
@@ -39,148 +40,223 @@ class MarketStructureAnalyzer:
         )
 
     # ------------------------------------------------------------------
-    # Swing point detection
+    # Swing point detection (with duplicate plateau suppression)
     # ------------------------------------------------------------------
     def _find_swing_points(self, df: pd.DataFrame) -> List[SwingPoint]:
-        """Identify swing highs and lows using local extremes."""
-        highs = df["high"].values
-        lows = df["low"].values
+        """Identify swing highs and lows using local extremes without plateau duplicates."""
+        highs = df["high"].astype(float).values
+        lows = df["low"].astype(float).values
         n = len(df)
         lb = self.swing_lookback
         swings: List[SwingPoint] = []
+        last_high_idx = -lb - 1
+        last_low_idx = -lb - 1
 
+        candidates: List[SwingPoint] = []
         for i in range(lb, n - lb):
-            # Swing High: high[i] is the max of the surrounding window
-            if highs[i] == max(highs[i - lb : i + lb + 1]):
-                time_val = df.iloc[i]["open_time"] if "open_time" in df.columns else None
-                swings.append(SwingPoint(
-                    index=i, price=float(highs[i]), type="HIGH",
-                    time=time_val,
-                ))
-            # Swing Low: low[i] is the min of the surrounding window
-            if lows[i] == min(lows[i - lb : i + lb + 1]):
-                time_val = df.iloc[i]["open_time"] if "open_time" in df.columns else None
-                swings.append(SwingPoint(
-                    index=i, price=float(lows[i]), type="LOW",
-                    time=time_val,
-                ))
+            win_h = highs[i - lb : i + lb + 1]
+            win_l = lows[i - lb : i + lb + 1]
 
-        # Sort by index
-        swings.sort(key=lambda s: s.index)
+            is_high = (
+                highs[i] == max(win_h)
+                and highs[i] > min(win_h[:lb])
+                and highs[i] > min(win_h[lb + 1 :])
+                and (i - last_high_idx) >= lb
+            )
+            is_low = (
+                lows[i] == min(win_l)
+                and lows[i] < max(win_l[:lb])
+                and lows[i] < max(win_l[lb + 1 :])
+                and (i - last_low_idx) >= lb
+            )
+
+            time_val = df.iloc[i]["open_time"] if "open_time" in df.columns else None
+            if is_high and is_low:
+                # Resolve same-bar outside bar by alternating against prior candidate
+                if candidates and candidates[-1].type == "HIGH":
+                    is_high = False
+                else:
+                    is_low = False
+
+            if is_high:
+                candidates.append(SwingPoint(
+                    index=i, price=float(highs[i]), type="HIGH", time=time_val,
+                ))
+                last_high_idx = i
+            elif is_low:
+                candidates.append(SwingPoint(
+                    index=i, price=float(lows[i]), type="LOW", time=time_val,
+                ))
+                last_low_idx = i
+
+        # Normalize into alternating HIGH / LOW swings (keep more extreme on consecutive same-type)
+        for cand in candidates:
+            if not swings:
+                swings.append(cand)
+            elif swings[-1].type == cand.type:
+                if cand.type == "HIGH" and cand.price >= swings[-1].price:
+                    swings[-1] = cand
+                elif cand.type == "LOW" and cand.price <= swings[-1].price:
+                    swings[-1] = cand
+            else:
+                swings.append(cand)
+
         return swings
 
     # ------------------------------------------------------------------
-    # Structure labeling (HH / HL / LH / LL / BOS / CHOCH)
+    # Structure labeling (HH / HL / LH / LL + Close-Break BOS / CHOCH)
     # ------------------------------------------------------------------
     def _label_structure(
         self, swings: List[SwingPoint], df: pd.DataFrame
     ) -> List[StructureLabel]:
         """
-        Label swing points as HH/HL/LH/LL and detect BOS/CHOCH.
-
-        Fix V2:
-        - BOS is now emitted for BOTH bullish (HH) and bearish (LL) continuations.
-          Previously only HH-based BOS was generated — bearish BOS (LL continuation)
-          was silently missing.
-        - CHOCH on LOW swings now correctly updates prev_trend. Previously the trend
-          state was not updated on low-based CHOCH, causing bias to get stuck.
+        1. Label confirmed swing points as HH/HL/LH/LL.
+        2. Emit BOS / CHOCH at the first candle whose CLOSE breaks the prior
+           swing high (bullish break) or prior swing low (bearish break):
+           - Bullish break when prior trend is BULLISH -> BOS
+           - Bullish break when prior trend is BEARISH -> CHOCH
+           - Bearish break when prior trend is BEARISH -> BOS
+           - Bearish break when prior trend is BULLISH -> CHOCH
+        3. Also scan bars after the last confirmed swing up to the end of `df`
+           so a fresh close break is reported immediately without waiting `lb` bars.
         """
         labels: List[StructureLabel] = []
         if len(swings) < 2:
             return labels
 
-        prev_high: SwingPoint | None = None
-        prev_low: SwingPoint | None = None
-        prev_trend = "NEUTRAL"
+        closes = df["close"].astype(float).values
+        has_time = "open_time" in df.columns
+        n = len(df)
+
+        prev_high: Optional[SwingPoint] = None
+        prev_low: Optional[SwingPoint] = None
+        trend = "NEUTRAL"  # "BULLISH" | "BEARISH" | "NEUTRAL"
+        broken_high_idx: set[int] = set()
+        broken_low_idx: set[int] = set()
 
         for sw in swings:
             if sw.type == "HIGH":
                 if prev_high is not None:
-                    if sw.price > prev_high.price:
-                        label = "HH"
-                    else:
-                        label = "LH"
+                    s_label = "HH" if sw.price > prev_high.price else "LH"
                     labels.append(StructureLabel(
-                        index=sw.index, label=label,
-                        price=sw.price, time=sw.time,
+                        index=sw.index, label=s_label, price=sw.price, time=sw.time,
                     ))
 
-                    new_trend = "BULLISH" if label == "HH" else "BEARISH"
-
-                    if prev_trend != "NEUTRAL" and new_trend != prev_trend:
-                        # Direction changed → Change of Character
-                        labels.append(StructureLabel(
-                            index=sw.index, label="CHOCH",
-                            price=sw.price, time=sw.time,
-                        ))
-                    elif prev_trend == "BULLISH" and label == "HH":
-                        # Bullish BOS: continuation — price broke the previous HH
-                        labels.append(StructureLabel(
-                            index=sw.index, label="BOS",
-                            price=sw.price, time=sw.time,
-                        ))
-
-                    prev_trend = new_trend  # always update trend from HIGH swings
+                    if s_label == "HH" and prev_high.index not in broken_high_idx:
+                        brk_idx = self._find_close_break(
+                            closes, prev_high.index + 1, sw.index, prev_high.price, "UP"
+                        )
+                        if brk_idx is not None:
+                            broken_high_idx.add(prev_high.index)
+                            brk_time = df.iloc[brk_idx]["open_time"] if has_time else sw.time
+                            brk_label = "CHOCH" if trend == "BEARISH" else "BOS"
+                            labels.append(StructureLabel(
+                                index=brk_idx,
+                                label=brk_label,
+                                price=prev_high.price,
+                                time=brk_time,
+                            ))
+                            trend = "BULLISH"
+                    elif s_label == "LH" and trend == "NEUTRAL":
+                        trend = "BEARISH"
+                    elif s_label == "HH" and trend == "NEUTRAL":
+                        trend = "BULLISH"
                 prev_high = sw
 
             elif sw.type == "LOW":
                 if prev_low is not None:
-                    if sw.price > prev_low.price:
-                        label = "HL"
-                    else:
-                        label = "LL"
+                    s_label = "HL" if sw.price > prev_low.price else "LL"
                     labels.append(StructureLabel(
-                        index=sw.index, label=label,
-                        price=sw.price, time=sw.time,
+                        index=sw.index, label=s_label, price=sw.price, time=sw.time,
                     ))
 
-                    new_trend = "BULLISH" if label == "HL" else "BEARISH"
-
-                    if prev_trend != "NEUTRAL" and new_trend != prev_trend:
-                        # Direction changed → Change of Character
-                        labels.append(StructureLabel(
-                            index=sw.index, label="CHOCH",
-                            price=sw.price, time=sw.time,
-                        ))
-                    elif prev_trend == "BEARISH" and label == "LL":
-                        # Bearish BOS: continuation — price broke the previous LL
-                        # FIX: this was completely missing before (was only HH BOS)
-                        labels.append(StructureLabel(
-                            index=sw.index, label="BOS",
-                            price=sw.price, time=sw.time,
-                        ))
-
-                    # FIX: always update trend from LOW swings too (was missing before)
-                    prev_trend = new_trend
+                    if s_label == "LL" and prev_low.index not in broken_low_idx:
+                        brk_idx = self._find_close_break(
+                            closes, prev_low.index + 1, sw.index, prev_low.price, "DOWN"
+                        )
+                        if brk_idx is not None:
+                            broken_low_idx.add(prev_low.index)
+                            brk_time = df.iloc[brk_idx]["open_time"] if has_time else sw.time
+                            brk_label = "CHOCH" if trend == "BULLISH" else "BOS"
+                            labels.append(StructureLabel(
+                                index=brk_idx,
+                                label=brk_label,
+                                price=prev_low.price,
+                                time=brk_time,
+                            ))
+                            trend = "BEARISH"
+                    elif s_label == "HL" and trend == "NEUTRAL":
+                        trend = "BULLISH"
+                    elif s_label == "LL" and trend == "NEUTRAL":
+                        trend = "BEARISH"
                 prev_low = sw
 
+        # ── Live tail scan: detect close break after the last confirmed swing ──
+        if prev_high is not None and prev_high.index not in broken_high_idx:
+            brk_idx = self._find_close_break(
+                closes, prev_high.index + 1, n - 1, prev_high.price, "UP"
+            )
+            if brk_idx is not None:
+                brk_time = df.iloc[brk_idx]["open_time"] if has_time else prev_high.time
+                brk_label = "CHOCH" if trend == "BEARISH" else "BOS"
+                labels.append(StructureLabel(
+                    index=brk_idx, label=brk_label, price=prev_high.price, time=brk_time,
+                ))
+                trend = "BULLISH"
+
+        if prev_low is not None and prev_low.index not in broken_low_idx:
+            brk_idx = self._find_close_break(
+                closes, prev_low.index + 1, n - 1, prev_low.price, "DOWN"
+            )
+            if brk_idx is not None:
+                brk_time = df.iloc[brk_idx]["open_time"] if has_time else prev_low.time
+                brk_label = "CHOCH" if trend == "BULLISH" else "BOS"
+                labels.append(StructureLabel(
+                    index=brk_idx, label=brk_label, price=prev_low.price, time=brk_time,
+                ))
+
+        labels.sort(key=lambda l: l.index)
         return labels
+
+    @staticmethod
+    def _find_close_break(
+        closes, start_idx: int, end_idx: int, level: float, direction: str
+    ) -> Optional[int]:
+        """Return first bar index in [start_idx, end_idx] whose close breaks `level`."""
+        if start_idx > end_idx:
+            return None
+        for k in range(start_idx, end_idx + 1):
+            if direction == "UP" and closes[k] > level:
+                return k
+            if direction == "DOWN" and closes[k] < level:
+                return k
+        return None
 
     # ------------------------------------------------------------------
     # Bias determination
     # ------------------------------------------------------------------
     def _determine_bias(self, labels: List[StructureLabel]) -> str:
-        """Determine overall market bias from the last several structure labels."""
+        """Determine overall market bias from recent structure swings and breaks."""
         if not labels:
             return "SIDEWAYS"
 
-        # Take the last 6 labels to determine the current market phase
         recent = labels[-6:]
         bullish_count = sum(1 for l in recent if l.label in ("HH", "HL"))
         bearish_count = sum(1 for l in recent if l.label in ("LH", "LL"))
 
-        # Check for recent CHOCH — indicates a potential shift
-        has_recent_choch = any(l.label == "CHOCH" for l in labels[-3:])
-
-        if has_recent_choch:
-            # If CHOCH occurred recently, the bias just shifted
-            last_label = [l for l in recent if l.label in ("HH", "HL", "LH", "LL")]
-            if last_label:
-                if last_label[-1].label in ("HH", "HL"):
-                    return "BULLISH"
-                else:
-                    return "BEARISH"
-            return "SIDEWAYS"
+        # Check for recent CHOCH or BOS in the last 3 structure events
+        for l in reversed(labels[-3:]):
+            if l.label in ("CHOCH", "BOS"):
+                # Find the swing or break direction at/near this event
+                swings_up_to = [x for x in labels if x.index <= l.index and x.label in ("HH", "HL", "LH", "LL")]
+                if swings_up_to:
+                    last_sw = swings_up_to[-1]
+                    if l.label == "BOS":
+                        return "BULLISH" if last_sw.label in ("HH", "HL") else "BEARISH"
+                    else:  # CHOCH flips against prior structure if break happened in tail
+                        if l.price >= last_sw.price:
+                            return "BULLISH"
+                        return "BEARISH"
 
         if bullish_count > bearish_count + 1:
             return "BULLISH"

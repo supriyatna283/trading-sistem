@@ -265,13 +265,24 @@ class MarketIntelEngine:
         if df.empty or len(df) < 10:
             return {"symbol": symbol, "pivot": 0, "supports": [], "resistances": [], "nearest_support": 0, "nearest_resistance": 0}
 
-        # Use last complete period for pivot calculation
-        high = float(df["high"].astype(float).max())
-        low = float(df["low"].astype(float).min())
-        close = float(df.iloc[-1]["close"])
+        highs_all = df["high"].astype(float).values
+        lows_all = df["low"].astype(float).values
+        closes_all = df["close"].astype(float).values
+        close = float(closes_all[-1])
 
-        # Classic Pivot Points
-        pivot = (high + low + close) / 3
+        # Classic Pivot Points from the previous completed session window
+        # (24 bars on intraday, or previous completed bar on 1d/1w) instead of
+        # the entire 200-bar extremes which push R1/S1 unrealistically far away.
+        n = len(df)
+        tf_val = str(df.iloc[-1]["timeframe"]) if "timeframe" in df.columns else "1h"
+        sess_bars = 1 if tf_val in ("1d", "1w") else min(24, max(6, n // 4))
+        prev_end = max(1, n - 1)
+        prev_start = max(0, prev_end - sess_bars)
+        high = float(np.max(highs_all[prev_start:prev_end]))
+        low = float(np.min(lows_all[prev_start:prev_end]))
+        prev_close = float(closes_all[prev_end - 1])
+
+        pivot = (high + low + prev_close) / 3.0
         s1 = 2 * pivot - high
         s2 = pivot - (high - low)
         s3 = low - 2 * (high - pivot)
@@ -279,14 +290,33 @@ class MarketIntelEngine:
         r2 = pivot + (high - low)
         r3 = high + 2 * (pivot - low)
 
-        # Swing highs and lows (last 50 candles)
-        recent = df.tail(50)
-        swing_highs = self._find_swing_levels(recent, "high", lookback=5)
-        swing_lows = self._find_swing_levels(recent, "low", lookback=5)
+        # Estimate ATR(14) for clustering nearby swing levels
+        trs = [
+            max(highs_all[i] - lows_all[i], abs(highs_all[i] - closes_all[i - 1]), abs(lows_all[i] - closes_all[i - 1]))
+            for i in range(1, n)
+        ]
+        atr = float(np.mean(trs[-14:])) if trs else close * 0.005
+        cluster_tol = max(atr * 0.35, close * 0.0015)
 
-        # Combine and deduplicate
-        all_supports = sorted(set([round(s, 8) for s in [s1, s2, s3] + swing_lows if s < close]), reverse=True)
-        all_resistances = sorted(set([round(r, 8) for r in [r1, r2, r3] + swing_highs if r > close]))
+        recent = df.tail(min(n, 120))
+        swing_highs = self._find_swing_levels(recent, "high", lookback=4)
+        swing_lows = self._find_swing_levels(recent, "low", lookback=4)
+
+        def _cluster_levels(candidates: List[float], descending: bool) -> List[float]:
+            if not candidates:
+                return []
+            pts = sorted(candidates)
+            clusters: List[List[float]] = [[pts[0]]]
+            for p in pts[1:]:
+                if abs(p - clusters[-1][-1]) <= cluster_tol:
+                    clusters[-1].append(p)
+                else:
+                    clusters.append([p])
+            means = [round(float(sum(c) / len(c)), 8) for c in clusters]
+            return sorted(means, reverse=descending)
+
+        all_supports = _cluster_levels([s for s in [s1, s2, s3] + swing_lows if 0 < s < close], descending=True)
+        all_resistances = _cluster_levels([r for r in [r1, r2, r3] + swing_highs if r > close], descending=False)
 
         nearest_support = all_supports[0] if all_supports else s1
         nearest_resistance = all_resistances[0] if all_resistances else r1

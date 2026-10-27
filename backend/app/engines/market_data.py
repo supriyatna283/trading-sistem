@@ -10,8 +10,8 @@ In-memory cache TTL 30s as fallback when Redis is not available.
 import httpx
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
-from typing import List, Optional, Dict
+from datetime import datetime, timedelta, timezone
+from typing import List, Optional, Dict, Tuple
 import json
 import time
 import logging
@@ -27,19 +27,33 @@ TIMEFRAME_MAP = {
     "1m": "1m",
     "5m": "5m",
     "15m": "15m",
+    "30m": "30m",
     "1h": "1h",
     "4h": "4h",
     "1d": "1d",
+    "1w": "1w",
 }
 
 TIMEFRAME_MINUTES = {
     "1m": 1,
     "5m": 5,
     "15m": 15,
+    "30m": 30,
     "1h": 60,
     "4h": 240,
     "1d": 1440,
+    "1w": 10080,
 }
+
+# Single source of truth for timeframes accepted by the API layer.
+# Routers build their validation regex from this so FE/BE can never drift apart.
+SUPPORTED_TIMEFRAMES = tuple(TIMEFRAME_MINUTES.keys())
+TIMEFRAME_REGEX = "^(" + "|".join(SUPPORTED_TIMEFRAMES) + ")$"
+
+# Data-source labels returned to clients so they can tell real data from simulated.
+SOURCE_OKX = "okx"
+SOURCE_BINANCE = "binance"
+SOURCE_SYNTHETIC = "synthetic"
 
 # Base prices for sample data fallback
 BASE_PRICES = {
@@ -171,9 +185,12 @@ class MarketDataEngine:
         self, symbol: str, interval: str = "1h", limit: int = 200
     ) -> pd.DataFrame:
         """Fetch OHLCV from OKX REST API."""
+        # NOTE: OKX's plain "1D"/"1W" bars open at 00:00 UTC+8 (16:00 UTC), which does
+        # not match Binance nor the UTC-based session logic. The "utc" variants open at
+        # 00:00 UTC so daily/weekly candles line up with every other data source.
         okx_interval_map = {
-            "1m": "1m", "5m": "5m", "15m": "15m",
-            "1h": "1H", "4h": "4H", "1d": "1D",
+            "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
+            "1h": "1H", "4h": "4H", "1d": "1Dutc", "1w": "1Wutc",
         }
         
         # Map XAUUSDT to PAXGUSDT for real gold data
@@ -184,24 +201,45 @@ class MarketDataEngine:
         bar = okx_interval_map.get(interval, "1H")
         
         url = f"{self.OKX_BASE}/market/candles"
-        params = {
-            "instId": okx_symbol,
-            "bar": bar,
-            "limit": limit
-        }
-        
+        # OKX caps `/market/candles` at 300 bars per request. Paginate with `after`
+        # when the caller requests more (e.g. limit=500 for the main chart).
         try:
-            resp = await self.client.get(url, params=params)
-            resp.raise_for_status()
-            data = resp.json()
-            
-            if data.get("code") != "0" or not data.get("data"):
-                logger.warning(f"OKX returned no data for {symbol}: {data}")
+            raw_rows: list = []
+            remaining = max(1, int(limit))
+            after_cursor: Optional[str] = None
+
+            while remaining > 0:
+                batch_limit = min(remaining, 300)
+                params: Dict[str, object] = {
+                    "instId": okx_symbol,
+                    "bar": bar,
+                    "limit": batch_limit,
+                }
+                if after_cursor is not None:
+                    params["after"] = after_cursor
+
+                resp = await self.client.get(url, params=params)
+                resp.raise_for_status()
+                data = resp.json()
+
+                batch = data.get("data") if data.get("code") == "0" else None
+                if not batch:
+                    break
+
+                raw_rows.extend(batch)
+                remaining -= len(batch)
+                # OKX returns newest first; batch[-1][0] is the oldest timestamp in ms
+                after_cursor = str(batch[-1][0])
+                if len(batch) < batch_limit:
+                    break
+
+            if not raw_rows:
+                logger.warning(f"OKX returned no data for {symbol}")
                 return self._empty_df()
-            
+
             # OKX returns: [ts, o, h, l, c, vol, volCcy, volCcyQuote, confirm]
             rows = []
-            for r in data["data"]:
+            for r in raw_rows:
                 rows.append({
                     "open_time": int(r[0]),
                     "open": float(r[1]),
@@ -215,7 +253,7 @@ class MarketDataEngine:
             df = self._normalize(df, symbol, interval)
             # OKX returns newest first, so sort chronologically
             df = df.sort_values("open_time").reset_index(drop=True)
-            await self._cache(symbol, interval, df)
+            await self._cache(symbol, interval, df, SOURCE_OKX)
             return df
         except Exception as e:
             logger.error(f"OKX fetch error for {symbol} ({interval}): {e}")
@@ -232,8 +270,8 @@ class MarketDataEngine:
     ) -> pd.DataFrame:
         """Fetch OHLCV from Binance REST API (supports up to 1000 per request)."""
         binance_interval_map = {
-            "1m": "1m", "5m": "5m", "15m": "15m",
-            "1h": "1h", "4h": "4h", "1d": "1d",
+            "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
+            "1h": "1h", "4h": "4h", "1d": "1d", "1w": "1w",
         }
         
         # Map XAUUSDT to PAXGUSDT for real gold data
@@ -305,7 +343,7 @@ class MarketDataEngine:
             df = pd.DataFrame(rows)
             df = self._normalize(df, symbol, interval)
             df = df.sort_values("open_time").reset_index(drop=True)
-            await self._cache(symbol, interval, df)
+            await self._cache(symbol, interval, df, SOURCE_BINANCE)
             return df
         except httpx.HTTPStatusError as e:
             logger.error(f"Binance HTTP error for {symbol} ({interval}): {e.response.status_code} - {e.response.text}")
@@ -325,8 +363,8 @@ class MarketDataEngine:
         Binance paginates forward in time.
         """
         binance_interval_map = {
-            "1m": "1m", "5m": "5m", "15m": "15m",
-            "1h": "1h", "4h": "4h", "1d": "1d",
+            "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
+            "1h": "1h", "4h": "4h", "1d": "1d", "1w": "1w",
         }
 
         bi = binance_interval_map.get(interval, "1h")
@@ -400,8 +438,8 @@ class MarketDataEngine:
         if df.empty:
             logger.warning(f"Using sample data for historical backtest: {symbol}")
             interval_ms_map = {
-                "1m": 60000, "5m": 300000, "15m": 900000,
-                "1h": 3600000, "4h": 14400000, "1d": 86400000
+                "1m": 60000, "5m": 300000, "15m": 900000, "30m": 1800000,
+                "1h": 3600000, "4h": 14400000, "1d": 86400000, "1w": 604800000
             }
             interval_ms = interval_ms_map.get(interval, 3600000)
             periods = int((end_ts - start_ts) / interval_ms)
@@ -453,31 +491,72 @@ class MarketDataEngine:
     # ---------------------------------------------------------
     # Resilient fetch (Binance → Sample Data fallback)
     # ---------------------------------------------------------
-    async def get_candles(
+    async def get_candles_with_source(
         self, symbol: str, timeframe: str = "1h", limit: int = 200
-    ) -> pd.DataFrame:
-        """Main entry point — fetches candles with caching + fallback."""
-        # 1. Check cache
-        cached = await self._get_cache(symbol, timeframe)
+    ) -> Tuple[pd.DataFrame, str]:
+        """
+        Fetch candles and report where they came from.
+
+        Returns (df, source) with source in {"okx", "binance", "synthetic"}.
+        "synthetic" means every real source failed and the data is a random walk —
+        callers MUST NOT present it as real market data.
+        """
+        # 1. Check cache (use short 3s TTL for live-polling requests with limit <= 5)
+        max_age = 3 if limit <= 5 else _MEM_CACHE_TTL
+        cached = await self._get_cache(symbol, timeframe, max_age=max_age)
         if cached is not None and len(cached) >= limit:
-            return cached.tail(limit).reset_index(drop=True)
+            entry = self._mem_cache.get(f"candles:{symbol}:{timeframe}") or {}
+            return cached.tail(limit).reset_index(drop=True), entry.get("source", SOURCE_OKX)
 
         # 2. Try OKX (Primary for HF)
+        source = SOURCE_OKX
         df = await self.fetch_okx_candles(symbol, timeframe, limit)
         
         # 3. Try Binance (Secondary Fallback)
         if df.empty:
+            source = SOURCE_BINANCE
             df = await self.fetch_binance_candles(symbol, timeframe, limit)
 
         # 4. Final fallback to sample data
         if df.empty:
             logger.warning(f"All data sources failed for {symbol}, using sample data")
+            source = SOURCE_SYNTHETIC
             base = await self._get_fallback_base_price(symbol.upper())
             df = self.generate_sample_data(
                 symbol=symbol.upper(), timeframe=timeframe, 
                 periods=limit, base_price=base,
             )
 
+        return df, source
+
+    async def get_candles(
+        self, symbol: str, timeframe: str = "1h", limit: int = 200
+    ) -> pd.DataFrame:
+        """Main entry point — fetches candles with caching + fallback."""
+        df, _ = await self.get_candles_with_source(symbol, timeframe, limit)
+        return df
+
+    @staticmethod
+    def drop_unclosed(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
+        """
+        Remove the last candle if it is still forming (open_time + timeframe > now, UTC).
+
+        Pattern / FVG / structure detection on a forming candle repaints: a signal can
+        appear mid-candle and vanish before the close. Analysis should run on closed
+        candles only.
+        """
+        try:
+            minutes = TIMEFRAME_MINUTES.get(timeframe)
+            if df is None or df.empty or len(df) < 2 or not minutes:
+                return df
+            last_open = pd.Timestamp(df["open_time"].iloc[-1])
+            if last_open.tzinfo is not None:
+                last_open = last_open.tz_convert("UTC").tz_localize(None)
+            now = pd.Timestamp(datetime.now(timezone.utc).replace(tzinfo=None))
+            if last_open + pd.Timedelta(minutes=minutes) > now:
+                return df.iloc[:-1].reset_index(drop=True)
+        except Exception as e:  # never let a helper break the endpoint
+            logger.warning(f"drop_unclosed failed for {timeframe}: {e}")
         return df
 
     # ---------------------------------------------------------
@@ -494,8 +573,8 @@ class MarketDataEngine:
         np.random.seed(hash(symbol + timeframe) % 2**31)
         
         freq_map = {
-            "1m": "1min", "5m": "5min", "15m": "15min",
-            "1h": "1h", "4h": "4h", "1d": "1D",
+            "1m": "1min", "5m": "5min", "15m": "15min", "30m": "30min",
+            "1h": "1h", "4h": "4h", "1d": "1D", "1w": "7D",
         }
         freq = freq_map.get(timeframe, "1h")
         
@@ -545,33 +624,56 @@ class MarketDataEngine:
             columns=["symbol", "timeframe", "open_time", "open", "high", "low", "close", "volume"]
         )
 
-    async def _cache(self, symbol: str, timeframe: str, df: pd.DataFrame):
-        """Cache candle data in Redis (primary) or in-memory (fallback)."""
+    async def _cache(
+        self, symbol: str, timeframe: str, df: pd.DataFrame, source: str = SOURCE_OKX
+    ):
+        """
+        Cache candle data in Redis (primary) or in-memory (fallback).
+        Never overwrite a larger fresh cached DataFrame with a tiny polling fetch
+        (e.g. limit=2), Instead merge the latest tail into the existing frame.
+        """
         key = f"candles:{symbol}:{timeframe}"
-        # Always store in memory cache
-        self._mem_cache[key] = {"df": df.copy(), "ts": time.time()}
+        now = time.time()
+        existing = self._mem_cache.get(key)
+        if (
+            existing
+            and (now - existing["ts"]) < _MEM_CACHE_TTL
+            and len(existing["df"]) > len(df)
+        ):
+            merged = (
+                pd.concat([existing["df"], df], ignore_index=True)
+                .drop_duplicates(subset=["open_time"], keep="last")
+                .sort_values("open_time")
+                .reset_index(drop=True)
+            )
+            self._mem_cache[key] = {"df": merged, "ts": now, "source": source}
+            df_to_store = merged
+        else:
+            self._mem_cache[key] = {"df": df.copy(), "ts": now, "source": source}
+            df_to_store = df
+
         if self.redis is None:
             return
         try:
-            data = df.to_json(orient="records", date_format="iso")
+            data = df_to_store.to_json(orient="records", date_format="iso")
             self.redis.setex(key, 300, data)  # 5 min TTL in Redis
         except Exception as e:
             logger.warning(f"Redis cache write failed: {e}")
 
-    async def _get_cache(self, symbol: str, timeframe: str) -> Optional[pd.DataFrame]:
+    async def _get_cache(
+        self, symbol: str, timeframe: str, max_age: float = _MEM_CACHE_TTL
+    ) -> Optional[pd.DataFrame]:
         """Read cached candle data from Redis (primary) or in-memory (fallback)."""
         key = f"candles:{symbol}:{timeframe}"
-        # Try Redis first
-        if self.redis is not None:
+        entry = self._mem_cache.get(key)
+        if entry and (time.time() - entry["ts"]) < max_age:
+            logger.info(f"In-memory cache hit for {key}")
+            return entry["df"].copy()
+        if self.redis is not None and max_age >= _MEM_CACHE_TTL:
             try:
                 raw = self.redis.get(key)
                 if raw:
                     return pd.read_json(raw, orient="records")
             except Exception as e:
                 logger.warning(f"Redis cache read failed: {e}")
-        # Fallback: in-memory cache with TTL
-        entry = self._mem_cache.get(key)
-        if entry and (time.time() - entry["ts"]) < _MEM_CACHE_TTL:
-            logger.info(f"In-memory cache hit for {key}")
-            return entry["df"].copy()
         return None

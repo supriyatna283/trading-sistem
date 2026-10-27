@@ -40,7 +40,27 @@ interface SetupData {
 }
 
 interface ChatMessage { role: "user" | "assistant"; content: string; }
-interface Props { symbol: string; timeframe: string; isOpen: boolean; onClose: () => void; }
+interface Props {
+  symbol: string;
+  timeframe: string;
+  isOpen: boolean;
+  onClose: () => void;
+  onSetupChange?: (setup: {
+    direction: "BUY" | "SELL";
+    entry_low: number;
+    entry_high: number;
+    stop_loss: number;
+    take_profit_1?: number;
+    take_profit_2?: number;
+    take_profit_3?: number;
+  } | null) => void;
+}
+const AI_API_KEY = process.env.NEXT_PUBLIC_API_KEY || "";
+function aiAuthHeaders(extra?: Record<string, string>): Record<string, string> {
+  const h: Record<string, string> = { ...(extra || {}) };
+  if (AI_API_KEY) h["X-API-Key"] = AI_API_KEY;
+  return h;
+}
 type AIStatus = "idle" | "computing" | "thinking" | "streaming" | "done" | "error" | "cached";
 
 // ─────────────────────────────────────────────────
@@ -289,7 +309,9 @@ function ParsedAnalysis({ text }: { text: string }) {
 // ─────────────────────────────────────────────────
 // Main Component
 // ─────────────────────────────────────────────────
-export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: Props) {
+export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose, onSetupChange }: Props) {
+  const onSetupChangeRef = useRef(onSetupChange);
+  onSetupChangeRef.current = onSetupChange;
   const [status, setStatus] = useState<AIStatus>("idle");
   const [answer, setAnswer] = useState("");
   const [reasoning, setReasoning] = useState("");  // AI thinking tokens
@@ -326,6 +348,7 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
     streamDoneRef.current = false;  // reset untuk stream baru
     setStatus("computing");
     setAnswer(""); setError(""); setSetup(null); setContext(null);
+    onSetupChangeRef.current?.(null);
     setReasoning(""); setAnalysisNewContent(false);
     setChatHistory([]); setChatInput(""); setIsChatting(false);
 
@@ -349,7 +372,25 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
       es.addEventListener("setup_data", (e) => {
         try { 
           const data = JSON.parse((e as any).data.replace(/\\n/g, "\n"));
-          setSetup(data); 
+          setSetup(data);
+          if (
+            !data.is_sample_data &&
+            (data.signal === "BUY" || data.signal === "SELL") &&
+            typeof data.entry_low === "number" &&
+            typeof data.stop_loss === "number"
+          ) {
+            onSetupChangeRef.current?.({
+              direction: data.signal,
+              entry_low: data.entry_low,
+              entry_high: typeof data.entry_high === "number" ? data.entry_high : data.entry_low,
+              stop_loss: data.stop_loss,
+              take_profit_1: typeof data.tp1 === "number" ? data.tp1 : undefined,
+              take_profit_2: typeof data.tp2 === "number" ? data.tp2 : undefined,
+              take_profit_3: typeof data.tp3 === "number" ? data.tp3 : undefined,
+            });
+          } else {
+            onSetupChangeRef.current?.(null);
+          }
           if (alertEnabledRef.current && (data.signal_grade === "A+" || data.signal_grade === "A")) {
             if (Notification.permission === "granted") {
               new Notification(`AI Signal: ${data.symbol} - Grade ${data.signal_grade}`, {
@@ -419,7 +460,7 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
     try {
       const resp = await fetch(`${API_URL}/api/v1/ai/chat`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: aiAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ symbol, timeframe, question: msg, history: chatHistory.slice(-10), market_context: context }),
       });
       if (!resp.body) throw new Error("No body");
@@ -578,7 +619,7 @@ export default function AIAnalysisPanel({ symbol, timeframe, isOpen, onClose }: 
           </button>
           <button onClick={() => {
             // FIX #5: Clear backend cache for this symbol before force refresh
-            fetch(`${API_URL}/api/v1/ai/cache?symbol=${symbol}&timeframe=${timeframe}`, { method: 'DELETE' }).catch(() => {});
+            fetch(`${API_URL}/api/v1/ai/cache?symbol=${symbol}&timeframe=${timeframe}`, { method: 'DELETE', headers: aiAuthHeaders() }).catch(() => {});
             startAnalysis(symbol, timeframe, true);
           }} className="ai-icon-btn" disabled={isPulsing} title="Re-analyze (clear cache + force refresh)">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none">

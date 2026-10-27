@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Query
 import asyncio
-from app.engines.market_data import MarketDataEngine
+from app.engines.market_data import MarketDataEngine, TIMEFRAME_REGEX, SOURCE_SYNTHETIC
 from app.engines.market_structure import MarketStructureAnalyzer
 from app.engines.smart_money import SmartMoneyConceptsEngine
 from app.engines.confluence import ConfluenceEngine
@@ -22,71 +22,77 @@ sentiment_engine = SentimentEngine()
 news_engine = NewsCalendarEngine()
 
 
+_DEMO_BASE_PRICES = {
+    "BTCUSDT": 67000, "ETHUSDT": 3400, "BNBUSDT": 580,
+    "SOLUSDT": 145, "XRPUSDT": 0.62,
+}
+
+
+async def _load_candles(symbol: str, timeframe: str, demo: bool, closed_only: bool):
+    """
+    Load candles for analysis and report their provenance.
+
+    closed_only=True drops the still-forming last candle so detections (FVG,
+    candle patterns, divergence, structure) cannot repaint mid-candle.
+    """
+    sym = symbol.upper()
+    if demo:
+        df = MarketDataEngine.generate_sample_data(
+            symbol=sym, timeframe=timeframe,
+            base_price=_DEMO_BASE_PRICES.get(sym, 100),
+        )
+        source = SOURCE_SYNTHETIC
+    else:
+        df, source = await data_engine.get_candles_with_source(sym, timeframe)
+    if closed_only:
+        df = MarketDataEngine.drop_unclosed(df, timeframe)
+    return df, source
+
+
+def _meta(source: str, closed_only: bool) -> dict:
+    return {
+        "data_source": source,
+        "is_synthetic": source == SOURCE_SYNTHETIC,
+        "closed_only": closed_only,
+    }
+
+
 @router.get("/structure/{symbol}")
 async def analyze_structure(
     symbol: str,
-    timeframe: str = Query("1h", regex="^(1m|5m|15m|1h|4h|1d)$"),
+    timeframe: str = Query("1h", pattern=TIMEFRAME_REGEX),
     demo: bool = Query(False),
+    closed_only: bool = Query(True, description="Ignore the still-forming candle"),
 ):
     """Get market structure analysis (HH/HL/LH/LL/BOS/CHOCH)."""
-    base_prices = {
-        "BTCUSDT": 67000, "ETHUSDT": 3400, "BNBUSDT": 580,
-        "SOLUSDT": 145, "XRPUSDT": 0.62,
-    }
-    if demo:
-        df = MarketDataEngine.generate_sample_data(
-            symbol=symbol.upper(), timeframe=timeframe,
-            base_price=base_prices.get(symbol.upper(), 100),
-        )
-    else:
-        df = await data_engine.get_candles(symbol, timeframe)
-
+    df, source = await _load_candles(symbol, timeframe, demo, closed_only)
     result = structure_analyzer.analyze(df, symbol.upper(), timeframe)
-    return result.model_dump()
+    # mode="json" -> timestamps serialized as UTC ISO strings with 'Z'
+    return {**result.model_dump(mode="json"), **_meta(source, closed_only)}
 
 
 @router.get("/smc/{symbol}")
 async def analyze_smc(
     symbol: str,
-    timeframe: str = Query("1h", regex="^(1m|5m|15m|1h|4h|1d)$"),
+    timeframe: str = Query("1h", pattern=TIMEFRAME_REGEX),
     demo: bool = Query(False),
+    closed_only: bool = Query(True, description="Ignore the still-forming candle"),
 ):
     """Get Smart Money Concepts analysis (unmitigated OB, unfilled FVG, Liquidity)."""
-    base_prices = {
-        "BTCUSDT": 67000, "ETHUSDT": 3400, "BNBUSDT": 580,
-        "SOLUSDT": 145, "XRPUSDT": 0.62,
-    }
-    if demo:
-        df = MarketDataEngine.generate_sample_data(
-            symbol=symbol.upper(), timeframe=timeframe,
-            base_price=base_prices.get(symbol.upper(), 100),
-        )
-    else:
-        df = await data_engine.get_candles(symbol, timeframe)
-
+    df, source = await _load_candles(symbol, timeframe, demo, closed_only)
     result = smc_engine.analyze(df, symbol.upper(), timeframe)
-    return result.model_dump()
+    return {**result.model_dump(mode="json"), **_meta(source, closed_only)}
 
 
 @router.get("/patterns/{symbol}")
 async def analyze_patterns(
     symbol: str,
-    timeframe: str = Query("1h", regex="^(1m|5m|15m|1h|4h|1d)$"),
+    timeframe: str = Query("1h", pattern=TIMEFRAME_REGEX),
     demo: bool = Query(False),
+    closed_only: bool = Query(True, description="Ignore the still-forming candle"),
 ):
-    """Get candlestick pattern + RSI/MACD divergence for the latest bars."""
-    base_prices = {
-        "BTCUSDT": 67000, "ETHUSDT": 3400, "BNBUSDT": 580,
-        "SOLUSDT": 145, "XRPUSDT": 0.62,
-    }
-    if demo:
-        df = MarketDataEngine.generate_sample_data(
-            symbol=symbol.upper(), timeframe=timeframe,
-            base_price=base_prices.get(symbol.upper(), 100),
-        )
-    else:
-        df = await data_engine.get_candles(symbol, timeframe)
-
+    """Get candlestick pattern + RSI/MACD divergence for the latest closed bars."""
+    df, source = await _load_candles(symbol, timeframe, demo, closed_only)
     candle = detect_candle_pattern(df)
     divergence = detect_divergence(df)
     return {
@@ -94,6 +100,7 @@ async def analyze_patterns(
         "timeframe": timeframe,
         "candle_pattern": candle,
         "divergence": divergence,
+        **_meta(source, closed_only),
     }
 
 
